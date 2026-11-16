@@ -187,6 +187,39 @@ cd app
 flutter test
 ```
 
+## CI / Releases
+
+Le workflow [`.github/workflows/release-artifacts.yml`](.github/workflows/release-artifacts.yml)
+construit, **à la publication d'un GitHub Release**, les deux binaires et les
+attache au release :
+
+| Artefact | Runner | Commande |
+|---|---|---|
+| `tapitask-<tag>-windows-x64.zip` (exe + data) | `windows-latest` | `flutter build windows --release` |
+| `tapitask-<tag>-android.apk` (APK signé) | `ubuntu-latest` | `flutter build apk --release` |
+
+### Configuration du signing Android
+
+Le keystore (`app/android/app/tapitask-release.jks`) et sa `key.properties`
+restent **hors du dépôt** (gitignored). `build.gradle.kts` les lit s'ils existent,
+sinon il signe en debug. Le CI les restaure depuis deux secrets
+GitHub Actions (jamais dans le code) :
+
+| Secret | Contenu |
+|---|---|
+| `TAPITASK_KEYSTORE_B64` | le `.jks` encodé en base64 (1 ligne) |
+| `TAPITASK_KEY_PROPERTIES` | le contenu de `key.properties` (tel quel) |
+
+Pour (re)configurer les secrets depuis un repo local propre :
+
+```bash
+gh secret set TAPITASK_KEYSTORE_B64 <(base64 -w0 app/android/app/tapitask-release.jks)
+gh secret set TAPITASK_KEY_PROPERTIES app/android/app/key.properties
+```
+
+Puis publie un release (tag `vX.Y.Z`) : les artefacts apparaissent sur
+`/releases` en quelques minutes.
+
 ## Sécurité — voir [SECURITY.md](SECURITY.md)
 
 Argon2id · JWT à courte durée + refresh rotatifs révocables · 2FA TOTP · clés API hachées ·

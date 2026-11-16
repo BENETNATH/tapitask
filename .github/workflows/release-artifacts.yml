@@ -1,0 +1,81 @@
+name: Release artifacts
+
+# Build de l'exe Windows + de l'APK signés quand un release est publié.
+# Le keystore Android n'est PAS dans le repo : il est restauré depuis des
+# secrets GitHub Actions (voir README "CI / Releases").
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: "3.50.0"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
+      - name: Build Windows (x64, release)
+        working-directory: app
+        run: flutter build windows --release
+
+      - name: Package exe + data
+        working-directory: app/build/windows/x64/runner
+        run: Compress-Archive -Path . -DestinationPath "tapitask-${{ github.ref_name }}-windows-x64.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tapitask-${{ github.ref_name }}-windows-x64.zip
+          path: app/build/windows/x64/runner/tapitask-${{ github.ref_name }}-windows-x64.zip
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
+      - name: Restaurer le keystore de signature (secrets)
+        run: |
+          echo "${{ secrets.TAPITASK_KEYSTORE_B64 }}" | base64 -d > app/android/app/tapitask-release.jks
+          printf '%s\n' "${{ secrets.TAPITASK_KEY_PROPERTIES }}" > app/android/app/key.properties
+          chmod 600 app/android/app/tapitask-release.jks app/android/app/key.properties
+
+      - name: Build APK (release, signé)
+        working-directory: app
+        run: flutter build apk --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tapitask-${{ github.ref_name }}-android.apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+
+  publish:
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Attacher les artefacts au release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/tapitask-${{ github.ref_name }}-windows-x64.zip/tapitask-${{ github.ref_name }}-windows-x64.zip
+            artifacts/tapitask-${{ github.ref_name }}-android.apk/tapitask-${{ github.ref_name }}-android.apk
