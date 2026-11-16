@@ -70,11 +70,15 @@ jobs:
         working-directory: app
         run: flutter build apk --release
 
+      - name: Renommer l'APK
+        working-directory: app
+        run: mv build/app/outputs/flutter-apk/app-release.apk "build/app/outputs/flutter-apk/tapitask-${{ github.ref_name }}-android.apk"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tapitask-${{ github.ref_name }}-android.apk
-          path: app/build/app/outputs/flutter-apk/app-release.apk
+          path: app/build/app/outputs/flutter-apk/tapitask-${{ github.ref_name }}-android.apk
 
   publish:
     needs: [windows, android]
@@ -89,5 +93,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/tapitask-${{ github.ref_name }}-windows-x64.zip/tapitask-${{ github.ref_name }}-windows-x64.zip
-            artifacts/tapitask-${{ github.ref_name }}-android.apk/tapitask-${{ github.ref_name }}-android.apk
+            artifacts/**/*.zip
+            artifacts/**/*.apk
