@@ -17,7 +17,7 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: subosito/flutter-action@v2
         with:
@@ -39,7 +39,7 @@ jobs:
         run: Compress-Archive -Path . -DestinationPath "tapitask-${{ github.ref_name }}-windows-x64.zip"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tapitask-${{ github.ref_name }}-windows-x64.zip
           path: app/build/windows/x64/runner/tapitask-${{ github.ref_name }}-windows-x64.zip
@@ -47,7 +47,7 @@ jobs:
   android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: subosito/flutter-action@v2
         with:
@@ -75,7 +75,7 @@ jobs:
         run: mv build/app/outputs/flutter-apk/app-release.apk "build/app/outputs/flutter-apk/tapitask-${{ github.ref_name }}-android.apk"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tapitask-${{ github.ref_name }}-android.apk
           path: app/build/app/outputs/flutter-apk/tapitask-${{ github.ref_name }}-android.apk
@@ -85,12 +85,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
       - name: Attacher les artefacts au release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/**/*.zip
