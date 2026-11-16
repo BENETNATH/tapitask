@@ -45,7 +45,7 @@ jobs:
           path: app/build/windows/x64/runner/tapitask-${{ github.ref_name }}-windows-x64.zip
 
   android:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -82,7 +82,7 @@ jobs:
 
   publish:
     needs: [windows, android]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v8
