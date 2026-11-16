@@ -174,8 +174,15 @@ le keystore Android aussi.
 # Serveur — 38 tests (auth, sync, partage, admin, webhooks HMAC, MCP, rate limiting)
 cd server
 .venv/bin/python -m pytest -q
+```
 
-# Client Flutter — tests unitaires (base locale, sync, dossiers, échéances)
+Client (Flutter) — 11 tests :
+
+```bash
+# Prérequis système (Linux) : les plugins tray_manager / window_manager
+# déclenchent un build d'assets natifs (GTK 3, X11, Xi). Les paquets de
+# développement sont indispensables pour que `flutter test` compile l'hôte :
+#   sudo apt install libgtk-3-dev libxi-dev
 cd app
 flutter test
 ```
