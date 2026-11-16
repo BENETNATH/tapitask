@@ -118,7 +118,7 @@ cd app && flutter build web --release
 ├── Caddyfile               # TLS intégré (optionnel)
 ├── DEPLOIEMENT-UBUNTU.md   # guide de déploiement pas à pas
 ├── SECURITY.md             # modèle de menace + bonnes pratiques
-├── server/                 # backend FastAPI (async) + 32 tests
+├── server/                 # backend FastAPI (async) + 38 tests
 │   ├── app/                # auth, listes, partage, sync, admin, clés API, MCP HTTP
 │   ├── tests/              # pytest (SQLite), couverture auth/sync/partage/smtp
 │   └── Dockerfile
@@ -143,15 +143,41 @@ au premier plan et après chaque action.
 2. **REST** : `POST /lists/{id}/items/bulk` (texte multi-lignes), `/summary`, webhooks signés HMAC
 3. **MCP** : `python server/mcp_server.py` (`CHECKLISTS_URL`, `CHECKLISTS_API_KEY`) — ou MCP HTTP/SSE intégré
 
-## Tests
+## Environnement de développement — serveur
+
+Le serveur est un projet **FastAPI / Python 3.12**. Toutes les dépendances (runtime
+**et** tests, dont `aiohttp` pour le test de livraison HMAC des webhooks) sont
+déclarées dans `server/requirements.txt`.
 
 ```bash
 cd server
-python -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest -q     # 32 tests
+python3 -m venv .venv                 # Python 3.12+ ; `.venv` est dans .gitignore
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip check                   # aucune dépréciation / dépendance cassée
+```
 
-cd ../app
-flutter test                      # 8 tests (base locale, sync, dossiers, échéances)
+Lancer l'API (SQLite en dev, ou Postgres via `.env`) :
+
+```bash
+cd server
+set -a; . ./.env; set +a              # .env local (cf .env.example) — jamais commité
+.venv/bin/uvicorn app.main:app --reload --port 8000
+```
+
+Le venv (`.venv/`) et `.env` sont exclus du dépôt (voir `.gitignore`) : les secrets et
+le keystore Android aussi.
+
+## Tests
+
+```bash
+# Serveur — 38 tests (auth, sync, partage, admin, webhooks HMAC, MCP, rate limiting)
+cd server
+.venv/bin/python -m pytest -q
+
+# Client Flutter — tests unitaires (base locale, sync, dossiers, échéances)
+cd app
+flutter test
 ```
 
 ## Sécurité — voir [SECURITY.md](SECURITY.md)
@@ -161,4 +187,4 @@ rate limiting + lockout · CORS strict · Postgres non exposé · en-têtes de s
 
 ## Licence
 
-Projet personnel — tous droits réservés (ajustez selon votre choix de licence GitHub : MIT, Apache-2.0…).
+[MIT](LICENSE)
