@@ -24,6 +24,12 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
 
+      - name: Pub get + codegen drift (database.g.dart est gitignoré)
+        working-directory: app
+        run: |
+          flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
+
       - name: Build Windows (x64, release)
         working-directory: app
         run: flutter build windows --release
@@ -47,6 +53,12 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+
+      - name: Pub get + codegen drift (database.g.dart est gitignoré)
+        working-directory: app
+        run: |
+          flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
 
       - name: Restaurer le keystore de signature (secrets)
         run: |
