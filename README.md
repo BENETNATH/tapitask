@@ -220,6 +220,16 @@ gh secret set TAPITASK_KEY_PROPERTIES app/android/app/key.properties
 Puis publie un release (tag `vX.Y.Z`) : les artefacts apparaissent sur
 `/releases` en quelques minutes.
 
+> **Note — warning KGP sur `home_widget`** : le build Android affiche
+> « *Your app uses the following plugins that apply Kotlin Gradle Plugin
+> (KGP): home_widget* ». C'est un **faux positif** : l'outil Flutter détecte
+> l'application du KGP par scan regex des fichiers des plugins, et matche la
+> ligne `apply plugin: 'kotlin-android'` de `home_widget` alors qu'elle est
+> conditionnée par `if (!useBuiltInKotlin)` (inactive sous AGP 9+). Le plugin
+> (0.10.0, dernière version) est fonctionnellement migré — le mainteneur le
+> confirme [ici](https://github.com/ABausG/home_widget/issues/421). Le build
+> n'est pas impacté.
+
 ## Sécurité — voir [SECURITY.md](SECURITY.md)
 
 Argon2id · JWT à courte durée + refresh rotatifs révocables · 2FA TOTP · clés API hachées ·
