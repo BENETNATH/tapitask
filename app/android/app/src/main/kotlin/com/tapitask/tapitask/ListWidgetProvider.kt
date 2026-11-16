@@ -1,0 +1,290 @@
+package com.tapitask.tapitask
+
+import android.app.PendingIntent
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProvider
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.graphics.Color
+import android.net.Uri
+import android.util.Log
+import android.widget.RemoteViews
+import es.antonborri.home_widget.HomeWidgetLaunchIntent
+import es.antonborri.home_widget.HomeWidgetPlugin
+
+/**
+ * Tapitask list widget (resizable).
+ * - Title = pinned list name; ◀ / ▶ switch to the previous / next pinned list.
+ * - Up to 5 unchecked items; tapping an item checks it locally (instant),
+ *   the app syncs the change on next open (widget_toggled).
+ * - The list color tints the widget background.
+ * - "Ouvrir l'application" launches the app.
+ */
+class ListWidgetProvider : AppWidgetProvider() {
+
+    override fun onUpdate(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetIds: IntArray
+    ) {
+        try {
+            onUpdateSafe(context, appWidgetManager, appWidgetIds)
+        } catch (t: Throwable) {
+            // Visible with: adb logcat -s TapitaskWidget
+            Log.e("TapitaskWidget", "onUpdate failed", t)
+            // Belt and braces: a broken render must never leave the launcher
+            // showing "Problème lors du chargement du widget".
+            for (appWidgetId in appWidgetIds) {
+                try {
+                    appWidgetManager.updateAppWidget(appWidgetId,
+                        RemoteViews(context.packageName, R.layout.list_widget))
+                } catch (_: Throwable) {
+                }
+            }
+        }
+    }
+
+    private fun onUpdateSafe(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetIds: IntArray
+    ) {
+        val data = HomeWidgetPlugin.getData(context)
+        val total = data.getInt("list_count_lists", 0)
+        Log.d("TapitaskWidget", "onUpdate: $total liste(s) en mémoire partagée")
+        if (total == 0) {
+            for (appWidgetId in appWidgetIds) {
+                val views = RemoteViews(context.packageName, R.layout.list_widget)
+                views.setTextViewText(R.id.widget_title,
+                    data.getString("label_no_list", "Épinglez une liste"))
+                bindOpen(context, views, null)
+                views.setViewVisibility(R.id.widget_prev, android.view.View.GONE)
+                views.setViewVisibility(R.id.widget_next, android.view.View.GONE)
+                for (i in 0 until MAX_ITEMS) hideItem(views, i)
+                appWidgetManager.updateAppWidget(appWidgetId, views)
+            }
+            return
+        }
+        var index = data.getInt("list_index", 0)
+        if (index >= total) index = 0
+        for (appWidgetId in appWidgetIds) {
+            render(context, appWidgetManager, appWidgetId, index, total)
+        }
+    }
+
+    companion object {
+        const val MAX_ITEMS = 5
+        const val ACTION_CYCLE = "com.tapitask.tapitask.action.CYCLE_LIST"
+        const val ACTION_TOGGLE = "com.tapitask.tapitask.action.TOGGLE_ITEM"
+        const val EXTRA_ITEM_ID = "item_id"
+        const val EXTRA_LIST_INDEX = "list_index"
+        const val EXTRA_DIRECTION = "direction"
+
+        /// widget_done_ids: stored as a comma-joined String (home_widget 0.10
+        /// dropped List<String> support); older installs may still hold a
+        /// StringSet — read both without ever throwing.
+        fun readDoneIds(prefs: android.content.SharedPreferences): Set<String> {
+            val all = prefs.all["widget_done_ids"]
+            return when (all) {
+                is String -> if (all.isEmpty()) emptySet() else all.split(",").toSet()
+                is Set<*> -> all.filterIsInstance<String>().toSet()
+                else -> emptySet()
+            }
+        }
+
+        fun itemRow(i: Int): Int = when (i) {
+            0 -> R.id.widget_item_0
+            1 -> R.id.widget_item_1
+            2 -> R.id.widget_item_2
+            3 -> R.id.widget_item_3
+            else -> R.id.widget_item_4
+        }
+
+        fun triggerUpdate(context: Context) {
+            val ids = AppWidgetManager.getInstance(context)
+                .getAppWidgetIds(ComponentName(context, ListWidgetProvider::class.java))
+            if (ids.isNotEmpty()) {
+                val intent = Intent(context, ListWidgetProvider::class.java)
+                intent.action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
+                context.sendBroadcast(intent)
+            }
+        }
+    }
+
+    private fun bindOpen(context: Context, views: RemoteViews, listId: String?) {
+        views.setOnClickPendingIntent(
+            R.id.widget_open,
+            HomeWidgetLaunchIntent.getActivity(
+                context, MainActivity::class.java,
+                Uri.parse("tapitask://home")))
+        views.setOnClickPendingIntent(
+            R.id.widget_add,
+            HomeWidgetLaunchIntent.getActivity(
+                context, MainActivity::class.java,
+                Uri.parse("tapitask://quickadd?list=" + (listId ?: ""))))
+    }
+
+    private fun render(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+        index: Int,
+        total: Int
+    ) {
+        val data = HomeWidgetPlugin.getData(context)
+        val views = RemoteViews(context.packageName, R.layout.list_widget)
+        val title = data.getString("list_${index}_title", "Tapitask") ?: "Tapitask"
+        views.setTextViewText(
+            R.id.widget_title,
+            if (total > 1) "$title (${index + 1}/$total)" else title)
+        // Localized action labels (written by the Dart side per user language)
+        views.setTextViewText(R.id.widget_add,
+            data.getString("label_add", "＋ Ajouter"))
+        views.setTextViewText(R.id.widget_open,
+            data.getString("label_open", "Ouvrir"))
+
+        // Theme (synced user setting, resolved against the OS by the app).
+        val dark = data.getString("theme", "light") == "dark"
+        // List color tints the background: lightened in light mode,
+        // darkened in dark mode — text stays readable either way.
+        val colorHex = data.getString("list_${index}_color", null)
+        try {
+            if (colorHex != null) {
+                val c = Color.parseColor(colorHex)
+                val r: Int; val g: Int; val b: Int
+                if (dark) {
+                    r = Color.red(c) / 2
+                    g = Color.green(c) / 2
+                    b = Color.blue(c) / 2
+                } else {
+                    r = (Color.red(c) + 255 * 3) / 4
+                    g = (Color.green(c) + 255 * 3) / 4
+                    b = (Color.blue(c) + 255 * 3) / 4
+                }
+                views.setInt(R.id.widget_root, "setBackgroundColor", Color.rgb(r, g, b))
+            }
+        } catch (_: Exception) {
+        }
+        val titleColor = if (dark) Color.rgb(235, 235, 235) else Color.parseColor("#00695C")
+        val itemColor = if (dark) Color.rgb(226, 226, 226) else Color.parseColor("#1B1B1B")
+        // NOTE: RemoteViews.setTextColor() requires API 31 — the reflection
+        // action below works on every API level.
+        views.setInt(R.id.widget_title, "setTextColor", titleColor)
+        views.setInt(R.id.widget_prev, "setTextColor", titleColor)
+        views.setInt(R.id.widget_next, "setTextColor", titleColor)
+        for (i in 0 until MAX_ITEMS) views.setInt(itemRow(i), "setTextColor", itemColor)
+
+        bindOpen(context, views, data.getString("list_" + index + "_id", null))
+        views.setViewVisibility(R.id.widget_prev,
+            if (total > 1) android.view.View.VISIBLE else android.view.View.GONE)
+        views.setViewVisibility(R.id.widget_next,
+            if (total > 1) android.view.View.VISIBLE else android.view.View.GONE)
+        bindCycle(context, views, R.id.widget_prev, index, total, -1)
+        bindCycle(context, views, R.id.widget_next, index, total, +1)
+
+        val count = data.getInt("list_${index}_count", 0)
+        val doneIds = readDoneIds(data)
+        var visible = 0
+        for (i in 0 until MAX_ITEMS) {
+            val label = data.getString("list_${index}_item_$i", "") ?: ""
+            val itemId = data.getString("list_${index}_item_${i}_id", "") ?: ""
+            if (i < count && label.isNotEmpty() && itemId.isNotEmpty() && itemId !in doneIds) {
+                setItem(context, views, i, itemId, label)
+                visible++
+            } else {
+                hideItem(views, i)
+            }
+        }
+        if (visible == 0) {
+            views.setTextViewText(R.id.widget_item_0,
+                "✓  " + data.getString("label_all_done", "Tout est coché"))
+            views.setViewVisibility(R.id.widget_item_0, android.view.View.VISIBLE)
+            views.setOnClickPendingIntent(R.id.widget_item_0, null)
+        }
+        appWidgetManager.updateAppWidget(appWidgetId, views)
+    }
+
+    private fun bindCycle(
+        context: Context,
+        views: RemoteViews,
+        viewId: Int,
+        index: Int,
+        total: Int,
+        direction: Int
+    ) {
+        val intent = Intent(context, ListWidgetProvider::class.java).apply {
+            action = ACTION_CYCLE
+            putExtra(EXTRA_LIST_INDEX, index)
+            putExtra(EXTRA_DIRECTION, direction)
+        }
+        views.setOnClickPendingIntent(
+            viewId,
+            PendingIntent.getBroadcast(
+                context, viewId, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+    }
+
+    override fun onReceive(context: Context, intent: Intent) {
+        super.onReceive(context, intent)
+        when (intent.action) {
+            ACTION_CYCLE -> {
+                val data = HomeWidgetPlugin.getData(context)
+                val total = data.getInt("list_count_lists", 0)
+                if (total > 0) {
+                    val current = intent.getIntExtra(EXTRA_LIST_INDEX, 0)
+                    val direction = intent.getIntExtra(EXTRA_DIRECTION, 1)
+                    val next = ((current + direction) % total + total) % total
+                    data.edit().putInt("list_index", next).apply()
+                    triggerUpdate(context)
+                }
+            }
+            ACTION_TOGGLE -> {
+                val itemId = intent.getStringExtra(EXTRA_ITEM_ID)
+                if (!itemId.isNullOrEmpty()) {
+                    checkItem(context, itemId)
+                    triggerUpdate(context)
+                }
+            }
+        }
+    }
+
+    private fun checkItem(context: Context, itemId: String) {
+        val prefs = HomeWidgetPlugin.getData(context)
+        val done = readDoneIds(prefs)
+        prefs.edit().putString("widget_done_ids",
+            (done + itemId).joinToString(",")).apply()
+        val toggled = prefs.getString("widget_toggled", "") ?: ""
+        if (itemId !in toggled.split(',')) {
+            prefs.edit().putString("widget_toggled",
+                if (toggled.isEmpty()) itemId else "$toggled,$itemId").apply()
+        }
+    }
+
+    private fun setItem(
+        context: Context,
+        views: RemoteViews,
+        i: Int,
+        itemId: String,
+        label: String
+    ) {
+        val row = itemRow(i)
+        views.setViewVisibility(row, android.view.View.VISIBLE)
+        views.setTextViewText(row, "☐  $label")
+        val toggle = Intent(context, ListWidgetProvider::class.java).apply {
+            action = ACTION_TOGGLE
+            putExtra(EXTRA_ITEM_ID, itemId)
+        }
+        views.setOnClickPendingIntent(
+            row,
+            PendingIntent.getBroadcast(
+                context, itemId.hashCode(), toggle,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+    }
+
+    private fun hideItem(views: RemoteViews, i: Int) {
+        views.setViewVisibility(itemRow(i), android.view.View.GONE)
+        views.setOnClickPendingIntent(itemRow(i), null)
+    }
+}

@@ -1,0 +1,233 @@
+"""MCP over HTTP/SSE — lets remote agents use Tapitask without SSH/stdio.
+
+Wire format: JSON-RPC 2.0 over SSE (GET /mcp/sse) + POST /mcp/messages,
+compatible with the MCP 2024-11-05 stdio-style messages.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import Any
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .db import get_session
+from .deps import Principal, accessible_list, get_principal
+from .models import Role
+from .schemas import ApiKeyIn
+
+router = APIRouter(prefix="/mcp", tags=["mcp"])
+
+TOOLS = [
+    {
+        "name": "list_lists",
+        "description": "List the checklists the account can access.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_list",
+        "description": "Get the items of a list. Set unchecked_only to focus on remaining work.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "list_id": {"type": "string"},
+                "unchecked_only": {"type": "boolean", "default": False},
+            },
+            "required": ["list_id"],
+        },
+    },
+    {
+        "name": "get_summary",
+        "description": "Compact text digest of a list (what remains to be done).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"list_id": {"type": "string"}},
+            "required": ["list_id"],
+        },
+    },
+    {
+        "name": "add_items",
+        "description": "Add items to a list. One line in `text` = one item.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "list_id": {"type": "string"},
+                "text": {"type": "string", "description": "One item per line"},
+            },
+            "required": ["list_id", "text"],
+        },
+    },
+    {
+        "name": "check_item",
+        "description": "Check (or uncheck) an item by id.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "list_id": {"type": "string"},
+                "item_id": {"type": "string"},
+                "done": {"type": "boolean", "default": True},
+            },
+            "required": ["list_id", "item_id"],
+        },
+    },
+]
+
+_sessions: dict[str, asyncio.Queue] = {}
+
+
+@router.get("/sse")
+async def sse(request: Request, principal: Principal = Depends(get_principal)):
+    session_id = str(principal.user_id)
+    q: asyncio.Queue = asyncio.Queue(maxsize=100)
+    _sessions[session_id] = q
+
+    async def event_stream():
+        yield f"event: session\ndata: {json.dumps({'sessionId': session_id})}\n\n"
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    message = await asyncio.wait_for(q.get(), timeout=15)
+                    yield f"event: message\ndata: {json.dumps(message)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        finally:
+            _sessions.pop(session_id, None)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/messages")
+async def messages(payload: dict[str, Any], principal: Principal = Depends(get_principal)):
+    """Handle one JSON-RPC message; replies are pushed on the SSE stream."""
+    message: dict[str, Any] = {"jsonrpc": "2.0", "id": payload.get("id")}
+    method = payload.get("method")
+    if method == "initialize":
+        message["result"] = {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "tapitask-mcp", "version": "0.1.0"},
+        }
+    elif method == "tools/list":
+        message["result"] = {"tools": TOOLS}
+    elif method == "tools/call":
+        try:
+            result = await _call_tool(
+                principal, payload["params"]["name"],
+                payload["params"].get("arguments", {}),
+            )
+            message["result"] = {"content": [{"type": "text", "text": result}]}
+        except Exception as e:
+            message["error"] = {"code": -32603, "message": str(e)}
+    elif method == "notifications/initialized":
+        return {"status": "ok"}
+    else:
+        message["error"] = {"code": -32601, "message": f"Unknown method {method}"}
+
+    q = _sessions.get(str(principal.user_id))
+    if q is not None:
+        q.put_nowait(message)
+    return {"status": "ok"}
+
+
+async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> str:
+    from uuid import UUID
+
+    from .db import SessionLocal
+    from .models import Checklist, Item, ListMember
+    from sqlalchemy import select
+
+    def _uuid(value: str) -> UUID:
+        return UUID(value)
+
+    async with SessionLocal() as session:
+        if name == "list_lists":
+            # list_lists is already scoped to owned + shared lists; no per-list
+            # gate needed.
+            owned = await session.execute(
+                select(Checklist).where(
+                    Checklist.owner_id == principal.user_id, Checklist.deleted.is_(False))
+            )
+            rows = [
+                {"id": str(c.id), "title": c.title, "role": "owner"}
+                for c in owned.scalars()
+            ]
+            shared = await session.execute(
+                select(ListMember, Checklist)
+                .join(Checklist, Checklist.id == ListMember.list_id)
+                .where(ListMember.user_id == principal.user_id, Checklist.deleted.is_(False))
+            )
+            rows += [
+                {"id": str(c.id), "title": c.title, "role": m.role.value}
+                for m, c in shared.all()
+            ]
+            return json.dumps(rows)
+        if name == "get_summary":
+            # A principal may only summarise a list it can access (owner,
+            # member, or within an API key's list_scope).
+            await accessible_list(_uuid(args["list_id"]), principal, session)
+            result = await session.execute(
+                select(Checklist).where(Checklist.id == _uuid(args["list_id"]))
+            )
+            checklist = result.scalar_one_or_none()
+            items = await session.execute(
+                select(Item).where(
+                    Item.list_id == _uuid(args["list_id"]),
+                    Item.deleted.is_(False), Item.done.is_(False),
+                ).order_by(Item.position)
+            )
+            labels = [i.label for i in items.scalars()]
+            title = checklist.title if checklist else "?"
+            return f"{title} — {len(labels)} à faire : " + ", ".join(labels)
+        if name == "get_list":
+            await accessible_list(_uuid(args["list_id"]), principal, session)
+            flag = args.get("unchecked_only", False)
+            query = select(Item).where(
+                Item.list_id == _uuid(args["list_id"]), Item.deleted.is_(False)
+            ).order_by(Item.position)
+            if flag:
+                query = query.where(Item.done.is_(False))
+            items = await session.execute(query)
+            return json.dumps(
+                [
+                    {"id": str(i.id), "label": i.label, "done": i.done,
+                     "recurrence": i.recurrence}
+                    for i in items.scalars()
+                ]
+            )
+        if name == "add_items":
+            # Write tool: editor role on the target list, and read-only
+            # principals (scoped API keys) must be refused.
+            if principal.read_only:
+                raise ValueError("Read-only credentials")
+            await accessible_list(_uuid(args["list_id"]), principal, session, min_role=Role.editor)
+            from .routers.lists import _add_single
+            from .events import record_change, notify_list
+            lines = [l.strip() for l in args["text"].splitlines() if l.strip()]
+            created = []
+            for line in lines[:500]:
+                item = await _add_single(session, _uuid(args["list_id"]), line, principal.user_id)
+                created.append(str(item.id))
+            return json.dumps({"created": created})
+        if name == "check_item":
+            result = await session.execute(
+                select(Item).where(Item.id == _uuid(args["item_id"]))
+            )
+            item = result.scalar_one_or_none()
+            if item is None:
+                raise ValueError("item not found")
+            # Write tool: editor access to the item's REAL list, and read-only
+            # principals refused (authorizes the list the item belongs to, not
+            # a caller-supplied list_id).
+            if principal.read_only:
+                raise ValueError("Read-only credentials")
+            await accessible_list(item.list_id, principal, session, min_role=Role.editor)
+            from .models import utcnow
+            item.done = args.get("done", True)
+            item.updated_at = utcnow()
+            await session.commit()
+            return json.dumps({"id": str(item.id), "done": item.done})
+    raise ValueError(f"Unknown tool: {name}")

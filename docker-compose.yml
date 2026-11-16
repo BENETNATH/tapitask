@@ -1,0 +1,78 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: checklists
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      POSTGRES_DB: checklists
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U checklists"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [internal]
+
+  api:
+    build: ./server
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://checklists:${DB_PASSWORD}@db:5432/checklists
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # --- Email (invitations, partages, notifications) ---
+      SMTP_ENABLED: ${SMTP_ENABLED:-0}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-tapitask@localhost}
+      # --- Rate limiting multi-workers (optionnel) ---
+      REDIS_URL: ${REDIS_URL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    ports:
+      # Port hôte configurable : ${API_PORT} -> 8000 (conteneur)
+      - "${API_PORT:-8000}:8000"
+
+  # Webapp (optionnel) : --profile web
+  web:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./app/build/web:/usr/share/nginx/html:ro
+    networks: [internal]
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    profiles: ["web"]
+
+  # TLS intégré (optionnel) : --profile caddy
+  # Par défaut, l'API est exposée sur ${API_PORT} pour ton propre reverse proxy.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [internal]
+    profiles: ["caddy"]
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:

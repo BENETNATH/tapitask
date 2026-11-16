@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .models import ChangeLog, utcnow
+
+
+async def record_change(
+    session: AsyncSession,
+    list_id: UUID,
+    item_id: UUID | None = None,
+    checklist_id: UUID | None = None,
+    kind: str = "item.upsert",
+    actor_id: UUID | None = None,
+    server_time: datetime | None = None,
+) -> None:
+    session.add(
+        ChangeLog(
+            list_id=list_id,
+            item_id=item_id,
+            checklist_id=checklist_id,
+            kind=kind,
+            actor_id=actor_id,
+            server_time=server_time or utcnow(),
+        )
+    )
+    await session.commit()
+
+
+class Hub:
+    """In-process WebSocket hub: user_id -> set of queues."""
+
+    def __init__(self) -> None:
+        self._subscribers: dict[UUID, set[asyncio.Queue]] = {}
+
+    def subscribe(self, user_id: UUID) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue(maxsize=100)
+        self._subscribers.setdefault(user_id, set()).add(q)
+        return q
+
+    def unsubscribe(self, user_id: UUID, q: asyncio.Queue) -> None:
+        queues = self._subscribers.get(user_id)
+        if queues:
+            queues.discard(q)
+            if not queues:
+                self._subscribers.pop(user_id, None)
+
+    async def notify_users(self, user_ids: list[UUID], message: dict[str, Any]) -> None:
+        for user_id in user_ids:
+            for q in list(self._subscribers.get(user_id, ())):
+                try:
+                    q.put_nowait(message)
+                except asyncio.QueueFull:
+                    pass
+
+
+hub = Hub()
+
+
+def _webhook_host_allowed(url: str) -> bool:
+    """Return True only if `url` may be POSTed from the server.
+
+    Blocks SSRF to non-public destinations (loopback, RFC1918/CGNAT,
+    link-local incl. cloud metadata 169.254.169.254, reserved/multicast) by
+    resolving the hostname first. settings.WEBHOOK_ALLOWED_HOSTS (comma
+    separated) is an explicit allowlist that bypasses the block for
+    self-hosted webhooks that legitimately point at private addresses.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    from .config import settings
+
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if parsed.scheme not in ("http", "https") or not host:
+        return False
+    allow = {h.strip().lower() for h in settings.WEBHOOK_ALLOWED_HOSTS if h.strip()}
+    if host.lower() in allow or any(host.lower().endswith("." + a) for a in allow):
+        return True
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    for _family, _type, _proto, _canon, sockaddr in infos:
+        try:
+            ip = ipaddress.ip_address(sockaddr[0])
+        except Exception:
+            continue
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return True
+
+
+async def fire_webhooks(session, list_id, payload: dict[str, Any]) -> None:
+    """POST the payload to every webhook of the list, signed with HMAC-SHA256.
+    Fire-and-forget: failures are logged, never propagated. Disallowed
+    (SSRF-risk) hosts are skipped, not followed."""
+    import asyncio
+    import hashlib
+    import hmac
+    import json
+    import logging
+
+    from .config import settings
+    from .models import Webhook
+    from sqlalchemy import select
+
+    result = await session.execute(select(Webhook).where(Webhook.list_id == list_id))
+    hooks = list(result.scalars())
+    if not hooks:
+        return
+
+    async def _fire(hook: Webhook) -> None:
+        if not _webhook_host_allowed(hook.url):
+            logging.getLogger("tapitask.webhooks").warning(
+                "skipping disallowed webhook host: %s", hook.url)
+            return
+        body = json.dumps(payload).encode()
+        signature = hmac.new(hook.secret.encode(), body, hashlib.sha256).hexdigest()
+        try:
+            import httpx
+
+            # follow_redirects stays at its default (False): re-resolving each
+            # hop against the SSRF policy would be required to follow safely.
+            async with httpx.AsyncClient(timeout=settings.WEBHOOK_TIMEOUT) as client:
+                await client.post(hook.url, content=body, headers={
+                    "Content-Type": "application/json",
+                    "X-Tapitask-Signature": f"sha256={signature}",
+                })
+        except Exception:
+            logging.getLogger("tapitask.webhooks").exception("webhook failed: %s", hook.url)
+
+    await asyncio.gather(*(_fire(h) for h in hooks))
+
+
+async def notify_list(list_id: UUID, message: dict[str, Any]) -> None:
+    """Push a change to all members of a list (called from sync router context)."""
+    from .db import SessionLocal
+    from .models import Checklist, ListMember
+    from sqlalchemy import select
+
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Checklist.owner_id).where(Checklist.id == list_id)
+        )
+        owner_id = result.scalar_one_or_none()
+        members = await session.execute(
+            select(ListMember.user_id).where(ListMember.list_id == list_id)
+        )
+        user_ids = [owner_id] if owner_id else []
+        user_ids += [m for (m,) in members.all()]
+    message = dict(message)
+    message["list_id"] = str(list_id)
+    await hub.notify_users(user_ids, message)
