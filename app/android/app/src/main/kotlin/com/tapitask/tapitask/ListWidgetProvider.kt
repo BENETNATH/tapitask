@@ -10,7 +10,6 @@ import android.graphics.Color
 import android.net.Uri
 import android.util.Log
 import android.widget.RemoteViews
-import es.antonborri.home_widget.HomeWidgetLaunchIntent
 import es.antonborri.home_widget.HomeWidgetPlugin
 
 /**
@@ -74,6 +73,13 @@ class ListWidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
+        // Codes distincts par bouton : évite les collisions
+        // FLAG_UPDATE_CURRENT entre les PendingIntents de lancement.
+        const val OPEN_REQUEST_CODE = 1
+        const val ADD_REQUEST_CODE = 2
+        private val ITEM_ID_REGEX =
+            Regex("^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$", RegexOption.IGNORE_CASE)
+
         const val MAX_ITEMS = 5
         const val ACTION_CYCLE = "com.tapitask.tapitask.action.CYCLE_LIST"
         const val ACTION_TOGGLE = "com.tapitask.tapitask.action.TOGGLE_ITEM"
@@ -114,16 +120,26 @@ class ListWidgetProvider : AppWidgetProvider() {
     }
 
     private fun bindOpen(context: Context, views: RemoteViews, listId: String?) {
+        // Action privée (au lieu de l'action publique du plugin home_widget) :
+        // MainActivity ne lit que celle-ci ; le reste est validé côté Dart.
         views.setOnClickPendingIntent(
             R.id.widget_open,
-            HomeWidgetLaunchIntent.getActivity(
-                context, MainActivity::class.java,
-                Uri.parse("tapitask://home")))
+            launchIntent(context, OPEN_REQUEST_CODE, "tapitask://home"))
         views.setOnClickPendingIntent(
             R.id.widget_add,
-            HomeWidgetLaunchIntent.getActivity(
-                context, MainActivity::class.java,
-                Uri.parse("tapitask://quickadd?list=" + (listId ?: ""))))
+            launchIntent(context, ADD_REQUEST_CODE,
+                "tapitask://quickadd?list=" + (listId ?: "")))
+    }
+
+    private fun launchIntent(context: Context, code: Int, uri: String): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = TapitaskActions.ACTION_LAUNCH
+            data = Uri.parse(uri)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        return PendingIntent.getActivity(
+            context, code, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
     private fun render(
@@ -241,8 +257,10 @@ class ListWidgetProvider : AppWidgetProvider() {
                 }
             }
             ACTION_TOGGLE -> {
+                // Receiver exported : valider le format UUID avant d'écrire
+                // les prefs partagées, un item_id factice est ignoré.
                 val itemId = intent.getStringExtra(EXTRA_ITEM_ID)
-                if (!itemId.isNullOrEmpty()) {
+                if (itemId != null && ITEM_ID_REGEX.matches(itemId)) {
                     checkItem(context, itemId)
                     triggerUpdate(context)
                 }

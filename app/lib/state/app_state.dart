@@ -1,9 +1,11 @@
-import "dart:math";
+import "dart:io";
 
 import "dart:async";
 import "dart:convert";
+import "dart:math";
 
 import "package:flutter/foundation.dart";
+import "package:flutter/services.dart";
 import "package:drift/drift.dart";
 import "package:shared_preferences/shared_preferences.dart";
 
@@ -15,6 +17,7 @@ import "package:home_widget/home_widget.dart";
 
 import "../platform/alert_service.dart";
 import "../platform/widget_service.dart";
+import "widget_intent.dart";
 
 class AppState extends ChangeNotifier {
   final AppDb db = AppDb();
@@ -27,6 +30,7 @@ class AppState extends ChangeNotifier {
   bool quickAddRequested = false;
   String? quickAddListId;
   StreamSubscription<Uri?>? _widgetClickSub;
+  final MethodChannel _widgetChannel = MethodChannel("com.tapitask/tapitask/widget");
 
   /// Per-user feature toggles (server-side, synced between devices).
   Map<String, dynamic> settings = {
@@ -99,24 +103,47 @@ class AppState extends ChangeNotifier {
       final due = await db.dueItems();
       await AlertService.notifyDueToday(due);
     }
-    try {
-      final uri = await HomeWidget.initiallyLaunchedFromHomeWidget();
-      _applyWidgetUri(uri);
-    } catch (_) {}
-    // Relance depuis le widget alors que l'app est DÉJÀ ouverte :
-    // launchMode=singleTask route vers onNewIntent → home_widget émet ici.
-    _widgetClickSub = HomeWidget.widgetClicked.listen(_applyWidgetUri);
+    if (Platform.isAndroid) {
+      // Android : action privée + MethodChannel natif (pas de plugin
+      // home_widget pour le lancement — vérif d'expéditeur impossible,
+      // validation stricte côté Dart).
+      // La spec prévoyait receiveBroadcastStream(), retirée de MethodChannel
+      // dans les Flutter récents : équivalent = handler de méthode pour le
+      // push natif « widgetLaunch ».
+      _widgetChannel.setMethodCallHandler(_onWidgetLaunch);
+      final cold = await _widgetChannel.invokeMethod<String>("getLaunchUri");
+      await _applyWidgetUri(cold == null ? null : Uri.parse(cold));
+    } else {
+      try {
+        final uri = await HomeWidget.initiallyLaunchedFromHomeWidget();
+        _applyWidgetUri(uri);
+      } catch (_) {}
+      // Relance depuis le widget alors que l'app est DÉJÀ ouverte :
+      // launchMode=singleTask route vers onNewIntent → home_widget émet ici.
+      _widgetClickSub = HomeWidget.widgetClicked.listen(_applyWidgetUri);
+    }
     ready = true;
     notifyListeners();
   }
 
-  void _applyWidgetUri(Uri? uri) {
-    if (uri == null || !uri.toString().contains("quickadd")) return;
+  /// Push natif « widgetLaunch » (relance depuis le widget, app déjà ouverte).
+  Future<void> _onWidgetLaunch(MethodCall call) async {
+    if (call.method != "widgetLaunch") return;
+    final arg = call.arguments;
+    await _applyWidgetUri(arg is String ? Uri.parse(arg) : null);
+  }
+
+  /// URI de lancement d'un widget : validation stricte (scheme/path/uuid)
+  /// + membership via les listes visibles localement, session requise.
+  Future<void> _applyWidgetUri(Uri? uri) async {
+    if (uri == null || uri.scheme != "tapitask") return;
+    if (api.accessToken == null) return;
+    if (uri.path != "quickadd" && uri.host != "quickadd") return;
+    final ids = (await db.visibleLists()).map((l) => l.id).toSet();
+    final list = validateQuickAddUri(uri, ids);
+    if (list == null) return;
     quickAddRequested = true;
-    final list = uri.queryParameters["list"];
-    if (list != null && list.isNotEmpty) {
-      quickAddListId = list;
-    }
+    quickAddListId = list.isEmpty ? null : list;
     notifyListeners();
   }
 
@@ -598,6 +625,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _widgetClickSub?.cancel();
+    if (Platform.isAndroid) _widgetChannel.setMethodCallHandler(null);
     sync.dispose();
     db.close();
     super.dispose();

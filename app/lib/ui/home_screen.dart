@@ -65,6 +65,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final target = widget.state.quickAddListId;
     widget.state.quickAddListId = null;
     if (target != null) {
+      // Garde double : la liste doit exister encore (la validation amont
+      // rend ce cas théorique, mais la défense coûte 3 lignes).
+      final visible = await widget.state.db.visibleLists();
+      if (!visible.any((l) => l.id == target)) return;
       if (!mounted) return;
       await Navigator.push(
         context,
