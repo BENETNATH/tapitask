@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -8,6 +9,9 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import ChangeLog, utcnow
+
+# RFC 6598 : Python ne classe pas le CGNAT en is_private ni is_global.
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
 
 
 async def record_change(
@@ -62,16 +66,18 @@ class Hub:
 hub = Hub()
 
 
-def _webhook_host_allowed(url: str) -> bool:
-    """Return True only if `url` may be POSTed from the server.
+def _webhook_host_allowed(url: str) -> tuple[bool, str | None]:
+    """Return (allowed, pinned_ip) for a webhook URL.
 
     Blocks SSRF to non-public destinations (loopback, RFC1918/CGNAT,
     link-local incl. cloud metadata 169.254.169.254, reserved/multicast) by
     resolving the hostname first. settings.WEBHOOK_ALLOWED_HOSTS (comma
     separated) is an explicit allowlist that bypasses the block for
     self-hosted webhooks that legitimately point at private addresses.
+    The resolution happens exactly ONCE here and the first validated IP is
+    returned so the fetch can pin it — re-resolving at fetch time would be
+    a DNS-rebinding TOCTOU (audit run-2).
     """
-    import ipaddress
     import socket
     from urllib.parse import urlparse
 
@@ -80,23 +86,27 @@ def _webhook_host_allowed(url: str) -> bool:
     parsed = urlparse(url)
     host = parsed.hostname or ""
     if parsed.scheme not in ("http", "https") or not host:
-        return False
+        return False, None
     allow = {h.strip().lower() for h in settings.WEBHOOK_ALLOWED_HOSTS if h.strip()}
     if host.lower() in allow or any(host.lower().endswith("." + a) for a in allow):
-        return True
+        return True, None
     try:
         infos = socket.getaddrinfo(host, None)
     except Exception:
-        return False
+        return False, None
+    pinned: str | None = None
     for _family, _type, _proto, _canon, sockaddr in infos:
         try:
             ip = ipaddress.ip_address(sockaddr[0])
         except Exception:
             continue
         if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            return False
-    return True
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+                or ip in _CGNAT):
+            return False, None
+        if pinned is None:
+            pinned = str(ip)
+    return pinned is not None, pinned
 
 
 async def fire_webhooks(session, list_id, payload: dict[str, Any]) -> None:
@@ -119,22 +129,39 @@ async def fire_webhooks(session, list_id, payload: dict[str, Any]) -> None:
         return
 
     async def _fire(hook: Webhook) -> None:
-        if not _webhook_host_allowed(hook.url):
+        allowed, pinned_ip = _webhook_host_allowed(hook.url)
+        if not allowed:
             logging.getLogger("tapitask.webhooks").warning(
                 "skipping disallowed webhook host: %s", hook.url)
             return
         body = json.dumps(payload).encode()
         signature = hmac.new(hook.secret.encode(), body, hashlib.sha256).hexdigest()
+        url = hook.url
+        headers = {
+            "Content-Type": "application/json",
+            "X-Tapitask-Signature": f"sha256={signature}",
+        }
+        # Pin the IP resolved by the SSRF check: an IP-literal host needs no
+        # rewrite, a hostname fetch must not re-resolve (DNS rebinding).
+        if pinned_ip is not None:
+            from urllib.parse import urlunparse, urlparse
+
+            parsed = urlparse(url)
+            try:
+                ipaddress.ip_address(parsed.hostname or "")
+            except ValueError:
+                netloc = (
+                    f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+                ) + (f":{parsed.port}" if parsed.port else "")
+                url = urlunparse(parsed._replace(netloc=netloc))
+                headers["Host"] = parsed.hostname or ""
         try:
             import httpx
 
             # follow_redirects stays at its default (False): re-resolving each
             # hop against the SSRF policy would be required to follow safely.
             async with httpx.AsyncClient(timeout=settings.WEBHOOK_TIMEOUT) as client:
-                await client.post(hook.url, content=body, headers={
-                    "Content-Type": "application/json",
-                    "X-Tapitask-Signature": f"sha256={signature}",
-                })
+                await client.post(url, content=body, headers=headers)
         except Exception:
             logging.getLogger("tapitask.webhooks").exception("webhook failed: %s", hook.url)
 

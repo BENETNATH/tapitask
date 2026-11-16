@@ -124,31 +124,37 @@ async def _ensure_columns() -> None:
             pass  # column already exists (sqlite has no IF NOT EXISTS)
 
 
+async def _create_schema() -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await _ensure_columns()
+    await _ensure_indexes()
+
+
 async def _init_schema() -> None:
     """create_all + migrations, serialized across workers.
 
     With multiple uvicorn workers, every worker runs the startup hook
     concurrently on a fresh database — two create_all racing on the same
-    ENUM type crash one worker. A Postgres advisory lock (session-scoped,
-    released on commit) makes exactly one worker initialize the schema;
-    the others wait and then find everything in place (create_all is
-    checkfirst). On SQLite (tests), no lock is needed."""
+    ENUM type crash one worker. A Postgres advisory lock makes exactly one
+    worker initialize the schema; the others wait and then find everything
+    in place (create_all is checkfirst). The lock is session-scoped and
+    released on commit: it is therefore HELD on its own connection for the
+    whole init — no commit between lock and unlock — so the serialization
+    actually covers create_all + migrations. On SQLite (tests), no lock is
+    needed."""
     from sqlalchemy import text
 
     if _is_postgres():
         async with engine.connect() as conn:
             await conn.execute(text("SELECT pg_advisory_lock(918273645)"))
-            await conn.commit()
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-    finally:
-        if _is_postgres():
-            async with engine.connect() as conn:
+            try:
+                await _create_schema()
+            finally:
                 await conn.execute(text("SELECT pg_advisory_unlock(918273645)"))
                 await conn.commit()
-    await _ensure_columns()
-    await _ensure_indexes()
+    else:
+        await _create_schema()
 
 
 async def _ensure_indexes() -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -19,6 +19,18 @@ router = APIRouter(prefix="/sync", tags=["sync"])
 
 def _naive(dt: datetime) -> datetime:
     return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+
+# Un horodatage client plus de 5 s dans le futur est une horloge cassée,
+# pas un événement futur : le clamp serveur protège l'ordre LWW et le
+# curseur du delta (audit run-2).
+SYNC_CLOCK_TOLERANCE = timedelta(seconds=5)
+
+
+def _clamp_client_dt(dt: datetime) -> datetime:
+    dt = _naive(dt)
+    now = _naive(utcnow())
+    return now if dt > now + SYNC_CLOCK_TOLERANCE else dt
 
 
 @router.post("", response_model=SyncOut)
@@ -147,7 +159,7 @@ async def _apply_event(session: AsyncSession, event, principal) -> None:
         if checklist.owner_id != principal.user_id:
             return
         checklist.deleted = True
-        checklist.updated_at = _naive(event.updated_at)
+        checklist.updated_at = _clamp_client_dt(event.updated_at)
         await session.commit()
         await record_change(
             session, list_id=event.list_id, checklist_id=checklist.id, kind="list.delete")
@@ -164,7 +176,7 @@ async def _apply_event(session: AsyncSession, event, principal) -> None:
         await _apply_item_delete(session, event, principal)
     elif event.kind == "list.rename":
         checklist.title = event.label or checklist.title
-        checklist.updated_at = _naive(event.updated_at)
+        checklist.updated_at = _clamp_client_dt(event.updated_at)
         await session.commit()
 
 
@@ -205,18 +217,19 @@ async def _apply_list_create(session: AsyncSession, event, principal) -> None:
             existing.folder = event.folder
             changed = True
         if changed:
-            existing.updated_at = _naive(event.updated_at)
+            existing.updated_at = _clamp_client_dt(event.updated_at)
             await session.commit()
             await notify_list(event.list_id, {"kind": "list.rename", "id": str(event.list_id)})
         return
+    stamp = _clamp_client_dt(event.updated_at)
     checklist = Checklist(
         id=event.id,
         owner_id=principal.user_id,
         title=event.label or "Liste",
         color=event.color,
         folder=event.folder,
-        created_at=_naive(event.updated_at),
-        updated_at=_naive(event.updated_at),
+        created_at=stamp,
+        updated_at=stamp,
     )
     session.add(checklist)
     await session.commit()
@@ -228,11 +241,12 @@ async def _apply_list_create(session: AsyncSession, event, principal) -> None:
 
 
 async def _apply_item_upsert(session: AsyncSession, event, principal) -> None:
+    stamp = _clamp_client_dt(event.updated_at)
     result = await session.execute(select(Item).where(Item.id == event.id))
     item = result.scalar_one_or_none()
     newly_done = False
     if item is None:
-        item = Item(id=event.id, list_id=event.list_id, created_at=event.updated_at)
+        item = Item(id=event.id, list_id=event.list_id, created_at=stamp)
         session.add(item)
     else:
         # Re-parenting guard: the actor must have editor access to the list
@@ -243,7 +257,7 @@ async def _apply_item_upsert(session: AsyncSession, event, principal) -> None:
         if item.list_id != event.list_id:
             await accessible_list(
                 item.list_id, principal, session, min_role=Role.editor)
-    if item.updated_at is not None and _naive(item.updated_at) >= _naive(event.updated_at):
+    if item.updated_at is not None and _naive(item.updated_at) >= stamp:
         return
     newly_done = bool(event.done) and not bool(item.done)
     item.list_id = event.list_id
@@ -255,7 +269,7 @@ async def _apply_item_upsert(session: AsyncSession, event, principal) -> None:
     item.due_date = event.due_date or item.due_date
     item.notes = event.notes if event.notes is not None else item.notes
     item.assignee_id = event.assignee_id or item.assignee_id
-    item.updated_at = _naive(event.updated_at)
+    item.updated_at = stamp
     await session.commit()
     # Recurrence: checking a recurring item from the app goes through the
     # outbox (item.upsert done=true), so the next occurrence must be spawned
@@ -269,9 +283,10 @@ async def _apply_item_upsert(session: AsyncSession, event, principal) -> None:
 
 
 async def _apply_item_delete(session: AsyncSession, event, principal) -> None:
+    stamp = _clamp_client_dt(event.updated_at)
     result = await session.execute(select(Item).where(Item.id == event.id))
     item = result.scalar_one_or_none()
-    if item is None or _naive(item.updated_at) >= _naive(event.updated_at):
+    if item is None or _naive(item.updated_at) >= stamp:
         return
     # The actor must have editor access to the list the item actually lives in
     # (not just the event's target list), otherwise a forged item.delete with a
@@ -279,7 +294,7 @@ async def _apply_item_delete(session: AsyncSession, event, principal) -> None:
     if item.list_id != event.list_id:
         await accessible_list(item.list_id, principal, session, min_role=Role.editor)
     item.deleted = True
-    item.updated_at = _naive(event.updated_at)
+    item.updated_at = stamp
     await session.commit()
     await record_change(session, list_id=event.list_id, item_id=item.id, kind="item.delete")
     await notify_list(event.list_id, {"kind": "item.delete", "id": str(event.id)})

@@ -756,6 +756,122 @@ async def test_mcp_http_bridge(client):
 
 
 @pytest.mark.asyncio
+async def test_mcp_cross_tenant_isolation(client):
+    """Aucune fuite cross-tenant ni écriture via les tools MCP (audit run-2 :
+    21 checks manuels sans couverture permanente)."""
+    import asyncio
+
+    from app import mcp_http
+    from app.db import SessionLocal
+    from app.models import User
+    from sqlalchemy import select
+
+    ta = await register(client, "mcpatt@example.com")
+    tv = await register(client, "mcpvic@example.com")
+    tm = await register(client, "mcpmem@example.com")
+    ha, hv, hm = auth_headers(ta), auth_headers(tv), auth_headers(tm)
+
+    v1 = (await client.post("/lists", json={"title": "VictimSecret"},
+                            headers=hv)).json()["id"]
+    i1 = (await client.post(f"/lists/{v1}/items", json={"label": "v1-item"},
+                            headers=hv)).json()[0]
+    a1 = (await client.post("/lists", json={"title": "AttackerList"},
+                            headers=ha)).json()["id"]
+    # contrôle positif : viewer de V1
+    r = await client.post(f"/lists/{v1}/members",
+                          json={"email": "mcpmem@example.com", "role": "viewer"},
+                          headers=hv)
+    assert r.status_code == 201, r.text
+
+    async def user_id(email: str) -> str:
+        async with SessionLocal() as session:
+            return str((await session.execute(
+                select(User.id).where(User.email == email))).scalar_one())
+
+    queues = {}
+    for email, hdr in (("mcpatt@example.com", ha), ("mcpvic@example.com", hv),
+                       ("mcpmem@example.com", hm)):
+        q = asyncio.Queue()
+        mcp_http._sessions[await user_id(email)] = q
+        queues[email] = q
+    try:
+        async def call(hdr, q, name, args, mid):
+            r = await client.post("/mcp/messages", json={
+                "jsonrpc": "2.0", "id": mid, "method": "tools/call",
+                "params": {"name": name, "arguments": args},
+            }, headers=hdr)
+            assert r.status_code == 200, r.text
+            reply = await asyncio.wait_for(q.get(), timeout=2.0)
+            assert reply["id"] == mid
+            return reply
+
+        def error_of(reply) -> str:
+            assert "error" in reply, reply
+            return reply["error"]["message"]
+
+        def text_of(reply) -> str:
+            assert "result" in reply, reply
+            return reply["result"]["content"][0]["text"]
+
+        qa, qv, qm = queues["mcpatt@example.com"], queues["mcpvic@example.com"], \
+            queues["mcpmem@example.com"]
+
+        # --- A (JWT) sur V1 : erreurs, pas de fuite du titre ---
+        reply = await call(ha, qa, "get_list", {"list_id": v1}, 1)
+        assert "List not found" in error_of(reply)
+        assert "VictimSecret" not in str(reply)
+
+        reply = await call(ha, qa, "get_summary", {"list_id": v1}, 2)
+        assert "List not found" in error_of(reply)
+
+        reply = await call(ha, qa, "add_items", {"list_id": v1, "text": "steal"}, 3)
+        assert "List not found" in error_of(reply)
+        r = await client.get(f"/lists/{v1}/items", headers=hv)
+        assert [i["label"] for i in r.json()] == ["v1-item"]
+
+        # check_item avec le list_id d'A mais l'item de V
+        reply = await call(ha, qa, "check_item",
+                           {"list_id": a1, "item_id": i1["id"], "done": True}, 4)
+        assert "List not found" in error_of(reply)
+        r = await client.get(f"/lists/{v1}/items", headers=hv)
+        assert r.json()[0]["done"] is False
+
+        reply = await call(ha, qa, "list_lists", {}, 5)
+        assert "VictimSecret" not in text_of(reply)
+        assert "AttackerList" in text_of(reply)
+
+        # --- clé API scopée de A (list_scope=A1) : V1 hors scope ---
+        r = await client.post("/api-keys",
+                              json={"name": "scoped", "list_scope": a1}, headers=ha)
+        assert r.status_code == 201
+        kh = {"Authorization": f"Bearer {r.json()['key']}"}
+        reply = await call(kh, qa, "get_list", {"list_id": v1}, 6)
+        assert "scoped" in error_of(reply)
+
+        # --- clé API read-only de A (sans scope) : écriture refusée ---
+        r = await client.post("/api-keys",
+                              json={"name": "ro", "read_only": True}, headers=ha)
+        assert r.status_code == 201
+        kr = {"Authorization": f"Bearer {r.json()['key']}"}
+        reply = await call(kr, qa, "add_items", {"list_id": a1, "text": "nope"}, 7)
+        assert "Read-only" in error_of(reply)
+
+        # --- contrôles positifs ---
+        # membre viewer de V1 : lecture OK, titre visible
+        reply = await call(hm, qm, "get_list", {"list_id": v1}, 8)
+        assert "v1-item" in text_of(reply)
+        reply = await call(hm, qm, "get_summary", {"list_id": v1}, 9)
+        assert "VictimSecret" in text_of(reply)
+        # A sur sa propre liste : écritures OK
+        reply = await call(ha, qa, "add_items", {"list_id": a1, "text": "ok1"}, 10)
+        assert text_of(reply)
+        r = await client.get(f"/lists/{a1}/items", headers=ha)
+        assert [i["label"] for i in r.json()] == ["ok1"]
+    finally:
+        mcp_http._sessions.clear()
+
+
+@pytest.mark.asyncio
 async def test_rate_limiter_blocks_after_threshold(client):
     from app.routers import auth as auth_router
     from app.deps import RateLimiter
@@ -1187,6 +1303,48 @@ async def test_monthly_recurrence_calendar_months(client):
         f"/lists/{list_id}/items/{item['id']}", json={"done": True}, headers=h)
     spawned = r.json()[1]
     assert spawned["due_date"].startswith("2030-02-28")
+
+
+@pytest.mark.asyncio
+async def test_sync_clamps_future_client_clock(client):
+    """Un horodatage client plus de 5 s dans le futur est une horloge cassée :
+    le clamp serveur protège l'ordre LWW et le curseur du delta (audit run-2)."""
+    import datetime as dt
+
+    def aware(value: str) -> dt.datetime:
+        d = dt.datetime.fromisoformat(value)
+        return d if d.tzinfo is not None else d.replace(tzinfo=dt.timezone.utc)
+
+    tokens = await register(client, "clockpoison@example.com")
+    h = auth_headers(tokens)
+    list_id = (await client.post("/lists", json={"title": "C"}, headers=h)).json()["id"]
+    item = (await client.post(f"/lists/{list_id}/items", json={"label": "base"},
+                              headers=h)).json()[0]
+
+    # upsert à +2h : appliqué, mais le stored updated_at est clampé
+    r = await client.post("/sync", json={"events": [
+        {"kind": "item.upsert", "id": item["id"], "list_id": list_id,
+         "label": "poison", "done": False,
+         "updated_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=2)).isoformat()},
+    ]}, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["rejected"] == []
+
+    r = await client.get(f"/lists/{list_id}/items", headers=h)
+    stored = [i for i in r.json() if i["id"] == item["id"]][0]
+    assert stored["label"] == "poison"
+    assert aware(stored["updated_at"]) <= dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=6)
+
+    # un événement ultérieur à horloge saine doit toujours gagner (LWW)
+    r = await client.post("/sync", json={"events": [
+        {"kind": "item.upsert", "id": item["id"], "list_id": list_id,
+         "label": "after", "done": False,
+         "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()},
+    ]}, headers=h)
+    assert r.status_code == 200, r.text
+    r = await client.get(f"/lists/{list_id}/items", headers=h)
+    stored = [i for i in r.json() if i["id"] == item["id"]][0]
+    assert stored["label"] == "after"
 
 
 @pytest.mark.asyncio

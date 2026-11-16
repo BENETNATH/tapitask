@@ -25,6 +25,9 @@ class Settings:
     SMTP_PASSWORD: str = os.environ.get("SMTP_PASSWORD", "")
     SMTP_FROM: str = os.environ.get("SMTP_FROM", "tapitask@localhost")
 
+    # --- Realtime ---
+    WS_PING_INTERVAL: float = float(os.environ.get("WS_PING_INTERVAL", "30.0"))
+
     # --- Rate limiting (optional Redis) ---
     REDIS_URL: str = os.environ.get("REDIS_URL", "")
     # Comma-separated list of trusted reverse-proxy IPs. Only when the direct

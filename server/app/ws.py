@@ -7,8 +7,10 @@ from uuid import UUID
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
+from .config import settings
 from .db import SessionLocal
 from .events import hub
+from .models import User
 from .security import decode_token
 
 router = APIRouter()
@@ -31,13 +33,28 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception:
         await websocket.close(code=4401)
         return
+
+    async def is_active() -> bool:
+        # Le JWT reste valide après une désactivation admin : l'état du
+        # compte est re-vérifié côté serveur (audit run-2).
+        async with SessionLocal() as session:
+            user = await session.get(User, user_id)
+        return user is not None and user.is_active
+
+    if not await is_active():
+        await websocket.close(code=4401)
+        return
     queue = hub.subscribe(user_id)
     try:
         while True:
             try:
-                message = await asyncio.wait_for(queue.get(), timeout=30)
+                message = await asyncio.wait_for(
+                    queue.get(), timeout=settings.WS_PING_INTERVAL)
                 await websocket.send_text(json.dumps(message))
             except asyncio.TimeoutError:
+                if not await is_active():
+                    await websocket.close(code=4401)
+                    return
                 await websocket.send_text(json.dumps({"kind": "ping"}))
     except (WebSocketDisconnect, Exception):
         pass
