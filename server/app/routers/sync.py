@@ -169,6 +169,12 @@ async def _apply_event(session: AsyncSession, event, principal) -> None:
 
 
 async def _accessible_list_ids(principal: Principal, session: AsyncSession) -> list[UUID]:
+    # Une clé API scopée ne voit QUE sa liste — sinon le delta-sync
+    # exposerait toutes les listes du propriétaire (audit run-2).
+    if principal.list_scope is not None:
+        row = (await session.execute(
+            select(Checklist.id).where(Checklist.id == principal.list_scope))).first()
+        return [row[0]] if row is not None else []
     owned = await session.execute(select(Checklist.id).where(Checklist.owner_id == principal.user_id))
     ids = [lid for (lid,) in owned.all()]
     shared = await session.execute(

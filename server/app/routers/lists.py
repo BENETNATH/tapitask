@@ -443,9 +443,15 @@ async def list_hooks(
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
 ):
-    await accessible_list(list_id, principal, session)
+    checklist, _ = await accessible_list(list_id, principal, session)
     result = await session.execute(select(Webhook).where(Webhook.list_id == list_id))
-    return [WebhookOut(id=h.id, list_id=h.list_id, url=h.url, secret=h.secret)
+    # Le secret signe les livraisons : seul le propriétaire de la liste (et un
+    # admin) peut le lire — un membre ou une clé API scopée ne doit pas pouvoir
+    # l'exfiltrer.
+    can_read_secret = principal.is_admin or (
+        principal.list_scope is None and checklist.owner_id == principal.user_id)
+    return [WebhookOut(id=h.id, list_id=h.list_id, url=h.url,
+                       secret=h.secret if can_read_secret else None)
             for h in result.scalars()]
 
 

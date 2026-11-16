@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 import uuid
 
-os.environ.setdefault("JWT_SECRET", "test-secret")
+os.environ.setdefault("TEST_ENV", "1")
+os.environ.setdefault("JWT_SECRET", "test-0123456789abcdef0123456789abcdef")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import pytest
@@ -315,6 +316,40 @@ async def test_admin_user_management(client):
 
 
 @pytest.mark.asyncio
+async def test_refresh_rejects_disabled_user(client):
+    """A disabled user must not keep minting access tokens through a still
+    valid refresh token (audit run-2, refresh path)."""
+    from app.config import settings
+    from app.main import ensure_admin_user
+
+    settings.ADMIN_EMAIL = "disadmin@tapitask.fr"
+    settings.ADMIN_PASSWORD = "DisAdminPass1!"
+    assert await ensure_admin_user() is True
+    r = await client.post("/auth/login",
+                          json={"email": "disadmin@tapitask.fr", "password": "DisAdminPass1!"})
+    admin_h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    r = await client.post("/admin/users",
+                          json={"email": "doomed@example.com", "password": "DoomedPass123!"},
+                          headers=admin_h)
+    assert r.status_code == 201
+    doomed_id = r.json()["id"]
+    r = await client.post("/auth/login",
+                          json={"email": "doomed@example.com", "password": "DoomedPass123!"})
+    assert r.status_code == 200
+    refresh_token = r.json()["refresh_token"]
+
+    r = await client.patch(f"/admin/users/{doomed_id}",
+                           json={"is_active": False}, headers=admin_h)
+    assert r.status_code == 200 and r.json()["is_active"] is False
+
+    r = await client.post("/auth/refresh", json={"refresh_token": refresh_token})
+    assert r.status_code == 401
+    settings.ADMIN_EMAIL = ""
+    settings.ADMIN_PASSWORD = ""
+
+
+@pytest.mark.asyncio
 async def test_subtasks_two_levels_max(client):
     tokens = await register(client, "sub@example.com")
     h = auth_headers(tokens)
@@ -394,6 +429,68 @@ async def test_webhooks_crud(client):
 
 
 @pytest.mark.asyncio
+async def test_hooks_secret_visibility(client):
+    """The webhook HMAC secret signs deliveries: only the list owner or an
+    admin may read it — a member or a scoped API key must not exfiltrate it
+    (audit run-2, tapitask.lists.list_hooks.viewer_secret_read)."""
+    from app.config import settings
+    from app.main import ensure_admin_user
+
+    owner = await register(client, "hookowner@example.com")
+    oh = auth_headers(owner)
+    list_id = (await client.post("/lists", json={"title": "Hooks"}, headers=oh)).json()["id"]
+    r = await client.post(f"/lists/{list_id}/hooks",
+                          json={"url": "https://example.com/hook"}, headers=oh)
+    assert r.status_code == 201
+    hook_id, secret = r.json()["id"], r.json()["secret"]
+
+    # owner sees the secret
+    r = await client.get(f"/lists/{list_id}/hooks", headers=oh)
+    assert r.status_code == 200
+    entry = [h for h in r.json() if h["id"] == hook_id][0]
+    assert entry["secret"] == secret and entry["url"]
+
+    # viewer member: secret hidden, URL still visible
+    guest = await register(client, "hookguest@example.com")
+    gh = auth_headers(guest)
+    r = await client.post(f"/lists/{list_id}/members",
+                          json={"email": "hookguest@example.com", "role": "viewer"},
+                          headers=oh)
+    assert r.status_code == 201
+    r = await client.get(f"/lists/{list_id}/hooks", headers=gh)
+    assert r.status_code == 200
+    entry = [h for h in r.json() if h["id"] == hook_id][0]
+    assert entry["secret"] is None and entry["url"] == "https://example.com/hook"
+
+    # admin sees the secret (as a viewer member of the list)
+    settings.ADMIN_EMAIL = "hookadmin@tapitask.fr"
+    settings.ADMIN_PASSWORD = "HookAdminPass1!"
+    assert await ensure_admin_user() is True
+    r = await client.post("/auth/login",
+                          json={"email": "hookadmin@tapitask.fr", "password": "HookAdminPass1!"})
+    admin_h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    await client.post(f"/lists/{list_id}/members",
+                      json={"email": "hookadmin@tapitask.fr", "role": "viewer"},
+                      headers=oh)
+    r = await client.get(f"/lists/{list_id}/hooks", headers=admin_h)
+    assert r.status_code == 200
+    entry = [h for h in r.json() if h["id"] == hook_id][0]
+    assert entry["secret"] == secret
+    settings.ADMIN_EMAIL = ""
+    settings.ADMIN_PASSWORD = ""
+
+    # scoped API key (even on its own list): secret hidden
+    r = await client.post("/api-keys",
+                          json={"name": "scoped", "read_only": True, "list_scope": list_id},
+                          headers=oh)
+    kh = {"Authorization": f"Bearer {r.json()['key']}"}
+    r = await client.get(f"/lists/{list_id}/hooks", headers=kh)
+    assert r.status_code == 200
+    entry = [h for h in r.json() if h["id"] == hook_id][0]
+    assert entry["secret"] is None
+
+
+@pytest.mark.asyncio
 async def test_api_key_list_scope(client):
     tokens = await register(client, "scope@example.com")
     h = auth_headers(tokens)
@@ -429,6 +526,49 @@ async def test_totp_flow(client):
     assert r.status_code == 204
     r = await client.post("/auth/login", json={"email": "totp@example.com", "password": "LongPassw0rd!x"})
     assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_sync_delta_respects_list_scope(client):
+    """A list-scoped API key must only ever see the delta of its own list —
+    not of every list its owner holds (audit run-2,
+    tapitask.sync._accessible_list_ids.list_scope_ignored)."""
+    import datetime as dt
+
+    tokens = await register(client, "synccop@example.com")
+    h = auth_headers(tokens)
+    a1 = (await client.post("/lists", json={"title": "A1"}, headers=h)).json()["id"]
+    a2 = (await client.post("/lists", json={"title": "A2"}, headers=h)).json()["id"]
+    await client.post(f"/lists/{a1}/items", json={"label": "a1-item"}, headers=h)
+    await client.post(f"/lists/{a2}/items", json={"label": "a2-item"}, headers=h)
+    r = await client.post("/api-keys",
+                          json={"name": "scoped-sync", "list_scope": a1},
+                          headers=h)
+    kh = {"Authorization": f"Bearer {r.json()['key']}"}
+
+    # first sync (since=null): only A1 materialises
+    r = await client.post("/sync", json={}, headers=kh)
+    assert r.status_code == 200
+    list_ids = {str(c["list_id"]) for c in r.json()["changes"]}
+    assert list_ids == {a1}, list_ids
+
+    # delta (since=past): only A1 events
+    r = await client.post(
+        "/sync", json={"since": "2000-01-01T00:00:00+00:00"}, headers=kh)
+    assert all(str(c["list_id"]) == a1 for c in r.json()["changes"]), r.json()
+
+    # a forged item.upsert targeting A2 is rejected and not created
+    bad_id = str(uuid.uuid4())
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    r = await client.post("/sync", json={"events": [
+        {"kind": "item.upsert", "id": bad_id, "list_id": a2,
+         "label": "pirate", "done": False, "position": 0,
+         "updated_at": now},
+    ]}, headers=kh)
+    assert r.status_code == 200
+    assert bad_id in r.json()["rejected"]
+    r = await client.get(f"/lists/{a2}/items", headers=h)
+    assert [i["label"] for i in r.json()] == ["a2-item"]
 
 
 @pytest.mark.asyncio

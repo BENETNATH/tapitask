@@ -48,8 +48,9 @@ if not settings.JWT_SECRET:
     raise RuntimeError("JWT_SECRET environment variable must be set")
 
 # RFC 7518 §3.2: HMAC-SHA256 keys should be at least 32 bytes. Production
-# secrets shorter than that are rejected — tests use the TEST_ENV marker.
-if len(settings.JWT_SECRET) < 32 and not settings.JWT_SECRET.startswith("test-"):
+# secrets shorter than that are rejected; the exception is the orthogonal
+# TEST_ENV marker (exact value "1") — never the secret's content.
+if len(settings.JWT_SECRET) < 32 and os.environ.get("TEST_ENV") != "1":
     raise RuntimeError(
         "JWT_SECRET trop court (< 32 octets) — générez un secret solide : "
         'python3 -c "import secrets; print(secrets.token_urlsafe(48))"'

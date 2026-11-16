@@ -161,7 +161,7 @@ async def refresh(data: RefreshIn, session: AsyncSession = Depends(get_session))
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
     user_result = await session.execute(select(User).where(User.id == UUID(payload["sub"])))
     user = user_result.scalar_one_or_none()
-    if user is None:
+    if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
     stored.revoked = True
     await session.commit()

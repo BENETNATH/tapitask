@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 
-os.environ.setdefault("JWT_SECRET", "test-secret")
+os.environ.setdefault("TEST_ENV", "1")
+os.environ.setdefault("JWT_SECRET", "test-0123456789abcdef0123456789abcdef")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 # The webhook SSRF guard blocks loopback/private/metadata hosts by default.
 # Tests that deliver to a real local listener (127.0.0.1) opt in explicitly.

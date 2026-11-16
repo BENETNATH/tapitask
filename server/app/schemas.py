@@ -221,7 +221,7 @@ class WebhookOut(BaseModel):
     id: UUID
     list_id: UUID
     url: str
-    secret: str
+    secret: str | None = None
 
 
 class AdminUserOut(BaseModel):

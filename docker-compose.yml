@@ -38,8 +38,9 @@ services:
         condition: service_healthy
     networks: [internal]
     ports:
-      # Port hôte configurable : ${API_PORT} -> 8000 (conteneur)
-      - "${API_PORT:-8000}:8000"
+      # API en clair : écoute loopback par défaut (reverse proxy local).
+      # API_BIND=0.0.0.0 uniquement derrière un pare-feu.
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
 
   # Webapp (optionnel) : --profile web
   web:
