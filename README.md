@@ -1,12 +1,20 @@
 # Tapitask
 
 **Listes de tâches à cocher hyper-réactives, offline-first, auto-hébergées.**
-Client Windows (icône systray + volet rapide), Android (widgets d'écran d'accueil), webapp — avec un serveur de synchronisation et de partage auto-hébergé.
+Client Windows (icône systray + volet rapide) et Android (widgets d'écran d'accueil) —
+avec un serveur de synchronisation et de partage auto-hébergé.
+
+## Interface
+
+| Accueil — vos listes | Écran d'une liste |
+|---|---|
+| ![](docs/screenshots/home-light.png) | ![](docs/screenshots/list-light.png) |
+| ![](docs/screenshots/home-dark.png) | ![](docs/screenshots/list-dark.png) |
 
 ```
 ┌────────────┐   ┌────────────┐   ┌────────────┐
-│  Windows   │   │  Android   │   │   Webapp   │
-│ tray+volet │   │  widgets   │   │  (Flutter) │
+│  Windows   │   │  Android   │   │    Web     │
+│ tray+volet │   │  widgets   │   │  (à venir) │
 └─────┬──────┘   └─────┬──────┘   └─────┬──────┘
       │      WebSocket + REST delta      │
       └──────────────┬───────────────────┘
@@ -22,7 +30,7 @@ Client Windows (icône systray + volet rapide), Android (widgets d'écran d'accu
 
 - **Instantané** : chaque action s'applique localement (SQLite) puis se synchronise en arrière-plan. Pas de spinner, jamais.
 - **Minimaliste ou complet** : chaque utilisateur active les fonctions qu'il veut (échéances, dossiers, alertes, templates) — synchronisées entre tous ses appareils.
-- **Présent partout** : volet rapide dans la barre des tâches Windows, widgets Android (liste cochable + ajout rapide 1×1), webapp.
+- **Présent partout** : volet rapide dans la barre des tâches Windows, widgets Android (liste cochable 2×2 + ajout rapide 1×1).
 - **Partage** : invitations par code ou email, rôles viewer / editor / owner, dossiers partageables.
 - **Auto-hébergé** : votre serveur, vos données, Docker Compose, HTTPS via votre reverse proxy (ou Caddy intégré).
 - **Sécurisé** : Argon2id, JWT rotatifs, 2FA TOTP, clés API scopées, rate limiting (voir [SECURITY.md](SECURITY.md)).
@@ -34,12 +42,13 @@ Client Windows (icône systray + volet rapide), Android (widgets d'écran d'accu
 |---|---|
 | Listes | création instantanée, couleurs, épinglage, duplication, listes locales (sans synchro) |
 | Items | cochage, sous-tâches, notes, échéances, récurrence (quotidienne/hebdo/mensuelle), assignés |
+| Vues transverses | « Aujourd'hui » : items dus ou en retard, toutes listes confondues · « À faire » : tous les items non cochés, groupés par liste |
 | Ajout rapide | multi-lignes (1 ligne = 1 item), parseur de dates (« demain », « vendredi »…), mots-clés d'échéance personnels (« j+7 » → +7 jours), `#liste` |
-| Réglages compacts | choix des fonctions visibles dans le volet/widget (échéances, poubelle) — tout synchronisé |
+| Réglages | choix des fonctions visibles (échéances, poubelle…), thème clair/sombre — tout synchronisé entre appareils |
 | Dossiers | glisser-déposer des listes, partage d'un dossier (toutes les listes incluses) |
 | Synchro | delta par curseur `since`, WebSocket push, synchro à chaque action + au retour au premier plan, poll configurable (désactivable) |
 | Volet Windows | ancré près du tray, ajout rapide en bas, listes épinglées en chips, épingle « toujours visible », redimensionnable/déplaçable |
-| Widgets Android | liste cochable avec ◀▶, couleur par liste, bouton ＋, zone « Ouvrir », widget 1×1 d'ajout rapide |
+| Widgets Android | liste cochable 2×2 (redimensionnable), ◀▶ pour changer de liste, couleur par liste, bouton ＋ qui ouvre l'app sur la liste active (champ d'ajout focalisé), bouton « Ouvrir » en icône, widget 1×1 d'ajout rapide ; le cochage fait dans le widget est appliqué dans l'app au retour au premier plan |
 | Partage | code d'invitation, email (SMTP), rôles, changement de rôle |
 | Notifications | par appli et/ou par email, au choix de chaque utilisateur |
 | Admin | création/désactivation de comptes, promotion admin, audit |
@@ -63,17 +72,6 @@ Docs API : `http://VOTRE_DOMAINE/docs` (Swagger) — spec : `/openapi.json`.
 ### Configuration (`.env`)
 
 Copiez `.env.example` (documenté) : mots de passe DB, secret JWT, compte admin créé au démarrage, ports (`API_PORT`, `WEB_PORT`), `CORS_ORIGINS`, SMTP (emails d'invitation et de partage), `REDIS_URL` optionnel (rate limiting multi-workers).
-
-### Frontend web dans Docker
-
-```bash
-# machine de dev : builder la webapp
-cd app && flutter build web --release
-# transférer app/build/web sur le serveur, puis :
-docker compose --profile web up -d      # nginx sert la webapp sur WEB_PORT (8080)
-```
-
-Détails et intégration reverse proxy : [DEPLOIEMENT-UBUNTU.md](DEPLOIEMENT-UBUNTU.md).
 
 ## Démarrage rapide — clients
 
@@ -101,14 +99,15 @@ flutter build apk --release
 # => app/build/app/outputs/flutter-apk/app-release.apk
 ```
 
-Ajoutez ensuite le widget « Tapitask » sur l'écran d'accueil. Le keystore de signature est
+Ajoutez ensuite les widgets « Tapitask » (liste 2×2) et « Ajout rapide » (1×1)
+sur l'écran d'accueil. Le keystore de signature est
 `app/android/app/tapitask-release.jks` (avec `key.properties`) : gardez-le pour que les mises à jour s'installent par-dessus.
 
 ### Webapp
 
-```bash
-cd app && flutter build web --release
-```
+À venir : le build web échoue à ce stade — la persistance locale repose sur
+drift/`dart:ffi`, non disponible sur web (il faudra `WasmDatabase`). Les clients
+fonctionnels sont Windows et Android.
 
 ## Structure du monorepo
 
@@ -118,14 +117,17 @@ cd app && flutter build web --release
 ├── Caddyfile               # TLS intégré (optionnel)
 ├── DEPLOIEMENT-UBUNTU.md   # guide de déploiement pas à pas
 ├── SECURITY.md             # modèle de menace + bonnes pratiques
-├── server/                 # backend FastAPI (async) + 38 tests
+├── docs/screenshots/       # captures d'écran de l'interface (README)
+├── server/                 # backend FastAPI (async) + 63 tests
 │   ├── app/                # auth, listes, partage, sync, admin, clés API, MCP HTTP
 │   ├── tests/              # pytest (SQLite), couverture auth/sync/partage/smtp
 │   └── Dockerfile
-├── app/                    # client Flutter (Windows / Android / Web)
+├── app/                    # client Flutter (Windows / Android)
 │   ├── lib/                # UI, base locale Drift/SQLite, synchro, tray, widgets
-│   ├── android/            # natif : ListWidgetProvider, QuickAddWidget, layouts
-│   └── windows/            # runner (channel natif topmost pour le volet)
+│   ├── android/            # natif : ListWidgetProvider, QuickAddWidgetProvider, layouts
+│   └── windows/            # runner + flyout Win32 natif (C++)
+├── specs/                  # specs de développement (contrats d'implémentation)
+├── .github/workflows/      # CI harness (gates) + release-artifacts (binaires)
 └── scripts/                # setup assisté (Windows .ps1, Linux .sh), init_flutter
 ```
 
@@ -171,23 +173,30 @@ le keystore Android aussi.
 ## Tests
 
 ```bash
-# Serveur — 38 tests (auth, sync, partage, admin, webhooks HMAC, MCP, rate limiting)
+# Serveur — 63 tests (auth, sync, partage, admin, webhooks HMAC, MCP, rate limiting)
 cd server
 .venv/bin/python -m pytest -q
 ```
 
-Client (Flutter) — 11 tests :
+Client (Flutter) — 31 tests :
 
 ```bash
-# Prérequis système (Linux) : les plugins tray_manager / window_manager
-# déclenchent un build d'assets natifs (GTK 3, X11, Xi). Les paquets de
-# développement sont indispensables pour que `flutter test` compile l'hôte :
-#   sudo apt install libgtk-3-dev libxi-dev
+# Prérequis système (Linux) : les plugins tray desktop déclenchent un build
+# d'assets natifs (GTK 3, X11, Xi) + Clang :
+#   sudo apt install libgtk-3-dev libx11-dev libxi-dev clang
 cd app
 flutter test
 ```
 
 ## CI / Releases
+
+### Gares de commit — `harness.yml`
+
+À chaque push sur `main` : vérification des commits (convention, pas d'attribution IA),
+tests des gates du repo et scan des avis de sécurité web. Le commit lui-même est
+gatemé localement (review gate + pre-commit).
+
+### Binaires — `release-artifacts.yml`
 
 Le workflow [`.github/workflows/release-artifacts.yml`](.github/workflows/release-artifacts.yml)
 construit, **à la publication d'un GitHub Release**, les deux binaires et les
