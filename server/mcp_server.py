@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 
 URL = os.environ.get("CHECKLISTS_URL", "http://localhost:8000")
@@ -89,6 +90,61 @@ def _handle(name: str, args: dict) -> str:
     raise ValueError(f"Unknown tool: {name}")
 
 
+def _error(req_id, code: int, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+
+
+def handle_line(line: str) -> dict | None:
+    """Process one JSON-RPC line; return the reply, or None when none is due.
+
+    Every error reply carries the id of the request that caused it, so the
+    client can settle that request immediately instead of waiting for a
+    timeout. Only an unparseable line gets id null (JSON-RPC 2.0, §5).
+    Notifications (no "id" member) never get a reply, not even on failure.
+    """
+    try:
+        request = json.loads(line)
+    except json.JSONDecodeError as e:
+        return _error(None, -32700, f"Parse error: {e}")
+    if not isinstance(request, dict):
+        return _error(None, -32600, "Invalid Request")
+    is_notification = "id" not in request
+    req_id = request.get("id")
+    method = request.get("method")
+    try:
+        if method == "initialize":
+            result = {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "checklists", "version": "0.1.0"},
+            }
+        elif method == "tools/list":
+            result = {"tools": TOOLS}
+        elif method == "tools/call":
+            params = request.get("params")
+            if not isinstance(params, dict) or not isinstance(params.get("name"), str):
+                return None if is_notification else _error(
+                    req_id, -32602, "Invalid params: 'name' is required")
+            text = _handle(params["name"], params.get("arguments") or {})
+            result = {"content": [{"type": "text", "text": text}]}
+        elif is_notification:
+            return None  # notifications/initialized, cancelled, ...
+        else:
+            return _error(req_id, -32601, f"Unknown method {method}")
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")[:500]
+        return None if is_notification else _error(
+            req_id, -32603, f"HTTP {e.code}: {detail or e.reason}")
+    except KeyError as e:
+        return None if is_notification else _error(
+            req_id, -32602, f"Invalid params: missing {e}")
+    except Exception as e:
+        return None if is_notification else _error(req_id, -32603, str(e))
+    if is_notification:
+        return None
+    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+
 def main() -> None:
     if not KEY:
         print("CHECKLISTS_API_KEY is not set", file=sys.stderr)
@@ -97,32 +153,9 @@ def main() -> None:
         line = line.strip()
         if not line:
             continue
-        try:
-            request = json.loads(line)
-            message = {"jsonrpc": "2.0", "id": request.get("id")}
-            method = request.get("method")
-            if method == "initialize":
-                message["result"] = {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "checklists", "version": "0.1.0"},
-                }
-            elif method == "tools/list":
-                message["result"] = {"tools": TOOLS}
-            elif method == "tools/call":
-                result = _handle(request["params"]["name"], request["params"].get("arguments", {}))
-                message["result"] = {"content": [{"type": "text", "text": result}]}
-            elif method == "notifications/initialized":
-                continue
-            else:
-                message["error"] = {"code": -32601, "message": f"Unknown method {method}"}
-            sys.stdout.write(json.dumps(message) + "\n")
-            sys.stdout.flush()
-        except Exception as e:
-            sys.stdout.write(
-                json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": str(e)}})
-                + "\n"
-            )
+        reply = handle_line(line)
+        if reply is not None:
+            sys.stdout.write(json.dumps(reply) + "\n")
             sys.stdout.flush()
 
 
