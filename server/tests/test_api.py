@@ -719,7 +719,7 @@ async def test_mcp_http_bridge(client):
         user_id = result.scalar_one().id
 
     q = asyncio.Queue()
-    mcp_http._sessions[str(user_id)] = q
+    mcp_http._sessions["bridge"] = mcp_http._Session(user_id=str(user_id), queue=q)
     try:
         r = await client.post("/mcp/messages",
                               json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
@@ -752,7 +752,176 @@ async def test_mcp_http_bridge(client):
         labels = {i["label"] for i in items}
         assert {"thé", "sucre"} <= labels
     finally:
-        mcp_http._sessions.pop(str(user_id), None)
+        mcp_http._sessions.pop("bridge", None)
+
+
+async def _mcp_user(client, email):
+    from app.db import SessionLocal
+    from app.models import User
+    from sqlalchemy import select
+
+    tokens = await register(client, email)
+    async with SessionLocal() as session:
+        uid = str((await session.execute(
+            select(User).where(User.email == email))).scalar_one().id)
+    return auth_headers(tokens), uid
+
+
+@pytest.mark.asyncio
+async def test_mcp_sse_announces_endpoint_per_connection(client):
+    """GET /mcp/sse follows the MCP 2024-11-05 transport: the first event is
+    `endpoint` with a per-connection sessionId; closing the stream removes
+    only that session."""
+    from app import mcp_http
+    from app.deps import Principal
+    from starlette.requests import Request
+
+    _, uid = await _mcp_user(client, "mcpsse@example.com")
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def open_stream():
+        request = Request({"type": "http", "method": "GET", "path": "/mcp/sse",
+                           "root_path": "", "headers": [], "query_string": b""},
+                          receive)
+        response = await mcp_http.sse(request, Principal(user_id=uid))
+        stream = response.body_iterator
+        endpoint = await stream.__anext__()
+        legacy = await stream.__anext__()
+        return stream, endpoint, legacy
+
+    s1, endpoint1, legacy1 = await open_stream()
+    s2, endpoint2, _ = await open_stream()
+    assert endpoint1.startswith("event: endpoint\ndata: /mcp/messages?sessionId=")
+    assert legacy1.startswith("event: session\n")
+    sid1 = endpoint1.split("sessionId=")[1].strip()
+    sid2 = endpoint2.split("sessionId=")[1].strip()
+    assert sid1 != sid2 and sid1 != uid
+    assert {sid1, sid2} <= set(mcp_http._sessions)
+
+    await s1.aclose()  # first agent disconnects
+    assert sid1 not in mcp_http._sessions
+    assert sid2 in mcp_http._sessions  # the other agent's stream survives
+    await s2.aclose()
+    assert sid2 not in mcp_http._sessions
+
+
+@pytest.mark.asyncio
+async def test_mcp_replies_routed_to_the_requesting_session(client):
+    """Two agents on one account: each reply goes to the stream of the
+    session that sent the request, with that request's id."""
+    import asyncio
+
+    from app import mcp_http
+
+    h, uid = await _mcp_user(client, "mcptwo@example.com")
+    qa, qb = asyncio.Queue(), asyncio.Queue()
+    mcp_http._sessions["sess-a"] = mcp_http._Session(user_id=uid, queue=qa)
+    mcp_http._sessions["sess-b"] = mcp_http._Session(user_id=uid, queue=qb)
+    try:
+        await client.post("/mcp/messages?sessionId=sess-a", headers=h,
+                          json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        await client.post("/mcp/messages?sessionId=sess-b", headers=h,
+                          json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        assert (await asyncio.wait_for(qa.get(), 2.0))["id"] == 1
+        assert (await asyncio.wait_for(qb.get(), 2.0))["id"] == 2
+        assert qa.empty() and qb.empty()
+
+        mcp_http._sessions.pop("sess-a")  # agent A disconnected
+        r = await client.post("/mcp/messages?sessionId=sess-a", headers=h,
+                              json={"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
+        assert r.status_code == 404
+        r = await client.post("/mcp/messages?sessionId=sess-b", headers=h,
+                              json={"jsonrpc": "2.0", "id": 4, "method": "tools/list"})
+        assert r.status_code == 200
+        assert (await asyncio.wait_for(qb.get(), 2.0))["id"] == 4
+    finally:
+        mcp_http._sessions.pop("sess-a", None)
+        mcp_http._sessions.pop("sess-b", None)
+
+
+@pytest.mark.asyncio
+async def test_mcp_undeliverable_request_fails_fast_without_side_effects(client):
+    """No open stream, someone else's session, or a saturated stream: the POST
+    fails immediately and the tool does NOT run."""
+    import asyncio
+
+    from app import mcp_http
+
+    h, uid = await _mcp_user(client, "mcpfast@example.com")
+    _, other_uid = await _mcp_user(client, "mcpfast-other@example.com")
+    list_id = (await client.post("/lists", json={"title": "F"}, headers=h)).json()["id"]
+
+    def add(text):
+        return {"jsonrpc": "2.0", "id": text, "method": "tools/call",
+                "params": {"name": "add_items",
+                           "arguments": {"list_id": list_id, "text": text}}}
+
+    async def labels():
+        return {i["label"] for i in
+                (await client.get(f"/lists/{list_id}/items", headers=h)).json()}
+
+    r = await client.post("/mcp/messages", json=add("no-stream"), headers=h)
+    assert r.status_code == 404
+
+    mcp_http._sessions["foreign"] = mcp_http._Session(
+        user_id=other_uid, queue=asyncio.Queue())
+    full = asyncio.Queue(maxsize=1)
+    full.put_nowait({"filler": True})
+    mcp_http._sessions["full"] = mcp_http._Session(user_id=uid, queue=full)
+    try:
+        r = await client.post("/mcp/messages?sessionId=foreign",
+                              json=add("foreign"), headers=h)
+        assert r.status_code == 404
+        assert mcp_http._sessions["foreign"].queue.empty()
+        r = await client.post("/mcp/messages?sessionId=full",
+                              json=add("saturated"), headers=h)
+        assert r.status_code == 503
+    finally:
+        mcp_http._sessions.pop("foreign", None)
+        mcp_http._sessions.pop("full", None)
+    assert not ({"no-stream", "foreign", "saturated"} & await labels())
+
+
+@pytest.mark.asyncio
+async def test_mcp_http_errors_keep_request_id(client):
+    """Error replies carry the request id; notifications get no reply."""
+    import asyncio
+
+    from app import mcp_http
+
+    h, uid = await _mcp_user(client, "mcpids@example.com")
+    q = asyncio.Queue()
+    mcp_http._sessions["ids"] = mcp_http._Session(user_id=uid, queue=q)
+    url = "/mcp/messages?sessionId=ids"
+    try:
+        await client.post(url, headers=h, json={
+            "jsonrpc": "2.0", "id": "req-9", "method": "tools/call",
+            "params": {"name": "check_item",
+                       "arguments": {"list_id": "x",
+                                     "item_id": "00000000-0000-0000-0000-000000000000"}}})
+        reply = await asyncio.wait_for(q.get(), 2.0)
+        assert reply["id"] == "req-9" and reply["error"]["code"] == -32603
+
+        await client.post(url, headers=h,
+                          json={"jsonrpc": "2.0", "id": 0, "method": "tools/call"})
+        reply = await asyncio.wait_for(q.get(), 2.0)
+        assert reply["id"] == 0 and reply["error"]["code"] == -32602
+
+        await client.post(url, headers=h,
+                          json={"jsonrpc": "2.0", "id": 5, "method": "bogus"})
+        reply = await asyncio.wait_for(q.get(), 2.0)
+        assert reply["id"] == 5 and reply["error"]["code"] == -32601
+
+        for note in ({"jsonrpc": "2.0", "method": "notifications/initialized"},
+                     {"jsonrpc": "2.0", "method": "notifications/cancelled",
+                      "params": {"requestId": 1}}):
+            r = await client.post(url, headers=h, json=note)
+            assert r.status_code == 200
+        assert q.empty()
+    finally:
+        mcp_http._sessions.pop("ids", None)
 
 
 @pytest.mark.asyncio
@@ -792,7 +961,8 @@ async def test_mcp_cross_tenant_isolation(client):
     for email, hdr in (("mcpatt@example.com", ha), ("mcpvic@example.com", hv),
                        ("mcpmem@example.com", hm)):
         q = asyncio.Queue()
-        mcp_http._sessions[await user_id(email)] = q
+        mcp_http._sessions[email] = mcp_http._Session(
+            user_id=await user_id(email), queue=q)
         queues[email] = q
     try:
         async def call(hdr, q, name, args, mid):
