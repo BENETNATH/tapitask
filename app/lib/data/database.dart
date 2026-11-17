@@ -1,9 +1,6 @@
-import "dart:io";
-
 import "package:drift/drift.dart";
-import "package:drift/native.dart";
-import "package:path/path.dart" as p;
-import "package:path_provider/path_provider.dart";
+
+import "connection/connection.dart";
 
 part "database.g.dart";
 
@@ -45,7 +42,7 @@ class LocalItems extends Table {
 
 @DriftDatabase(tables: [LocalLists, LocalItems])
 class AppDb extends _$AppDb {
-  AppDb() : super(_openConnection());
+  AppDb() : super(openConnection());
 
   AppDb.forTesting(super.e);
 
@@ -72,24 +69,6 @@ class AppDb extends _$AppDb {
           }
         },
       );
-
-  static LazyDatabase _openConnection() {
-    return LazyDatabase(() async {
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File(p.join(dir.path, "tapitask.sqlite"));
-      // WAL + busy_timeout: the main window and the tray flyout hold two
-      // separate connections on the SAME file — without these pragmas a
-      // concurrent write raises SQLITE_BUSY (silently swallowed upstream).
-      return NativeDatabase.createInBackground(
-        file,
-        setup: (rawDb) {
-          rawDb.execute("PRAGMA journal_mode=WAL;");
-          rawDb.execute("PRAGMA busy_timeout=5000;");
-          rawDb.execute("PRAGMA foreign_keys=ON;");
-        },
-      );
-    });
-  }
 
   // ---- Lists ----
 

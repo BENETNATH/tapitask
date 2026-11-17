@@ -1,5 +1,4 @@
-import "dart:io";
-
+import "package:flutter/foundation.dart";
 import "package:flutter_local_notifications/flutter_local_notifications.dart";
 
 import "../data/database.dart";
@@ -11,7 +10,10 @@ class AlertService {
   static bool _initialized = false;
 
   static Future<void> ensureInitialized() async {
-    if (_initialized || !Platform.isAndroid) return;
+    if (_initialized || kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
     try {
       await _plugin.initialize(
         settings: const InitializationSettings(

@@ -1,5 +1,3 @@
-import "dart:io";
-
 import "dart:async";
 import "dart:convert";
 import "dart:math";
@@ -14,10 +12,10 @@ import "../data/api_client.dart";
 import "../l10n/s.dart";
 import "../data/database.dart";
 import "../data/sync_service.dart";
-import "package:home_widget/home_widget.dart";
 
 import "../platform/alert_service.dart";
-import "../platform/widget_service.dart";
+import "../platform/widget_service_web.dart"
+    if (dart.library.io) "../platform/widget_service.dart";
 import "widget_intent.dart";
 
 class AppState extends ChangeNotifier {
@@ -105,24 +103,29 @@ class AppState extends ChangeNotifier {
       final due = await db.dueItems();
       await AlertService.notifyDueToday(due);
     }
-    if (Platform.isAndroid) {
-      // Android : action privée + MethodChannel natif (pas de plugin
-      // home_widget pour le lancement — vérif d'expéditeur impossible,
-      // validation stricte côté Dart).
-      // La spec prévoyait receiveBroadcastStream(), retirée de MethodChannel
-      // dans les Flutter récents : équivalent = handler de méthode pour le
-      // push natif « widgetLaunch ».
-      _widgetChannel.setMethodCallHandler(_onWidgetLaunch);
-      final cold = await _widgetChannel.invokeMethod<String>("getLaunchUri");
-      await _applyWidgetUri(cold == null ? null : Uri.parse(cold));
-    } else {
-      try {
-        final uri = await HomeWidget.initiallyLaunchedFromHomeWidget();
-        _applyWidgetUri(uri);
-      } catch (_) {}
-      // Relance depuis le widget alors que l'app est DÉJÀ ouverte :
-      // launchMode=singleTask route vers onNewIntent → home_widget émet ici.
-      _widgetClickSub = HomeWidget.widgetClicked.listen(_applyWidgetUri);
+    // Sur web : pas de widget, rien à rejouer (defaultTargetPlatform est
+    // android sur web, d'où le garde kIsWeb au-dessus du bloc widget).
+    if (!kIsWeb) {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        // Android : action privée + MethodChannel natif (pas de plugin
+        // home_widget pour le lancement — vérif d'expéditeur impossible,
+        // validation stricte côté Dart).
+        // La spec prévoyait receiveBroadcastStream(), retirée de MethodChannel
+        // dans les Flutter récents : équivalent = handler de méthode pour le
+        // push natif « widgetLaunch ».
+        _widgetChannel.setMethodCallHandler(_onWidgetLaunch);
+        final cold =
+            await _widgetChannel.invokeMethod<String>("getLaunchUri");
+        await _applyWidgetUri(cold == null ? null : Uri.parse(cold));
+      } else {
+        try {
+          final uri = await WidgetService.initiallyLaunched();
+          _applyWidgetUri(uri);
+        } catch (_) {}
+        // Relance depuis le widget alors que l'app est DÉJÀ ouverte :
+        // launchMode=singleTask route vers onNewIntent → home_widget émet ici.
+        _widgetClickSub = WidgetService.clicks.listen(_applyWidgetUri);
+      }
     }
     ready = true;
     notifyListeners();
@@ -636,7 +639,9 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _widgetClickSub?.cancel();
-    if (Platform.isAndroid) _widgetChannel.setMethodCallHandler(null);
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      _widgetChannel.setMethodCallHandler(null);
+    }
     sync.dispose();
     db.close();
     super.dispose();

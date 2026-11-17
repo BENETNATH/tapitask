@@ -83,4 +83,11 @@ class WidgetService {
     // (the Kotlin provider reads/splits it the same way).
     await HomeWidget.saveWidgetData("widget_done_ids", "");
   }
+
+  /// Launch deep-link from the home-screen widget, if any (null otherwise).
+  static Future<Uri?> initiallyLaunched() async =>
+      HomeWidget.initiallyLaunchedFromHomeWidget();
+
+  /// Re-launches from the widget while the app is already open.
+  static Stream<Uri?> get clicks => HomeWidget.widgetClicked;
 }

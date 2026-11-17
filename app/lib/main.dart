@@ -3,7 +3,8 @@ import "package:cupertino_ui/cupertino_ui.dart";
 import "package:flutter_localizations/flutter_localizations.dart"
     hide GlobalMaterialLocalizations, GlobalCupertinoLocalizations;
 
-import "platform/tray_controller.dart";
+import "platform/tray_controller_web.dart"
+    if (dart.library.io) "platform/tray_controller.dart";
 import "state/app_state.dart";
 import "ui/home_screen.dart";
 import "ui/list_screen.dart";

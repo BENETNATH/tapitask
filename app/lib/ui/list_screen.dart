@@ -1,5 +1,4 @@
-import "dart:io" show Platform;
-
+import "package:flutter/foundation.dart";
 import "package:material_ui/material_ui.dart";
 import "package:flutter/services.dart";
 
@@ -340,7 +339,8 @@ class _ListScreenState extends State<ListScreen> {
                   TextField(
                     controller: _quickAdd,
                     focusNode: _addFocus,
-                    autofocus: Platform.isWindows,
+                    autofocus:
+                        defaultTargetPlatform == TargetPlatform.windows,
                     maxLines: 3,
                     minLines: 1,
                     textInputAction: TextInputAction.newline,

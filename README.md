@@ -109,6 +109,8 @@ cd app && flutter build web --release
 # => app/build/web
 ```
 
+Persistence locale web (SQLite WASM) : servir `sqlite3.wasm` avec `Content-Type: application/wasm` (nginx : `types { application/wasm wasm; }`), et ajouter l'origine web à `CORS_ORIGINS` du serveur. Headers COOP/COEP optionnels (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`) pour la persistance performante (FileSystem Access API) — sans eux drift bascule sur IndexedDB (fonctionnel, plus lent).
+
 La webapp se sert en statique par nginx (profil Docker `web`, port `WEB_PORT` 8080) :
 
 ```bash
