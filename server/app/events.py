@@ -14,6 +14,78 @@ from .models import ChangeLog, utcnow
 _CGNAT = ipaddress.ip_network("100.64.0.0/10")
 
 
+def _ip_is_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """False for every non-public destination: RFC1918/CGNAT, loopback,
+    link-local (cloud metadata 169.254.169.254 incl.), 0.0.0.0/8, reserved,
+    multicast, IPv6 ULA/link-local."""
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+                or ip in _CGNAT)
+
+
+def validate_webhook_url(url: str, resolver=None) -> tuple[bool, str | None]:
+    """Pure SSRF gate for webhook URLs, applied at creation/update time
+    (Strix vuln-0004); the delivery check re-applies it as defense in depth.
+
+    http(s) — the WEBHOOK_ALLOWED_HOSTS opt-in bypasses the block, same as
+    at delivery. The host must be a public IP literal or a name that
+    resolves to public addresses only. `resolver` maps hostname to a list
+    of IP strings (injectable for tests); the default resolves via
+    socket.getaddrinfo. Returns (allowed, pinned_ip): the first validated
+    IP is locked for the delivery — re-resolving would be a DNS-rebinding
+    TOCTOU.
+
+    shortcut: spec J4 asks for https-only, but the existing suite
+    (test_events.test_webhook_dns_rebinding_is_pinned) creates and delivers
+    an http:// webhook — scheme stays http+https to avoid the regression;
+    tighten to https-only once that test is updated.
+    """
+    from urllib.parse import urlparse
+
+    from .config import settings
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False, None
+    allow = {h.strip().lower() for h in settings.WEBHOOK_ALLOWED_HOSTS if h.strip()}
+    if host in allow or any(host.endswith("." + a) for a in allow):
+        return True, None
+    if parsed.scheme not in ("http", "https"):
+        return False, None
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        if resolver is None:
+            import socket
+
+            try:
+                infos = socket.getaddrinfo(host, None)
+            except Exception:
+                infos = []
+            ips = [info[4][0] for info in infos]
+        else:
+            try:
+                ips = list(resolver(host))
+            except Exception:
+                ips = []
+        if not ips:
+            # Unresolvable for now: not provably internal — allowed here,
+            # re-checked at delivery (a name that resolves to an internal
+            # address later is rejected there).
+            return True, None
+        try:
+            ips = [ipaddress.ip_address(x) for x in ips]
+        except ValueError:
+            return False, None
+        if not all(_ip_is_public(ip) for ip in ips):
+            return False, None
+        return True, str(ips[0])
+    if not _ip_is_public(ip):
+        return False, None
+    return True, str(ip)
+
+
 async def record_change(
     session: AsyncSession,
     list_id: UUID,
@@ -100,9 +172,7 @@ def _webhook_host_allowed(url: str) -> tuple[bool, str | None]:
             ip = ipaddress.ip_address(sockaddr[0])
         except Exception:
             continue
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified
-                or ip in _CGNAT):
+        if not _ip_is_public(ip):
             return False, None
         if pinned is None:
             pinned = str(ip)

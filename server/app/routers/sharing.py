@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import get_session
+from ..db import engine, get_session
 from ..deps import Principal, accessible_list, get_principal, require_write
 from ..events import hub
 from ..models import Checklist, Invite, ListMember, Role, User, utcnow
@@ -18,6 +18,21 @@ from ..schemas import InviteAcceptIn, InviteIn, InviteOut, MemberIn, MemberRoleI
 router = APIRouter(prefix="/lists", tags=["sharing"])
 
 
+async def _upsert_member(session: AsyncSession, list_id: UUID, user_id: UUID, role: Role) -> None:
+    """INSERT ... ON CONFLICT (list_id, user_id): a repeat join updates the
+    role in place instead of duplicating the row (Strix hardening item).
+    Old databases without the unique constraint get the index from the
+    schema migration in main._ensure_indexes."""
+    if engine.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    stmt = insert(ListMember).values(list_id=list_id, user_id=user_id, role=role)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["list_id", "user_id"], set_={"role": stmt.excluded.role})
+    await session.execute(stmt)
+
+
 @router.post("/{list_id}/invites", response_model=InviteOut, status_code=status.HTTP_201_CREATED)
 async def create_invite(
     list_id: UUID,
@@ -25,6 +40,10 @@ async def create_invite(
     principal: Principal = Depends(require_write),
     session: AsyncSession = Depends(get_session),
 ):
+    """Share-link model (product decision, spec J6): the invite binds to the
+    one-time high-entropy code only — the redeeming account is NOT linked to
+    the optional `email` field, which is a notification hint, not an identity
+    check."""
     checklist, _ = await accessible_list(list_id, principal, session)
     if checklist.owner_id != principal.user_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner can invite")
@@ -57,8 +76,14 @@ async def accept_invite(
     invite = result.scalar_one_or_none()
     if invite is None or invite.accepted_by is not None or is_expired(invite.expires_at):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Invite not found or already used")
+    existing = (await session.execute(
+        select(ListMember).where(ListMember.list_id == invite.list_id,
+                                 ListMember.user_id == principal.user_id)
+    )).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Already a member of this list")
     invite.accepted_by = principal.user_id
-    session.add(ListMember(list_id=invite.list_id, user_id=principal.user_id, role=invite.role))
+    await _upsert_member(session, invite.list_id, principal.user_id, invite.role)
     await session.commit()
     await hub.notify_users(
         [principal.user_id], {"kind": "list.shared", "list_id": str(invite.list_id)}
@@ -80,12 +105,8 @@ async def add_member(
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No account with this email")
-    member = ListMember(list_id=list_id, user_id=user.id, role=Role(data.role))
-    session.add(member)
-    try:
-        await session.commit()
-    except Exception:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Already a member")
+    await _upsert_member(session, list_id, user.id, Role(data.role))
+    await session.commit()
     await hub.notify_users([user.id], {"kind": "list.shared", "list_id": str(list_id)})
     if user_wants_email(user.settings):
         await send_email(

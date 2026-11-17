@@ -84,6 +84,7 @@ def client_key(request: Request) -> str:
 
 
 async def get_principal(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     session: AsyncSession = Depends(get_session),
 ) -> Principal:
@@ -100,16 +101,25 @@ async def get_principal(
         owner = await session.get(User, api_key.user_id)
         if owner is None or not owner.is_active:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Account disabled")
-        return Principal(api_key.user_id, read_only=api_key.read_only, via="api_key",
-                         is_admin=owner.is_admin, list_scope=api_key.list_scope)
-    try:
-        payload = decode_token(token, "access")
-    except Exception:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
-    user = await session.get(User, UUID(payload["sub"]))
-    if user is None or not user.is_active:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Account disabled")
-    return Principal(user.id, is_admin=user.is_admin)
+        principal = Principal(api_key.user_id, read_only=api_key.read_only, via="api_key",
+                              is_admin=owner.is_admin, list_scope=api_key.list_scope)
+    else:
+        try:
+            payload = decode_token(token, "access")
+        except Exception:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
+        user = await session.get(User, UUID(payload["sub"]))
+        if user is None or not user.is_active:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Account disabled")
+        principal = Principal(user.id, is_admin=user.is_admin)
+    if principal.read_only and request.method != "GET" \
+            and not request.url.path.startswith("/mcp/"):
+        # Global gate: a read-only credential is refused on every mutation
+        # route (Strix vuln-0001). MCP is excluded on purpose: one POST
+        # channel multiplexes read and write tools, guarded per tool in
+        # mcp_http.
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Read-only credentials")
+    return principal
 
 
 async def require_admin(principal: Principal = Depends(get_principal)) -> Principal:

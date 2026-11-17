@@ -4,7 +4,7 @@ import asyncio
 import json
 
 from datetime import timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -91,6 +91,11 @@ def _is_locked_out(key: str) -> bool:
     return count >= 10
 
 
+# Same status AND body for a fresh and a repeat register: the caller must
+# never learn whether the account already exists (Strix vuln-0003).
+_REGISTER_UNIFORM_MESSAGE = "Si ce compte existe, un email de vérification a été (re)envoyé."
+
+
 @router.post("/register", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
 async def register(
     request: Request,
@@ -98,7 +103,20 @@ async def register(
     session: AsyncSession = Depends(get_session),
 ):
     await _register_limiter.check(f"reg:{client_key(request)}")
-    user = User(email=data.email.lower(), password_hash=hash_password(data.password))
+    email = data.email.lower()
+    existing = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
+    if existing is not None:
+        # Uniform reply: the tokens are INERT (sub maps to no account), so
+        # the response looks identical to a fresh register on the wire but
+        # grants nothing — the caller does not own this account.
+        if settings.SMTP_ENABLED:
+            existing.email_token = new_email_token()
+            await session.commit()
+            asyncio.create_task(_send_verification_email(existing.email, existing.email_token))
+            raise HTTPException(status.HTTP_202_ACCEPTED, _REGISTER_UNIFORM_MESSAGE)
+        return TokenOut(access_token=create_access_token(uuid4()),
+                        refresh_token=create_refresh_token(uuid4()))
+    user = User(email=email, password_hash=hash_password(data.password))
     if settings.SMTP_ENABLED:
         user.is_email_verified = False
         user.email_token = new_email_token()
@@ -106,13 +124,14 @@ async def register(
     try:
         await session.commit()
     except IntegrityError:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
+        # lost the create race: answer exactly like a repeat register
+        if settings.SMTP_ENABLED:
+            raise HTTPException(status.HTTP_202_ACCEPTED, _REGISTER_UNIFORM_MESSAGE)
+        return TokenOut(access_token=create_access_token(uuid4()),
+                        refresh_token=create_refresh_token(uuid4()))
     if settings.SMTP_ENABLED:
         asyncio.create_task(_send_verification_email(user.email, user.email_token))
-        raise HTTPException(
-            status.HTTP_202_ACCEPTED,
-            "Compte créé. Un code de vérification a été envoyé par email.",
-        )
+        raise HTTPException(status.HTTP_202_ACCEPTED, _REGISTER_UNIFORM_MESSAGE)
     return await _issue_tokens(session, user)
 
 

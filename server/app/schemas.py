@@ -8,6 +8,14 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from .models import Role as RoleEnum
 
 
+def _no_null_bytes(v: str) -> str:
+    # U+0000 crashes downstream (raw 500) — reject it cleanly (Strix
+    # hardening item).
+    if "\x00" in v:
+        raise ValueError("null bytes are not allowed")
+    return v
+
+
 class RegisterIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=10, max_length=128)
@@ -66,6 +74,11 @@ class ChecklistIn(BaseModel):
     color: str | None = Field(default=None, pattern="^#[0-9A-Fa-f]{6}$")
     folder: str | None = Field(default=None, max_length=100)
 
+    @field_validator("title", "folder")
+    @classmethod
+    def _check_null(cls, v: str) -> str:
+        return _no_null_bytes(v)
+
 
 class ChecklistOut(BaseModel):
     id: UUID
@@ -84,6 +97,11 @@ class ItemIn(BaseModel):
     due_date: datetime | None = None
     notes: str | None = None
     assignee_id: UUID | None = None
+
+    @field_validator("label", "notes")
+    @classmethod
+    def _check_null(cls, v: str | None) -> str | None:
+        return v if v is None else _no_null_bytes(v)
 
 
 class ItemOut(BaseModel):
@@ -111,11 +129,21 @@ class ItemPatch(BaseModel):
     assignee_id: UUID | None = None
     updated_at: datetime | None = None
 
+    @field_validator("label", "notes")
+    @classmethod
+    def _check_null(cls, v: str | None) -> str | None:
+        return v if v is None else _no_null_bytes(v)
+
 
 class ItemsBulkIn(BaseModel):
     """Multi-line text: one item per line (agent & quick-add friendly)."""
 
     text: str = Field(min_length=1, max_length=50000)
+
+    @field_validator("text")
+    @classmethod
+    def _check_null(cls, v: str) -> str:
+        return _no_null_bytes(v)
 
 
 class SyncEvent(BaseModel):
@@ -173,6 +201,11 @@ class InviteIn(BaseModel):
     hours: int = Field(default=48, ge=1, le=168)
     email: EmailStr | None = None
 
+    @field_validator("email")
+    @classmethod
+    def _check_null(cls, v: EmailStr | None) -> EmailStr | None:
+        return v if v is None else _no_null_bytes(v)
+
 
 class InviteOut(BaseModel):
     invite_id: UUID
@@ -186,6 +219,11 @@ class InviteAcceptIn(BaseModel):
 class MemberIn(BaseModel):
     email: EmailStr
     role: str = Field(default="viewer", pattern="^(viewer|editor)$")
+
+    @field_validator("email")
+    @classmethod
+    def _check_null(cls, v: EmailStr) -> EmailStr:
+        return _no_null_bytes(v)
 
 
 class MemberRoleIn(BaseModel):

@@ -20,7 +20,7 @@ from ..schemas import (
     WebhookIn,
     WebhookOut,
 )
-from ..events import record_change, notify_list, fire_webhooks
+from ..events import record_change, notify_list, fire_webhooks, validate_webhook_url
 from ..models import Webhook
 from ..security import new_email_token
 
@@ -91,6 +91,10 @@ async def create_list(
     principal: Principal = Depends(require_write),
     session: AsyncSession = Depends(get_session),
 ):
+    if principal.list_scope is not None:
+        # A scoped key is bound to its single list: no creation outside it
+        # (Strix vuln-0002).
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "API key scoped to another list")
     checklist = Checklist(owner_id=principal.user_id, title=data.title, color=data.color, folder=data.folder)
     session.add(checklist)
     await session.commit()
@@ -451,6 +455,10 @@ async def create_hook(
     session: AsyncSession = Depends(get_session),
 ):
     await accessible_list(list_id, principal, session, min_role=Role.editor)
+    # SSRF gate at creation (Strix vuln-0004); delivery re-checks it.
+    allowed, _ = validate_webhook_url(data.url)
+    if not allowed:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid webhook URL")
     hook = Webhook(list_id=list_id, user_id=principal.user_id,
                    url=data.url, secret=new_email_token())
     session.add(hook)

@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -38,6 +41,13 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+    # 400 (not 422): clean rejection of malformed bodies — e.g. a U+0000 in
+    # a user text field must never surface as a bare 500 (Strix hardening).
+    return JSONResponse(status_code=400, content={"detail": jsonable_encoder(exc.errors())})
 
 app.include_router(auth.router)
 app.include_router(admin.router)
@@ -165,6 +175,11 @@ async def _ensure_indexes() -> None:
     for ddl in (
         "CREATE INDEX IF NOT EXISTS ix_items_updated_at ON items (updated_at)",
         "CREATE INDEX IF NOT EXISTS ix_lists_updated_at ON lists (updated_at)",
+        # unique (list_id, user_id) on pre-constraint databases: repeated
+        # joins must never create a duplicate membership row (Strix
+        # hardening item); backstops the INSERT ... ON CONFLICT upserts.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_list_members_list_user "
+        "ON list_members (list_id, user_id)",
     ):
         try:
             async with engine.begin() as conn:
