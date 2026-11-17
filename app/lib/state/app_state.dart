@@ -96,7 +96,7 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    await _applyWidgetToggles();
+    await applyWidgetToggles();
     await sync.init();
     await reloadProfile();
     await _refreshWidget();
@@ -186,8 +186,10 @@ class AppState extends ChangeNotifier {
   }
 
   /// Items checked from the home-screen widget: apply them to the local DB
-  /// so the next sync pushes them to the server.
-  Future<void> _applyWidgetToggles() async {
+  /// so the next sync pushes them to the server. Public + also called on app
+  /// resume (singleTask activity is RESUMED, not re-created): clearToggles()
+  /// makes repeated calls idempotent.
+  Future<void> applyWidgetToggles() async {
     try {
       final ids = await WidgetService.pendingToggles();
       if (ids.isEmpty) return;

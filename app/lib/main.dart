@@ -57,6 +57,10 @@ class _ChecklistsAppState extends State<ChecklistsApp>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      // Item coché dans le widget : l'activity singleTask est resumée, pas
+      // re-créée → init() ne rejoue pas ; applyWidgetToggles() au resume
+      // (idempotent via clearToggles).
+      appState.applyWidgetToggles();
       appState.sync.fullSync();
     }
   }

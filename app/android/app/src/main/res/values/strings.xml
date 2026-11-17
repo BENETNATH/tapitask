@@ -1,4 +1,5 @@
 <resources>
     <string name="widget_title">Tapitask</string>
     <string name="quickadd_desc">Ajout rapide Tapitask</string>
+    <string name="widget_open_desc">Ouvrir l\'application</string>
 </resources>

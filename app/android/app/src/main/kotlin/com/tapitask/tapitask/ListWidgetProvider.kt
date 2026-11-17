@@ -57,6 +57,8 @@ class ListWidgetProvider : AppWidgetProvider() {
                 val views = RemoteViews(context.packageName, R.layout.list_widget)
                 views.setTextViewText(R.id.widget_title,
                     data.getString("label_no_list", "Épinglez une liste"))
+                views.setImageViewResource(R.id.widget_open,
+                    R.drawable.ic_widget_open)
                 bindOpen(context, views, null)
                 views.setViewVisibility(R.id.widget_prev, android.view.View.GONE)
                 views.setViewVisibility(R.id.widget_next, android.view.View.GONE)
@@ -117,6 +119,20 @@ class ListWidgetProvider : AppWidgetProvider() {
                 context.sendBroadcast(intent)
             }
         }
+
+        /// Le PendingIntent du « + » embarque l'id de liste au moment du
+        /// onUpdate du QuickAddWidgetProvider : un cycle ◀/▶ rendrait
+        /// l'URI obsolète → on re-déclenche son update aussi.
+        fun triggerQuickAddUpdate(context: Context) {
+            val ids = AppWidgetManager.getInstance(context)
+                .getAppWidgetIds(ComponentName(context, QuickAddWidgetProvider::class.java))
+            if (ids.isNotEmpty()) {
+                val intent = Intent(context, QuickAddWidgetProvider::class.java)
+                intent.action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
+                context.sendBroadcast(intent)
+            }
+        }
     }
 
     private fun bindOpen(context: Context, views: RemoteViews, listId: String?) {
@@ -158,8 +174,7 @@ class ListWidgetProvider : AppWidgetProvider() {
         // Localized action labels (written by the Dart side per user language)
         views.setTextViewText(R.id.widget_add,
             data.getString("label_add", "＋ Ajouter"))
-        views.setTextViewText(R.id.widget_open,
-            data.getString("label_open", "Ouvrir"))
+        views.setImageViewResource(R.id.widget_open, R.drawable.ic_widget_open)
 
         // Theme (synced user setting, resolved against the OS by the app).
         val dark = data.getString("theme", "light") == "dark"
@@ -254,6 +269,7 @@ class ListWidgetProvider : AppWidgetProvider() {
                     val next = ((current + direction) % total + total) % total
                     data.edit().putInt("list_index", next).apply()
                     triggerUpdate(context)
+                    triggerQuickAddUpdate(context)
                 }
             }
             ACTION_TOGGLE -> {

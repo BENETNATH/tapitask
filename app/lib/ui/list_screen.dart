@@ -11,7 +11,14 @@ import "../l10n/s.dart";
 class ListScreen extends StatefulWidget {
   final AppState state;
   final String listId;
-  const ListScreen({super.key, required this.state, required this.listId});
+
+  /// Deep-link quick-add : focaliser le champ d'ajout au montage.
+  final bool focusAdd;
+  const ListScreen(
+      {super.key,
+      required this.state,
+      required this.listId,
+      this.focusAdd = false});
 
   @override
   State<ListScreen> createState() => _ListScreenState();
@@ -19,6 +26,7 @@ class ListScreen extends StatefulWidget {
 
 class _ListScreenState extends State<ListScreen> {
   final _quickAdd = TextEditingController();
+  final _addFocus = FocusNode();
   String _recurrence = "none";
   String? _parentIdForNextAdd;
 
@@ -26,6 +34,11 @@ class _ListScreenState extends State<ListScreen> {
   void initState() {
     super.initState();
     widget.state.addListener(_onChanged);
+    if (widget.focusAdd) {
+      // Post-frame : le focus (donc le clavier) une fois l'arbre monté.
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _addFocus.requestFocus());
+    }
   }
 
   void _onChanged() => setState(() {});
@@ -39,6 +52,7 @@ class _ListScreenState extends State<ListScreen> {
   @override
   void dispose() {
     widget.state.removeListener(_onChanged);
+    _addFocus.dispose();
     super.dispose();
   }
 
@@ -325,6 +339,7 @@ class _ListScreenState extends State<ListScreen> {
                 children: [
                   TextField(
                     controller: _quickAdd,
+                    focusNode: _addFocus,
                     autofocus: Platform.isWindows,
                     maxLines: 3,
                     minLines: 1,

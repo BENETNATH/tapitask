@@ -73,7 +73,8 @@ class _HomeScreenState extends State<HomeScreen> {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => ListScreen(state: widget.state, listId: target),
+          builder: (_) =>
+              ListScreen(state: widget.state, listId: target, focusAdd: true),
         ),
       );
       return;
@@ -89,7 +90,8 @@ class _HomeScreenState extends State<HomeScreen> {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => ListScreen(state: widget.state, listId: fallback.id),
+          builder: (_) => ListScreen(
+              state: widget.state, listId: fallback.id, focusAdd: true),
         ),
       );
     }

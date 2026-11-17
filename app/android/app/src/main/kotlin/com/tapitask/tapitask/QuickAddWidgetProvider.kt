@@ -26,7 +26,19 @@ class QuickAddWidgetProvider : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray
     ) {
-        HomeWidgetPlugin.getData(context)
+        val prefs = HomeWidgetPlugin.getData(context)
+        // Liste AFFICHÉE dans le widget liste (index clamped, comme le
+        // render) : le « + » ouvre l'app directement sur le champ d'ajout
+        // de cette liste. Sans liste, fallback quickadd nu (validation
+        // stricte côté Dart inchangée).
+        val total = prefs.getInt("list_count_lists", 0)
+        val listId: String? = if (total > 0) {
+            var index = prefs.getInt("list_index", 0)
+            if (index >= total) index = 0
+            prefs.getString("list_${index}_id", null)
+        } else null
+        val uri = if (listId.isNullOrEmpty()) "tapitask://quickadd"
+            else "tapitask://quickadd?list=$listId"
         for (appWidgetId in appWidgetIds) {
             val views = RemoteViews(context.packageName, R.layout.quickadd_widget)
             // Action privée (au lieu de l'action publique du plugin
@@ -34,7 +46,7 @@ class QuickAddWidgetProvider : AppWidgetProvider() {
             // est validé côté Dart.
             val intent = Intent(context, MainActivity::class.java).apply {
                 action = TapitaskActions.ACTION_LAUNCH
-                data = Uri.parse("tapitask://quickadd")
+                data = Uri.parse(uri)
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             }
             views.setOnClickPendingIntent(
