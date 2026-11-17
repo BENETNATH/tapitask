@@ -117,11 +117,11 @@ lib/
 ├── state/app_state.dart       # ChangeNotifier : actions instantanées, sync en fond
 ├── platform/
 │   ├── tray_controller.dart   # systray Windows/Linux
+│   ├── flyout_bridge.dart     # flyout Win32 natif (MethodChannel tapitask/win32)
 │   └── widget_service.dart   # home_widget Android
 └── ui/
     ├── home_screen.dart       # listes + épinglage
     ├── list_screen.dart       # items + ajout rapide multi-lignes
-    ├── tray_panel.dart        # volet systray
     └── login_screen.dart      # compte + URL serveur
 ```
 

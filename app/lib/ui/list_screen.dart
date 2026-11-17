@@ -723,27 +723,33 @@ class _ListScreenState extends State<ListScreen> {
     }
   }
 
+  Widget _subtitlePart(IconData icon, String text, {Color? color}) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 3),
+        Text(text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 12, color: color)),
+      ]);
+
   Widget? _itemSubtitle(LocalItem item) {
     final parts = <Widget>[];
     if (widget.state.featureDueDates && item.dueDate != null) {
       final overdue = item.dueDate!.isBefore(DateTime.now());
-      parts.add(Text(
-          (overdue ? "⚠ " : "📅 ") + _dueLabel(item.dueDate!),
-          style: TextStyle(
-              fontSize: 12,
-              color: overdue
-                  ? Theme.of(context).colorScheme.error
-                  : null)));
+      parts.add(_subtitlePart(
+          overdue ? Icons.warning_amber_rounded : Icons.event,
+          _dueLabel(item.dueDate!),
+          color:
+              overdue ? Theme.of(context).colorScheme.error : null));
     }
     if (item.recurrence != "none") {
-      parts.add(Text("↻ ${_recurrenceLabel(item.recurrence)}",
-          style: const TextStyle(fontSize: 12)));
+      parts.add(
+          _subtitlePart(Icons.replay, _recurrenceLabel(item.recurrence)));
     }
     if (item.notes != null && item.notes!.isNotEmpty) {
-      parts.add(Text("📝 ${item.notes!}",
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 12)));
+      parts.add(_subtitlePart(Icons.notes_outlined, item.notes!));
     }
     if (parts.length == 1) return parts.first;
     if (parts.isEmpty) return null;
