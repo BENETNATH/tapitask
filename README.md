@@ -1,8 +1,7 @@
 # Tapitask
 
 **Listes de tâches à cocher hyper-réactives, offline-first, auto-hébergées.**
-Client Windows (icône systray + volet rapide) et Android (widgets d'écran d'accueil) —
-avec un serveur de synchronisation et de partage auto-hébergé.
+Client Windows (icône systray + volet rapide), Android (widgets d'écran d'accueil), webapp — avec un serveur de synchronisation et de partage auto-hébergé.
 
 ## Interface
 
@@ -13,8 +12,8 @@ avec un serveur de synchronisation et de partage auto-hébergé.
 
 ```
 ┌────────────┐   ┌────────────┐   ┌────────────┐
-│  Windows   │   │  Android   │   │    Web     │
-│ tray+volet │   │  widgets   │   │  (à venir) │
+│  Windows   │   │  Android   │   │   Webapp   │
+│ tray+volet │   │  widgets   │   │  (Flutter) │
 └─────┬──────┘   └─────┬──────┘   └─────┬──────┘
       │      WebSocket + REST delta      │
       └──────────────┬───────────────────┘
@@ -30,7 +29,7 @@ avec un serveur de synchronisation et de partage auto-hébergé.
 
 - **Instantané** : chaque action s'applique localement (SQLite) puis se synchronise en arrière-plan. Pas de spinner, jamais.
 - **Minimaliste ou complet** : chaque utilisateur active les fonctions qu'il veut (échéances, dossiers, alertes, templates) — synchronisées entre tous ses appareils.
-- **Présent partout** : volet rapide dans la barre des tâches Windows, widgets Android (liste cochable 2×2 + ajout rapide 1×1).
+- **Présent partout** : volet rapide dans la barre des tâches Windows, widgets Android (liste cochable 2×2 + ajout rapide 1×1), webapp.
 - **Partage** : invitations par code ou email, rôles viewer / editor / owner, dossiers partageables.
 - **Auto-hébergé** : votre serveur, vos données, Docker Compose, HTTPS via votre reverse proxy (ou Caddy intégré).
 - **Sécurisé** : Argon2id, JWT rotatifs, 2FA TOTP, clés API scopées, rate limiting (voir [SECURITY.md](SECURITY.md)).
@@ -105,9 +104,18 @@ sur l'écran d'accueil. Le keystore de signature est
 
 ### Webapp
 
-À venir : le build web échoue à ce stade — la persistance locale repose sur
-drift/`dart:ffi`, non disponible sur web (il faudra `WasmDatabase`). Les clients
-fonctionnels sont Windows et Android.
+```bash
+cd app && flutter build web --release
+# => app/build/web
+```
+
+La webapp se sert en statique par nginx (profil Docker `web`, port `WEB_PORT` 8080) :
+
+```bash
+docker compose --profile web up -d      # après transfert de app/build/web sur le serveur
+```
+
+Détails et intégration reverse proxy : [DEPLOIEMENT-UBUNTU.md](DEPLOIEMENT-UBUNTU.md).
 
 ## Structure du monorepo
 
@@ -122,7 +130,7 @@ fonctionnels sont Windows et Android.
 │   ├── app/                # auth, listes, partage, sync, admin, clés API, MCP HTTP
 │   ├── tests/              # pytest (SQLite), couverture auth/sync/partage/smtp
 │   └── Dockerfile
-├── app/                    # client Flutter (Windows / Android)
+├── app/                    # client Flutter (Windows / Android / Web)
 │   ├── lib/                # UI, base locale Drift/SQLite, synchro, tray, widgets
 │   ├── android/            # natif : ListWidgetProvider, QuickAddWidgetProvider, layouts
 │   └── windows/            # runner + flyout Win32 natif (C++)

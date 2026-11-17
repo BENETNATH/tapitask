@@ -1,11 +1,8 @@
 # Tapitask — App Flutter
 
-App de gestion de tâches **offline-first** : SQLite local comme source de vérité,
-synchronisation incrémentale (delta) avec le serveur `../server`, WebSocket push.
-
-Cibles fonctionnelles : **Windows** (tray + volet rapide) et **Android**
-(widgets d'écran d'accueil). Le build web échoue à ce stade (persistance locale
-drift/`dart:ffi` non disponible sur web) — le web reste une cible à venir.
+Client offline-first : Windows (systray + volet rapide), Android (widgets d'écran d'accueil), Web.
+SQLite local comme source de vérité, synchronisation incrémentale (delta) avec le serveur
+`../server`, WebSocket push.
 
 ## Prérequis
 
