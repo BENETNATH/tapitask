@@ -158,6 +158,8 @@ class _ListScreenState extends State<ListScreen> {
             // Le sélecteur ◀ ▾ ▶ n'apparaît qu'à partir de 2 listes actives.
             if (lists.length < 2) {
               return Text(list?.title ?? "Liste",
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                       color: list?.color == null
                           ? scheme.onSurface
@@ -175,33 +177,37 @@ class _ListScreenState extends State<ListScreen> {
                       ? () => _switchList(lists[index - 1].id)
                       : null,
                 ),
-                PopupMenuButton<String>(
-                  tooltip: S.switchList,
-                  initialValue: widget.listId,
-                  onSelected: _switchList,
-                  itemBuilder: (context) => [
-                    for (final l in lists)
-                      PopupMenuItem(
-                        value: l.id,
-                        child: Row(children: [
-                          if (l.id == widget.listId)
-                            const Icon(Icons.check, size: 16)
-                          else
-                            const SizedBox(width: 16),
-                          const SizedBox(width: 8),
-                          Flexible(child: Text(l.title,
-                              overflow: TextOverflow.ellipsis)),
-                        ]),
-                      ),
-                  ],
-                  child: Text(
-                    "${list?.title ?? "Liste"} ▾",
-                    style: TextStyle(
-                        color: list?.color == null
-                            ? scheme.onSurface
-                            : Color(int.parse(
-                                list!.color!.replaceFirst("#", "0xFF"))),
-                        fontWeight: FontWeight.w600),
+                Flexible(
+                  child: PopupMenuButton<String>(
+                    tooltip: S.switchList,
+                    initialValue: widget.listId,
+                    onSelected: _switchList,
+                    itemBuilder: (context) => [
+                      for (final l in lists)
+                        PopupMenuItem(
+                          value: l.id,
+                          child: Row(children: [
+                            if (l.id == widget.listId)
+                              const Icon(Icons.check, size: 16)
+                            else
+                              const SizedBox(width: 16),
+                            const SizedBox(width: 8),
+                            Flexible(child: Text(l.title,
+                                overflow: TextOverflow.ellipsis)),
+                          ]),
+                        ),
+                    ],
+                    child: Text(
+                      "${list?.title ?? "Liste"} ▾",
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: list?.color == null
+                              ? scheme.onSurface
+                              : Color(int.parse(
+                                  list!.color!.replaceFirst("#", "0xFF"))),
+                          fontWeight: FontWeight.w600),
+                    ),
                   ),
                 ),
                 IconButton(

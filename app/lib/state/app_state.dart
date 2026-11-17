@@ -20,7 +20,8 @@ import "../platform/widget_service.dart";
 import "widget_intent.dart";
 
 class AppState extends ChangeNotifier {
-  final AppDb db = AppDb();
+  final AppDb db;
+  AppState({AppDb? db}) : db = db ?? AppDb();
   late final ApiClient api;
   late final SyncService sync;
 
