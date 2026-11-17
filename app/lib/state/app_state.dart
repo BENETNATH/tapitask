@@ -5,6 +5,7 @@ import "dart:convert";
 import "dart:math";
 
 import "package:flutter/foundation.dart";
+import "package:flutter/scheduler.dart";
 import "package:flutter/services.dart";
 import "package:drift/drift.dart";
 import "package:shared_preferences/shared_preferences.dart";
@@ -127,6 +128,10 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Seam test : _applyWidgetUri est private (scopée à ce library).
+  @visibleForTesting
+  Future<void> applyWidgetUriForTesting(Uri? uri) => _applyWidgetUri(uri);
+
   /// Push natif « widgetLaunch » (relance depuis le widget, app déjà ouverte).
   Future<void> _onWidgetLaunch(MethodCall call) async {
     if (call.method != "widgetLaunch") return;
@@ -145,7 +150,10 @@ class AppState extends ChangeNotifier {
     if (list == null) return;
     quickAddRequested = true;
     quickAddListId = list.isEmpty ? null : list;
-    notifyListeners();
+    // Post-frame : le push natif ne doit pas muter l'arbre au milieu d'une
+    // frame (spec lot F, crash 2).
+    SchedulerBinding.instance
+        .addPostFrameCallback((_) => notifyListeners());
   }
 
   /// (Re)load the user profile: admin flag + per-user feature settings.

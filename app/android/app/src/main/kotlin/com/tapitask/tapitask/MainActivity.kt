@@ -26,7 +26,7 @@ class MainActivity : FlutterActivity() {
             // Channel pas prêt → repli sur getLaunchUri.
             pendingLaunchUri = uri
         }
-        setIntent(null)
+        intent.data = null
     }
 
     private fun launchUriFrom(intent: Intent?): String? =
