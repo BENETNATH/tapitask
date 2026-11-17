@@ -1034,6 +1034,51 @@ async def test_mcp_http_errors_keep_request_id(client):
 
 
 @pytest.mark.asyncio
+async def test_mcp_check_item_spawns_recurrence(client):
+    """check_item over the MCP HTTP bridge keeps a recurring task alive: the
+    first completion spawns the next occurrence, repeats do not."""
+    import json as _json
+
+    from app.db import SessionLocal
+    from app.deps import Principal
+    from app.mcp_http import _call_tool
+    from app.models import User
+    from sqlalchemy import select
+
+    tokens = await register(client, "mcprec@example.com")
+    h = auth_headers(tokens)
+    list_id = (await client.post("/lists", json={"title": "R"}, headers=h)).json()["id"]
+    item = (await client.post(
+        f"/lists/{list_id}/items",
+        json={"label": "Backup", "recurrence": "weekly",
+              "due_date": "2030-01-07T09:00:00"}, headers=h)).json()[0]
+    async with SessionLocal() as session:
+        uid = (await session.execute(
+            select(User).where(User.email == "mcprec@example.com"))).scalar_one().id
+    principal = Principal(user_id=uid)
+
+    async def check(done=True):
+        return _json.loads(await _call_tool(principal, "check_item", {
+            "list_id": list_id, "item_id": item["id"], "done": done}))
+
+    out = await check()
+    assert out["done"] is True
+    assert out["next_occurrence"]["due_date"].startswith("2030-01-14")
+    # repeat, then uncheck + re-check: no new occurrence
+    assert "next_occurrence" not in await check()
+    await check(done=False)
+    assert "next_occurrence" not in await check()
+    # a non-boolean done is rejected instead of being treated as truthy
+    with pytest.raises(ValueError):
+        await check(done="false")
+
+    items = (await client.get(f"/lists/{list_id}/items", headers=h)).json()
+    pending = [i for i in items if i["label"] == "Backup" and not i["done"]]
+    assert len(pending) == 1
+    assert pending[0]["id"] == out["next_occurrence"]["id"]
+
+
+@pytest.mark.asyncio
 async def test_mcp_cross_tenant_isolation(client):
     """Aucune fuite cross-tenant ni écriture via les tools MCP (audit run-2 :
     21 checks manuels sans couverture permanente)."""
