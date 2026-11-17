@@ -214,7 +214,8 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
             return json.dumps({"created": created})
         if name == "check_item":
             result = await session.execute(
-                select(Item).where(Item.id == _uuid(args["item_id"]))
+                select(Item).where(
+                    Item.id == _uuid(args["item_id"]), Item.deleted.is_(False))
             )
             item = result.scalar_one_or_none()
             if item is None:
@@ -225,9 +226,32 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
             if principal.read_only:
                 raise ValueError("Read-only credentials")
             await accessible_list(item.list_id, principal, session, min_role=Role.editor)
+            done = args.get("done", True)
+            if not isinstance(done, bool):
+                raise ValueError("'done' must be a boolean")
+            from .events import notify_list, record_change
             from .models import utcnow
-            item.done = args.get("done", True)
+            from .routers.lists import _spawn_next
+            # Same semantics as REST PATCH and sync: the next occurrence of a
+            # recurring item is spawned on the not-done -> done transition,
+            # and _spawn_next is idempotent per source item.
+            newly_done = done and not item.done
+            item.done = done
             item.updated_at = utcnow()
             await session.commit()
-            return json.dumps({"id": str(item.id), "done": item.done})
+            spawned = None
+            if newly_done and item.recurrence and item.recurrence != "none":
+                spawned = await _spawn_next(session, item, principal.user_id)
+            await record_change(session, list_id=item.list_id, item_id=item.id,
+                                kind="item.upsert")
+            await notify_list(item.list_id, {"kind": "item.upsert",
+                                             "list_id": str(item.list_id),
+                                             "id": str(item.id)})
+            out = {"id": str(item.id), "done": item.done}
+            if spawned is not None:
+                out["next_occurrence"] = {
+                    "id": str(spawned.id),
+                    "due_date": spawned.due_date.isoformat() if spawned.due_date else None,
+                }
+            return json.dumps(out)
     raise ValueError(f"Unknown tool: {name}")
