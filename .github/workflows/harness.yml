@@ -1,0 +1,74 @@
+# managed: harness — CI : commit messages + tests des gates
+# Installé par init.sh dans .github/workflows/harness.yml
+name: harness
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # Les messages de commits d'une PR : Conventional Commits + pas
+  # d'attribution IA (les commits restent ceux de l'utilisateur).
+  commits:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check commit messages
+        run: |
+          git log --format=%H%x00%B%x00 "${{ github.event.pull_request.base.sha }}..HEAD" \
+            | python3 scripts/check_commits.py -
+
+  # Les gates du harness sont testés en continu (review gate, check commits,
+  # loop complet hooks).
+  harness-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: pip install pytest
+      - name: Run gate tests
+        run: python -m pytest scripts/tests -q
+
+  # Advisory (non bloquant) : opportunités de modernisation web platform via
+  # Modern Web Guidance (Chrome/Edge/Firefox/MDN). Scan statique local,
+  # zéro LLM — un rapport de findings, jamais une erreur.
+  modern-web-scan:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Legacy web platform scan (advisory)
+        run: |
+          if ! git ls-files | grep -qE '\.(html|css|tsx?|jsx?)$'; then
+            echo "Pas de code frontend — scan ignoré."
+            exit 0
+          fi
+          npx -y modern-web-guidance@latest legacy-scan . --json > mwg-report.json || true
+          python3 - <<'EOF'
+          import json
+          try:
+              d = json.load(open("mwg-report.json"))
+          except Exception as e:
+              print(f"::notice::Modern Web Guidance : rapport illisible ({e})")
+              raise SystemExit(0)
+          total = d.get("totalFindings", 0)
+          print(f"::notice::Modern Web Guidance : {total} finding(s) — rapport mwg-report.json (advisory, non bloquant)")
+          for g in d.get("guides", []):
+              for f in g.get("rules", [{}])[0].get("findings", []):
+                  print(f"::notice::{f.get('file', '?')}:{f.get('line', '?')} [{g.get('guideId', '?')}] {f.get('message', '')}")
+          EOF
+          exit 0
