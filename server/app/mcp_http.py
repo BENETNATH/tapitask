@@ -1,15 +1,19 @@
 """MCP over HTTP/SSE — lets remote agents use Tapitask without SSH/stdio.
 
-Wire format: JSON-RPC 2.0 over SSE (GET /mcp/sse) + POST /mcp/messages,
-compatible with the MCP 2024-11-05 stdio-style messages.
+Wire format: the MCP 2024-11-05 HTTP+SSE transport. GET /mcp/sse opens one
+session per connection and first sends an `endpoint` event naming the URL to
+POST to (/mcp/messages?sessionId=...); each reply goes back on the stream of
+the session that sent the request.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import uuid
+from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,18 +78,47 @@ TOOLS = [
     },
 ]
 
-_sessions: dict[str, asyncio.Queue] = {}
+REPLY_TIMEOUT = 5.0  # seconds to wait for room on a saturated stream
+
+
+@dataclass
+class _Session:
+    user_id: str
+    queue: asyncio.Queue
+
+
+# One entry per open SSE connection (not per user): two agents on the same
+# account each get their own replies, and one disconnecting never tears down
+# the other's stream.
+_sessions: dict[str, _Session] = {}
+
+
+def _resolve_session(session_id: str | None, principal: Principal) -> _Session | None:
+    user_id = str(principal.user_id)
+    if session_id is not None:
+        session = _sessions.get(session_id)
+        # Another user's session id is answered exactly like an unknown one.
+        return session if session is not None and session.user_id == user_id else None
+    # Clients written before sessionId existed: newest stream of this user.
+    for session in reversed(list(_sessions.values())):
+        if session.user_id == user_id:
+            return session
+    return None
 
 
 @router.get("/sse")
 async def sse(request: Request, principal: Principal = Depends(get_principal)):
-    session_id = str(principal.user_id)
+    session_id = uuid.uuid4().hex
     q: asyncio.Queue = asyncio.Queue(maxsize=100)
-    _sessions[session_id] = q
+    _sessions[session_id] = _Session(user_id=str(principal.user_id), queue=q)
+    endpoint = f"{request.scope.get('root_path', '')}/mcp/messages?sessionId={session_id}"
 
     async def event_stream():
-        yield f"event: session\ndata: {json.dumps({'sessionId': session_id})}\n\n"
         try:
+            # MCP 2024-11-05: the first event tells the client where to POST.
+            yield f"event: endpoint\ndata: {endpoint}\n\n"
+            # Kept for clients written against the original bridge.
+            yield f"event: session\ndata: {json.dumps({'sessionId': session_id})}\n\n"
             while True:
                 if await request.is_disconnected():
                     break
@@ -101,8 +134,28 @@ async def sse(request: Request, principal: Principal = Depends(get_principal)):
 
 
 @router.post("/messages")
-async def messages(payload: dict[str, Any], principal: Principal = Depends(get_principal)):
-    """Handle one JSON-RPC message; replies are pushed on the SSE stream."""
+async def messages(
+    payload: dict[str, Any],
+    sessionId: str | None = None,  # noqa: N803 — name fixed by the MCP spec
+    principal: Principal = Depends(get_principal),
+):
+    """Handle one JSON-RPC message; the reply goes out on the session's SSE
+    stream, tagged with the request's id.
+
+    Delivery is checked BEFORE anything runs: with no open stream (or a
+    saturated one) the POST fails immediately, so the client gets an error
+    at once instead of a tool side effect plus a reply nobody receives."""
+    session = _resolve_session(sessionId, principal)
+    if session is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "No open MCP session: connect to GET /mcp/sse first")
+    if session.queue.full():
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "MCP session backlog full: read the SSE stream")
+
+    # JSON-RPC notification (no "id" member): never answered — a reply would
+    # carry id null and could not be correlated with anything.
+    is_notification = "id" not in payload
     message: dict[str, Any] = {"jsonrpc": "2.0", "id": payload.get("id")}
     method = payload.get("method")
     if method == "initialize":
@@ -114,22 +167,29 @@ async def messages(payload: dict[str, Any], principal: Principal = Depends(get_p
     elif method == "tools/list":
         message["result"] = {"tools": TOOLS}
     elif method == "tools/call":
-        try:
-            result = await _call_tool(
-                principal, payload["params"]["name"],
-                payload["params"].get("arguments", {}),
-            )
-            message["result"] = {"content": [{"type": "text", "text": result}]}
-        except Exception as e:
-            message["error"] = {"code": -32603, "message": str(e)}
-    elif method == "notifications/initialized":
-        return {"status": "ok"}
+        params = payload.get("params")
+        if not isinstance(params, dict) or not isinstance(params.get("name"), str):
+            message["error"] = {"code": -32602,
+                                "message": "Invalid params: 'name' is required"}
+        else:
+            try:
+                result = await _call_tool(
+                    principal, params["name"], params.get("arguments") or {})
+                message["result"] = {"content": [{"type": "text", "text": result}]}
+            except Exception as e:
+                message["error"] = {"code": -32603, "message": str(e)}
+    elif is_notification:
+        return {"status": "ok"}  # notifications/initialized, cancelled, ...
     else:
         message["error"] = {"code": -32601, "message": f"Unknown method {method}"}
 
-    q = _sessions.get(str(principal.user_id))
-    if q is not None:
-        q.put_nowait(message)
+    if is_notification:
+        return {"status": "ok"}
+    try:
+        await asyncio.wait_for(session.queue.put(message), timeout=REPLY_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "MCP session backlog full: reply not delivered")
     return {"status": "ok"}
 
 
