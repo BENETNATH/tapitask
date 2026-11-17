@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..deps import Principal, get_principal, require_write
+from ..deps import Principal, accessible_list, get_principal, require_write
 from ..models import ApiKey
 from ..schemas import ApiKeyIn, ApiKeyOut
 from ..security import new_api_key
@@ -21,6 +21,11 @@ async def create_api_key(
     principal: Principal = Depends(require_write),
     session: AsyncSession = Depends(get_session),
 ):
+    if data.list_scope is not None:
+        # Le scope doit pointer sur une liste que le caller accède réellement
+        # (404 inconnu/supprimé/non-membre) — sinon on crée une clé qui lit
+        # un delta qu'elle ne devrait pas atteindre (audit run-3).
+        await accessible_list(data.list_scope, principal, session)
     raw, key_hash, key_prefix = new_api_key()
     api_key = ApiKey(
         user_id=principal.user_id,

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
@@ -181,11 +181,20 @@ async def _apply_event(session: AsyncSession, event, principal) -> None:
 
 
 async def _accessible_list_ids(principal: Principal, session: AsyncSession) -> list[UUID]:
-    # Une clé API scopée ne voit QUE sa liste — sinon le delta-sync
-    # exposerait toutes les listes du propriétaire (audit run-2).
+    # A scoped key sees only its list - and only if the principal still has
+    # canonical access to it (same rule as accessible_list, deps.py).
     if principal.list_scope is not None:
         row = (await session.execute(
-            select(Checklist.id).where(Checklist.id == principal.list_scope))).first()
+            select(Checklist.id).where(
+                Checklist.id == principal.list_scope,
+                Checklist.deleted.is_(False),
+                or_(
+                    Checklist.owner_id == principal.user_id,
+                    Checklist.id.in_(
+                        select(ListMember.list_id).where(ListMember.user_id == principal.user_id)
+                    ),
+                ),
+            ))).first()
         return [row[0]] if row is not None else []
     owned = await session.execute(select(Checklist.id).where(Checklist.owner_id == principal.user_id))
     ids = [lid for (lid,) in owned.all()]

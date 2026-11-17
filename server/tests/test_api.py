@@ -1365,3 +1365,197 @@ async def test_sync_delta_uses_sql_filter(client):
     r = await client.post("/sync", json={"since": first["server_time"]}, headers=h)
     kinds = [c["kind"] for c in r.json()["changes"]]
     assert kinds == ["item.upsert"]
+
+
+@pytest.mark.asyncio
+async def test_sync_delta_scoped_key_revoked_membership(client):
+    """A scoped key must stop seeing its list's delta once the membership is
+    revoked (audit run-3, tapitask.sync._accessible_list_ids.list_scope_ignored)."""
+    ta = await register(client, "scoperev-a@example.com")
+    tb = await register(client, "scoperev-b@example.com")
+    ha, hb = auth_headers(ta), auth_headers(tb)
+    l9 = (await client.post("/lists", json={"title": "L9"}, headers=hb)).json()["id"]
+    await client.post(f"/lists/{l9}/items", json={"label": "b-item"}, headers=hb)
+    r = await client.post(f"/lists/{l9}/members",
+                          json={"email": "scoperev-a@example.com", "role": "editor"},
+                          headers=hb)
+    assert r.status_code == 201, r.text
+    user_a = r.json()["user_id"]
+    key = (await client.post("/api-keys",
+                             json={"name": "scoped", "list_scope": l9},
+                             headers=ha)).json()["key"]
+    kh = {"Authorization": f"Bearer {key}"}
+    # positive control before revocation: the delta contains b-item
+    r = await client.post("/sync",
+                          json={"since": "2000-01-01T00:00:00+00:00"}, headers=kh)
+    assert any(c["label"] == "b-item" for c in r.json()["changes"]), r.json()
+    # owner revokes the membership
+    assert (await client.delete(f"/lists/{l9}/members/{user_a}",
+                                headers=hb)).status_code == 204
+    # the same scoped key must now get an empty delta
+    r = await client.post("/sync",
+                          json={"since": "2000-01-01T00:00:00+00:00"}, headers=kh)
+    assert r.json()["changes"] == []
+
+
+@pytest.mark.asyncio
+async def test_sync_delta_scoped_key_deleted_list(client):
+    """A scoped key on a soft-deleted list must return an empty delta
+    (audit run-3, tapitask.sync._accessible_list_ids.list_scope_ignored)."""
+    tokens = await register(client, "scopedel@example.com")
+    h = auth_headers(tokens)
+    l1 = (await client.post("/lists", json={"title": "L1"}, headers=h)).json()["id"]
+    await client.post(f"/lists/{l1}/items", json={"label": "a1-item"}, headers=h)
+    key = (await client.post("/api-keys",
+                             json={"name": "scoped", "list_scope": l1},
+                             headers=h)).json()["key"]
+    kh = {"Authorization": f"Bearer {key}"}
+    assert (await client.delete(f"/lists/{l1}", headers=h)).status_code == 204
+    r = await client.post("/sync",
+                          json={"since": "2000-01-01T00:00:00+00:00"}, headers=kh)
+    assert r.json()["changes"] == []
+
+
+@pytest.mark.asyncio
+async def test_scoped_key_creation_requires_access(client):
+    """Creating a scoped API key requires actual access to the target list
+    (audit run-3, defense in depth at creation)."""
+    ta = await register(client, "keyguard-a@example.com")
+    tb = await register(client, "keyguard-b@example.com")
+    ha, hb = auth_headers(ta), auth_headers(tb)
+    # unknown list -> 404
+    r = await client.post("/api-keys",
+                          json={"name": "k", "list_scope": str(uuid.uuid4())},
+                          headers=ha)
+    assert r.status_code == 404, r.text
+    # real list the caller does not belong to -> 404
+    l9 = (await client.post("/lists", json={"title": "L9"}, headers=hb)).json()["id"]
+    r = await client.post("/api-keys",
+                          json={"name": "k", "list_scope": l9}, headers=ha)
+    assert r.status_code == 404, r.text
+    # viewer membership -> 201
+    r = await client.post(f"/lists/{l9}/members",
+                          json={"email": "keyguard-a@example.com", "role": "viewer"},
+                          headers=hb)
+    assert r.status_code == 201, r.text
+    r = await client.post("/api-keys",
+                          json={"name": "k", "list_scope": l9}, headers=ha)
+    assert r.status_code == 201, r.text
+    # a principal already scoped to another list -> 403
+    l1 = (await client.post("/lists", json={"title": "L1"}, headers=ha)).json()["id"]
+    l2 = (await client.post("/lists", json={"title": "L2"}, headers=ha)).json()["id"]
+    k1 = (await client.post("/api-keys",
+                            json={"name": "k1", "list_scope": l1},
+                            headers=ha)).json()["key"]
+    k1h = {"Authorization": f"Bearer {k1}"}
+    r = await client.post("/api-keys",
+                          json={"name": "k2", "list_scope": l2}, headers=k1h)
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.asyncio
+async def test_rest_patch_clamps_future_updated_at(client):
+    """REST PATCH item must clamp future client clocks like /sync does
+    (audit run-3, tapitask.sync.client_clock_lww_cursor_poison, REST residue)."""
+    import datetime as dt
+
+    def aware(value: str) -> dt.datetime:
+        d = dt.datetime.fromisoformat(value)
+        return d if d.tzinfo is not None else d.replace(tzinfo=dt.timezone.utc)
+
+    tokens = await register(client, "patchclock@example.com")
+    h = auth_headers(tokens)
+    list_id = (await client.post("/lists", json={"title": "C"}, headers=h)).json()["id"]
+    item = (await client.post(f"/lists/{list_id}/items", json={"label": "base"},
+                              headers=h)).json()[0]
+
+    # naive +30d payload: label applied, stored updated_at clamped
+    future_naive = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=30)).replace(tzinfo=None).isoformat()
+    r = await client.patch(f"/lists/{list_id}/items/{item['id']}",
+                           json={"label": "poison", "updated_at": future_naive},
+                           headers=h)
+    assert r.status_code == 200, r.text
+    r = await client.get(f"/lists/{list_id}/items", headers=h)
+    stored = [i for i in r.json() if i["id"] == item["id"]][0]
+    assert stored["label"] == "poison"
+    assert aware(stored["updated_at"]) <= dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=6)
+
+    # aware +30d payload: handled the same way, no round-trip parity needed
+    future_aware = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=30)).isoformat()
+    r = await client.patch(f"/lists/{list_id}/items/{item['id']}",
+                           json={"label": "poison-aware", "updated_at": future_aware},
+                           headers=h)
+    assert r.status_code == 200, r.text
+    r = await client.get(f"/lists/{list_id}/items", headers=h)
+    stored = [i for i in r.json() if i["id"] == item["id"]][0]
+    assert stored["label"] == "poison-aware"
+    assert aware(stored["updated_at"]) <= dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=6)
+
+    # legit update without updated_at: label applied
+    r = await client.patch(f"/lists/{list_id}/items/{item['id']}",
+                           json={"label": "legit"}, headers=h)
+    assert r.status_code == 200, r.text
+    r = await client.get(f"/lists/{list_id}/items", headers=h)
+    stored = [i for i in r.json() if i["id"] == item["id"]][0]
+    assert stored["label"] == "legit"
+
+
+@pytest.mark.asyncio
+async def test_my_lists_scoped_key_sees_only_scoped_list(client):
+    """A scoped key must see exactly one list in GET /lists — its list
+    (audit run-3, tapitask.lists.my_lists.list_scope_ignored)."""
+    ta = await register(client, "mylists-a@example.com")
+    tb = await register(client, "mylists-b@example.com")
+    ha, hb = auth_headers(ta), auth_headers(tb)
+    l1 = (await client.post("/lists", json={"title": "L1"}, headers=ha)).json()["id"]
+    l2 = (await client.post("/lists", json={"title": "L2"}, headers=ha)).json()["id"]
+    l9 = (await client.post("/lists", json={"title": "L9"}, headers=hb)).json()["id"]
+    r = await client.post(f"/lists/{l9}/members",
+                          json={"email": "mylists-a@example.com", "role": "viewer"},
+                          headers=hb)
+    assert r.status_code == 201, r.text
+    key = (await client.post("/api-keys",
+                             json={"name": "scoped", "list_scope": l1},
+                             headers=ha)).json()["key"]
+    kh = {"Authorization": f"Bearer {key}"}
+    r = await client.get("/lists", headers=kh)
+    assert r.status_code == 200
+    entries = r.json()
+    assert len(entries) == 1, entries
+    assert entries[0]["id"] == l1 and entries[0]["role"] == "owner"
+    # controls: unscoped principals still see everything
+    r = await client.get("/lists", headers=ha)
+    assert {e["id"] for e in r.json()} == {l1, l2, l9}
+    r = await client.get("/lists", headers=hb)
+    assert [e["id"] for e in r.json()] == [l9]
+
+
+@pytest.mark.asyncio
+async def test_my_lists_scoped_key_no_access(client):
+    """A scoped key whose list is deleted, or whose membership was revoked,
+    must list nothing (audit run-3, tapitask.lists.my_lists)."""
+    ta = await register(client, "mylists2-a@example.com")
+    tb = await register(client, "mylists2-b@example.com")
+    ha, hb = auth_headers(ta), auth_headers(tb)
+    # (a) scoped list deleted -> []
+    l1 = (await client.post("/lists", json={"title": "L1"}, headers=ha)).json()["id"]
+    k1 = (await client.post("/api-keys",
+                            json={"name": "scoped", "list_scope": l1},
+                            headers=ha)).json()["key"]
+    k1h = {"Authorization": f"Bearer {k1}"}
+    assert (await client.delete(f"/lists/{l1}", headers=ha)).status_code == 204
+    assert (await client.get("/lists", headers=k1h)).json() == []
+    # (b) membership revoked -> []
+    l9 = (await client.post("/lists", json={"title": "L9"}, headers=hb)).json()["id"]
+    r = await client.post(f"/lists/{l9}/members",
+                          json={"email": "mylists2-a@example.com", "role": "viewer"},
+                          headers=hb)
+    assert r.status_code == 201, r.text
+    user_a = r.json()["user_id"]
+    k2 = (await client.post("/api-keys",
+                            json={"name": "scoped2", "list_scope": l9},
+                            headers=ha)).json()["key"]
+    k2h = {"Authorization": f"Bearer {k2}"}
+    assert (await client.delete(f"/lists/{l9}/members/{user_a}",
+                                headers=hb)).status_code == 204
+    assert (await client.get("/lists", headers=k2h)).json() == []

@@ -32,6 +32,27 @@ async def my_lists(
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
 ):
+    # Une clé API scopée ne voit QUE sa liste — même règle que le delta-read
+    # (sync._accessible_list_ids) et accessible_list (deps.py) (audit run-3).
+    if principal.list_scope is not None:
+        row = (await session.execute(
+            select(Checklist).where(Checklist.id == principal.list_scope,
+                                    Checklist.deleted.is_(False)))).scalar_one_or_none()
+        if row is None:
+            return []
+        if row.owner_id == principal.user_id:
+            role = "owner"
+        else:
+            member = (await session.execute(
+                select(ListMember).where(ListMember.list_id == row.id,
+                                         ListMember.user_id == principal.user_id)
+            )).scalar_one_or_none()
+            if member is None:
+                return []
+            role = member.role.value
+        return [ChecklistOut(id=row.id, owner_id=row.owner_id, title=row.title,
+                             updated_at=row.updated_at, role=role,
+                             color=row.color, folder=row.folder)]
     owned = await session.execute(
         select(Checklist).where(Checklist.owner_id == principal.user_id, Checklist.deleted.is_(False))
         .order_by(Checklist.updated_at.desc())
@@ -177,11 +198,11 @@ async def patch_item(
     item = result.scalar_one_or_none()
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
-    if data.updated_at is not None and (
-        (data.updated_at.tzinfo is None) == (item.updated_at.tzinfo is None)
-        and data.updated_at > item.updated_at
-    ):
-        item.updated_at = data.updated_at
+    if data.updated_at is not None:
+        from .sync import _clamp_client_dt, _naive  # import local : sync.py importe déjà lists (L15)
+        client_ts = _clamp_client_dt(data.updated_at)
+        if client_ts > _naive(item.updated_at):
+            item.updated_at = client_ts
     if data.label is not None:
         item.label = data.label
     if data.done is not None:
