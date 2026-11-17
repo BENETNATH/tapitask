@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
@@ -207,6 +208,10 @@ async def patch_item(
         client_ts = _clamp_client_dt(data.updated_at)
         if client_ts > _naive(item.updated_at):
             item.updated_at = client_ts
+    # Recurrence fires on the not-done -> done transition only: re-sending
+    # done=true for an already completed item (client retry, agent calling
+    # check twice) must not spawn another occurrence.
+    newly_done = data.done is True and not item.done
     if data.label is not None:
         item.label = data.label
     if data.done is not None:
@@ -226,7 +231,7 @@ async def patch_item(
     await session.commit()
     # Recurrence: checking a recurring item spawns the next occurrence.
     spawned = None
-    if data.done is True and item.recurrence and item.recurrence != "none":
+    if newly_done and item.recurrence and item.recurrence != "none":
         spawned = await _spawn_next(session, item, principal.user_id)
     await record_change(session, list_id=list_id, item_id=item.id, kind="item.upsert")
     await notify_list(list_id, {"kind": "item.upsert", "list_id": str(list_id), "id": str(item.id)})
@@ -344,9 +349,20 @@ def _add_months(dt: datetime, months: int) -> datetime:
     return dt.replace(year=year, month=month, day=day)
 
 
-async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID) -> Item:
-    """Create the next occurrence of a recurring item (unchecked, next due date)."""
+async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID) -> Item | None:
+    """Create the next occurrence of a recurring item (unchecked, next due date).
+
+    Idempotent per source item: the occurrence records the id of the item it
+    was spawned from, and a unique index allows only one. Completing the same
+    item again (retry, concurrent request, uncheck + re-check) returns None
+    instead of creating a duplicate. Callers must have committed `item` first.
+    """
     from datetime import timedelta
+
+    existing = await session.execute(
+        select(Item.id).where(Item.recurrence_source_id == item.id).limit(1))
+    if existing.scalar_one_or_none() is not None:
+        return None
 
     now = utcnow()
     due = item.due_date or now
@@ -364,9 +380,16 @@ async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID) -> Item:
         created_by=user_id,
         recurrence=item.recurrence,
         due_date=next_due,
+        recurrence_source_id=item.id,
     )
     session.add(next_item)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # A concurrent completion won the race and already spawned it.
+        await session.rollback()
+        await session.refresh(item)  # rollback expired it; reload (async-safe)
+        return None
     await record_change(session, list_id=item.list_id, item_id=next_item.id, kind="item.upsert")
     await notify_list(item.list_id, {"kind": "item.upsert", "list_id": str(item.list_id), "id": str(next_item.id)})
     return next_item

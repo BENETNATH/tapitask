@@ -101,7 +101,12 @@ class ListMember(Base):
 
 class Item(Base):
     __tablename__ = "items"
-    __table_args__ = (Index("ix_items_list_updated", "list_id", "updated_at"),)
+    __table_args__ = (
+        Index("ix_items_list_updated", "list_id", "updated_at"),
+        # One spawned occurrence per completed recurring item, enforced by the
+        # DB: concurrent or repeated completions cannot create duplicates.
+        Index("ux_items_recurrence_source", "recurrence_source_id", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_id)
     list_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("lists.id", ondelete="CASCADE"), index=True)
@@ -113,6 +118,8 @@ class Item(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)
     recurrence: Mapped[str] = mapped_column(String(10), default="none", nullable=False)
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Id of the recurring item whose completion spawned this occurrence.
+    recurrence_source_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

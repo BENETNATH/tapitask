@@ -107,6 +107,7 @@ MIGRATIONS = [
     ("users", "settings", "TEXT", "TEXT"),
     ("items", "notes", "TEXT", "TEXT"),
     ("items", "assignee_id", "VARCHAR(36)", "UUID"),
+    ("items", "recurrence_source_id", "VARCHAR(36)", "UUID"),
 ]
 
 
@@ -180,6 +181,9 @@ async def _ensure_indexes() -> None:
         # hardening item); backstops the INSERT ... ON CONFLICT upserts.
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_list_members_list_user "
         "ON list_members (list_id, user_id)",
+        # Recurrence idempotency: at most one occurrence spawned per source.
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_items_recurrence_source "
+        "ON items (recurrence_source_id)",
     ):
         try:
             async with engine.begin() as conn:

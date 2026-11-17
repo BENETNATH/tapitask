@@ -392,6 +392,115 @@ async def test_recurrence_spawns_next(client):
 
 
 @pytest.mark.asyncio
+async def test_recurrence_repeated_completion_is_idempotent(client):
+    """Completing the same recurring item several times through REST (client
+    retry, agent calling check twice, uncheck + re-check) spawns exactly one
+    next occurrence."""
+    tokens = await register(client, "recidem@example.com")
+    h = auth_headers(tokens)
+    list_id = (await client.post("/lists", json={"title": "R"}, headers=h)).json()["id"]
+    item = (await client.post(
+        f"/lists/{list_id}/items",
+        json={"label": "Arroser", "recurrence": "daily"}, headers=h)).json()[0]
+    url = f"/lists/{list_id}/items/{item['id']}"
+
+    first = (await client.patch(url, json={"done": True}, headers=h)).json()
+    assert len(first) == 2
+    # same request replayed: already done -> nothing spawned
+    again = (await client.patch(url, json={"done": True}, headers=h)).json()
+    assert len(again) == 1 and again[0]["done"] is True
+    # uncheck then re-check: the occurrence for this item already exists
+    await client.patch(url, json={"done": False}, headers=h)
+    recheck = (await client.patch(url, json={"done": True}, headers=h)).json()
+    assert len(recheck) == 1
+
+    items = (await client.get(f"/lists/{list_id}/items", headers=h)).json()
+    pending = [i for i in items if i["label"] == "Arroser" and not i["done"]]
+    assert len(pending) == 1
+    assert pending[0]["id"] == first[1]["id"]
+
+    # the spawned occurrence still recurs normally when completed
+    nxt = (await client.patch(
+        f"/lists/{list_id}/items/{pending[0]['id']}", json={"done": True},
+        headers=h)).json()
+    assert len(nxt) == 2
+
+
+@pytest.mark.asyncio
+async def test_sync_recurrence_repeated_completion_is_idempotent(client):
+    """Same guarantee through the outbox path: replayed done=true events and
+    uncheck + re-check never create a second occurrence."""
+    from datetime import datetime, timedelta, timezone
+
+    t = await register(client, "recsyncidem@example.com")
+    h = auth_headers(t)
+    list_id = (await client.post("/lists", json={"title": "Rec"}, headers=h)).json()["id"]
+    item_id = (await client.post(f"/lists/{list_id}/items",
+               json={"label": "Sport", "recurrence": "daily"}, headers=h)).json()[0]["id"]
+
+    now = datetime.now(timezone.utc)
+
+    def ev(done: bool, ms: int) -> dict:
+        return {"kind": "item.upsert", "id": item_id, "list_id": list_id,
+                "label": "Sport", "done": done, "position": 0,
+                "recurrence": "daily",
+                "updated_at": (now + timedelta(milliseconds=ms)).isoformat()}
+
+    for done, ms in ((True, 100), (True, 200), (False, 300), (True, 400)):
+        r = await client.post("/sync", json={"events": [ev(done, ms)]}, headers=h)
+        assert r.status_code == 200
+
+    items = (await client.get(f"/lists/{list_id}/items", headers=h)).json()
+    pending = [i for i in items if i["label"] == "Sport" and not i["done"]]
+    assert len(pending) == 1
+
+
+@pytest.mark.asyncio
+async def test_recurrence_spawn_race_backstop(client, monkeypatch):
+    """Two concurrent completions can both pass the existence pre-check; the
+    unique index on recurrence_source_id must reject the second insert and
+    _spawn_next must return None with the source item still usable."""
+    from app.db import SessionLocal
+    from app.models import Item
+    from app.routers.lists import _spawn_next
+    from sqlalchemy import func, select
+
+    tokens = await register(client, "recrace@example.com")
+    h = auth_headers(tokens)
+    list_id = (await client.post("/lists", json={"title": "R"}, headers=h)).json()["id"]
+    item = (await client.post(
+        f"/lists/{list_id}/items",
+        json={"label": "Course", "recurrence": "weekly"}, headers=h)).json()[0]
+    await client.patch(f"/lists/{list_id}/items/{item['id']}",
+                       json={"done": True}, headers=h)  # spawns occurrence #1
+
+    class _NoRow:
+        def scalar_one_or_none(self):
+            return None
+
+    async with SessionLocal() as session:
+        source = (await session.execute(
+            select(Item).where(Item.label == "Course", Item.done.is_(True)))).scalar_one()
+        real_execute = session.execute
+        calls = {"n": 0}
+
+        async def blind_precheck(stmt, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:  # simulate losing the race: pre-check sees nothing
+                return _NoRow()
+            return await real_execute(stmt, *a, **k)
+
+        monkeypatch.setattr(session, "execute", blind_precheck)
+        assert await _spawn_next(session, source, source.created_by) is None
+        assert source.label == "Course"  # reloaded after rollback, not expired
+        monkeypatch.undo()
+        count = (await session.execute(
+            select(func.count()).select_from(Item)
+            .where(Item.recurrence_source_id == source.id))).scalar_one()
+    assert count == 1
+
+
+@pytest.mark.asyncio
 async def test_summary_and_purge(client):
     tokens = await register(client, "sum@example.com")
     h = auth_headers(tokens)
