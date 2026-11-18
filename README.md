@@ -168,7 +168,8 @@ défaut** ; la lecture+écriture exige de taper `write`. La clé est enregistré
 imprime ce qu'il faut déclarer dans votre client MCP (serveur MCP, transport stdio) :
 
 ```text
-command: /usr/bin/python3 /chemin/vers/tapitask/server/mcp_server.py
+command: "/usr/bin/python3"
+args: ["/chemin/vers/tapitask/server/mcp_server.py"]
 environment:
   CHECKLISTS_URL=https://checklists.example.com
   CHECKLISTS_API_KEY_FILE=/home/vous/.config/tapitask/agent-groceries-ro.key
