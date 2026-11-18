@@ -16,6 +16,18 @@ import "ui/todo_all_screen.dart";
 final appState = AppState();
 TrayController? trayController;
 
+// Routes nommées partagées par MaterialApp (test de régression
+// red_screen_regression_test.dart importe ce map). "/home" est conservé :
+// login_screen fait pushReplacementNamed("/home").
+final appRoutes = <String, WidgetBuilder>{
+  "/home": (_) => HomeScreen(state: appState),
+  "/list": (_) => const ListScreenRoute(),
+  "/login": (_) => LoginScreen(state: appState),
+  "/settings": (_) => SettingsScreen(state: appState),
+  "/today": (_) => TodayScreen(state: appState),
+  "/todo": (_) => TodoAllScreen(state: appState),
+};
+
 Future<void> main(List<String> args) async {
   debugPrint("TAPITASK-FLOW main: start");
   WidgetsFlutterBinding.ensureInitialized();
@@ -121,15 +133,11 @@ class _ChecklistsAppState extends State<ChecklistsApp>
         useMaterial3: true,
       ),
       themeMode: _themeMode,
-      initialRoute: "/home",
-      routes: {
-        "/home": (_) => HomeScreen(state: appState),
-        "/list": (_) => const ListScreenRoute(),
-        "/login": (_) => LoginScreen(state: appState),
-        "/settings": (_) => SettingsScreen(state: appState),
-        "/today": (_) => TodayScreen(state: appState),
-        "/todo": (_) => TodoAllScreen(state: appState),
-      },
+      // home: au lieu de initialRoute — le fallback "/" du moteur résout
+      // toujours, quelle que soit l'initial route envoyée (launcher "/",
+      // widget "tapitask://home" / "tapitask://quickadd/<id>").
+      home: HomeScreen(state: appState),
+      routes: appRoutes,
     );
   }
 }
