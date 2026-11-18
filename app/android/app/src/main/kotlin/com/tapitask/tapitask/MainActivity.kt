@@ -29,6 +29,17 @@ class MainActivity : FlutterActivity() {
         intent.data = null
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        // getIntent() peut être null sur recreation système (return recents
+        // après kill process) : super.onSaveInstanceState →
+        // shouldRestoreAndSaveState() → NPE fatal (FlutterActivity.java:1499,
+        // sans test de nullité côté engine). Sans intent, l'état à restaurer
+        // n'existe pas : sauter le save (recreate = démarrage frais).
+        if (getIntent() != null) {
+            super.onSaveInstanceState(outState)
+        }
+    }
+
     private fun launchUriFrom(intent: Intent?): String? =
         if (intent?.action == TapitaskActions.ACTION_LAUNCH)
             intent.dataString else null
