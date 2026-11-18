@@ -223,6 +223,7 @@ class ListWidgetProvider : AppWidgetProvider() {
             Intent(context, WidgetItemsRemoteViewsService::class.java)
                 .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))
         appWidgetManager.updateAppWidget(appWidgetId, views)
+        appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_items)
     }
 
     private fun bindCycle(
