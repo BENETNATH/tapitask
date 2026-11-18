@@ -7,3 +7,4 @@ server/.venv/
 build/
 *.sqlite
 app/lib/data/database.g.dart
+*.log
