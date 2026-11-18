@@ -377,12 +377,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _header(S.account),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _tapRow(
-                S.accountAndServer,
-                s.api.baseUrl.isEmpty ? S.notConfigured : s.api.baseUrl,
-                () => Navigator.pushNamed(context, "/login")),
+            child: s.api.accessToken == null
+                ? SizedBox(
+                    height: 44,
+                    child: ElevatedButton.icon(
+                      onPressed: () =>
+                          Navigator.pushNamed(context, "/login"),
+                      icon: const Icon(Icons.login),
+                      label: Text(S.login),
+                    ),
+                  )
+                : _tapRow(
+                    S.accountAndServer,
+                    s.api.baseUrl.isEmpty ? S.notConfigured : s.api.baseUrl,
+                    () => Navigator.pushNamed(context, "/login")),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 48),
         ],
       ),
     );

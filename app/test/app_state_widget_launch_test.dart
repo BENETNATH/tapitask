@@ -12,13 +12,14 @@ import "package:tapitask/state/app_state.dart";
 void main() {
   const kListId = "11111111-2222-3333-4444-555555555555";
 
-  /// AppState prêt pour un launch widget : 1 liste visible, session posée.
-  Future<(AppDb, AppState)> makeState() async {
+  /// AppState prêt pour un launch widget : 1 liste visible,
+  /// [withToken] = false → sans session (accessToken resté null).
+  Future<(AppDb, AppState)> makeState({bool withToken = true}) async {
     SharedPreferences.setMockInitialValues({});
     final db = AppDb.forTesting(NativeDatabase.memory());
     final state = AppState(db: db);
     state.api = await ApiClient.load();
-    state.api.accessToken = "test-token";
+    if (withToken) state.api.accessToken = "test-token";
     await db.upsertList(LocalListsCompanion(
       id: const Value(kListId),
       title: const Value("Achats"),
@@ -51,6 +52,33 @@ void main() {
     expect(state.quickAddRequested, isTrue);
 
     tick.value++; // frame programmée (vsync)
+    await tester.pump(); // post-frame
+    expect(notified, 1);
+    expect(state.quickAddListId, kListId);
+    await db.close();
+  });
+
+  testWidgets(
+      "quickadd sans session : flags posés (notify différé post-frame), id liste posé",
+      (tester) async {
+    final (db, state) = await makeState(withToken: false);
+    expect(state.api.accessToken, isNull);
+    var notified = 0;
+    state.addListener(() => notified++);
+    final tick = ValueNotifier(0);
+    await tester.pumpWidget(MaterialApp(
+        home: ValueListenableBuilder<int>(
+            valueListenable: tick,
+            builder: (_, v, __) => Scaffold(body: Text('$v')))));
+    await tester.pump();
+
+    notified = 0;
+    await state.applyWidgetUriForTesting(
+        Uri.parse("tapitask://quickadd?list=$kListId"));
+    expect(notified, 0, reason: "pas de notify avant le post-frame");
+    expect(state.quickAddRequested, isTrue);
+
+    tick.value++;
     await tester.pump(); // post-frame
     expect(notified, 1);
     expect(state.quickAddListId, kListId);

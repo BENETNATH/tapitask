@@ -195,6 +195,10 @@ class ListWidgetProvider : AppWidgetProvider() {
                     b = (Color.blue(c) + 255 * 3) / 4
                 }
                 views.setInt(R.id.widget_root, "setBackgroundColor", Color.rgb(r, g, b))
+            } else {
+                // Liste sans couleur : fond par thème (clair = default du drawable).
+                views.setInt(R.id.widget_root, "setBackgroundColor",
+                    if (dark) Color.rgb(27, 27, 27) else Color.rgb(247, 250, 250))
             }
         } catch (_: Exception) {
         }

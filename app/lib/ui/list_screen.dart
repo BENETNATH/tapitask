@@ -34,9 +34,13 @@ class _ListScreenState extends State<ListScreen> {
     super.initState();
     widget.state.addListener(_onChanged);
     if (widget.focusAdd) {
-      // Post-frame : le focus (donc le clavier) une fois l'arbre monté.
+      // Différé ~400 ms : après un cold-start, la fenêtre a demandé
+      // SOFT_INPUT_STATE_VISIBLE à l'onResume sans cible de saisie ; un
+      // requestFocus trop tôt (au montage/post-frame) a son show IME avalé,
+      // le clavier ne s'ouvre qu'au prochain tap.
       debugPrint("TAPITASK-FLOW ListScreen: focusAdd scheduled");
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future<void>.delayed(const Duration(milliseconds: 400), () {
+        if (!mounted) return;
         debugPrint("TAPITASK-FLOW ListScreen: requestFocus (mounted=$mounted)");
         _addFocus.requestFocus();
       });

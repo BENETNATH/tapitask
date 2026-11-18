@@ -144,14 +144,12 @@ class AppState extends ChangeNotifier {
   }
 
   /// URI de lancement d'un widget : validation stricte (scheme/path/uuid)
-  /// + membership via les listes visibles localement, session requise.
+  /// + membership via les listes visibles localement. Local-first : la
+  /// navigation et l'écriture locale marchent hors session ; l'item sera
+  /// synchronisé au prochain login (dirty outbox).
   Future<void> _applyWidgetUri(Uri? uri) async {
     if (uri == null || uri.scheme != "tapitask") {
       debugPrint("TAPITASK-FLOW applyWidgetUri: $uri → bad-scheme");
-      return;
-    }
-    if (api.accessToken == null) {
-      debugPrint("TAPITASK-FLOW applyWidgetUri: $uri → no-token");
       return;
     }
     if (uri.path != "quickadd" && uri.host != "quickadd") {
