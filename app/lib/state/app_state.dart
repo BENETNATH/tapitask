@@ -12,6 +12,7 @@ import "../data/api_client.dart";
 import "../l10n/s.dart";
 import "../data/database.dart";
 import "../data/sync_service.dart";
+import "../ui/due_format.dart";
 
 import "../platform/alert_service.dart";
 import "../platform/widget_service_web.dart"
@@ -300,10 +301,8 @@ class AppState extends ChangeNotifier {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final d = DateTime(due.year, due.month, due.day);
-    if (d == today) return S.t("today");
-    if (d == today.add(const Duration(days: 1))) return S.t("tomorrow");
     if (d.isBefore(today)) return S.t("overdueSuffix").trim();
-    return "${d.day}/${d.month}";
+    return dueLabel(d, withTime: false);
   }
 
   // ---- Flyout pin (native Win32 popup) ----

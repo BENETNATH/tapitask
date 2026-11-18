@@ -70,7 +70,6 @@ class S {
     "emailVerified": "Email vérifié — tu peux te connecter ✔",
     "emailOptional": "facultatif",
     "notConfigured": "Non configuré",
-    "emailVerifiedShort": "Email vérifié",
     // --- listes / items ---
     "nothingToDo": "Rien à faire",
     "nothingToDoAdd": "Rien à faire — ajoutez un item !",
@@ -95,9 +94,6 @@ class S {
     "daily": "Quotidien",
     "weekly": "Hebdomadaire",
     "monthly": "Mensuel",
-    "dailyLabel": "quotidien",
-    "weeklyLabel": "hebdomadaire",
-    "monthlyLabel": "mensuel",
     "cleanDone": "Nettoyer les items cochés",
     "cleanDoneConfirm": "Nettoyer les cochés ?",
     "cleanDoneBody": "Les items cochés seront archivés (suppression douce).",
@@ -115,7 +111,6 @@ class S {
     "folder": "Dossier",
     "folderEllipsis": "Dossier…",
     "folderName": "Nom du dossier",
-    "groupByFolder": "Regrouper les listes par dossier",
     "shareFolder": "Partager le dossier",
     // --- partage ---
     "shareList": "Partager la liste",
@@ -132,7 +127,6 @@ class S {
     "roleOwner": "propriétaire",
     "roleEditor": "editor",
     "roleViewer": "viewer",
-    "invitationsSent": "Invitations envoyées",
     // --- réglages ---
     "features": "Fonctionnalités",
     "featuresHelp": "Activez uniquement ce dont vous avez besoin — l'interface reste minimale tant que tout est décoché.",
@@ -162,9 +156,7 @@ class S {
     "byEmail": "Par email",
     "byEmailHelp": "Invitations, partages de listes (envoyés par le serveur)",
     "syncSection": "Synchronisation",
-    "refreshDelay": "Délai de rafraîchissement",
     "syncDelay": "Délai de synchronisation",
-    "enableSync": "Activer la synchro",
     "appearance": "Apparence",
     "theme": "Thème",
     "themeSystem": "Système",
@@ -181,7 +173,6 @@ class S {
     "quickPanel": "Volet rapide",
     "quit": "Quitter",
     "openApp": "Ouvrir l'application",
-    "pinAlwaysVisible": "Toujours visible (épinglé)",
     "pinEnable": "Épingler : toujours visible",
     "pin": "Épingler",
     "unpin": "Détacher",
@@ -270,7 +261,6 @@ class S {
     "emailVerified": "Email verified — you can sign in ✔",
     "emailOptional": "optional",
     "notConfigured": "Not configured",
-    "emailVerifiedShort": "Email verified",
     "nothingToDo": "Nothing to do",
     "nothingToDoAdd": "Nothing to do — add an item!",
     "nothingToday": "Nothing due today",
@@ -291,9 +281,6 @@ class S {
     "daily": "Daily",
     "weekly": "Weekly",
     "monthly": "Monthly",
-    "dailyLabel": "daily",
-    "weeklyLabel": "weekly",
-    "monthlyLabel": "monthly",
     "cleanDone": "Clean checked items",
     "cleanDoneConfirm": "Clean checked items?",
     "cleanDoneBody": "Checked items will be archived (soft delete).",
@@ -310,7 +297,6 @@ class S {
     "folder": "Folder",
     "folderEllipsis": "Folder…",
     "folderName": "Folder name",
-    "groupByFolder": "Group lists by folder",
     "shareFolder": "Share folder",
     "shareList": "Share the list",
     "members": "Members",
@@ -326,7 +312,6 @@ class S {
     "roleOwner": "owner",
     "roleEditor": "editor",
     "roleViewer": "viewer",
-    "invitationsSent": "Invitations sent",
     "features": "Features",
     "featuresHelp": "Enable only what you need — the interface stays minimal while everything is off.",
     "alerts": "Alerts",
@@ -355,9 +340,7 @@ class S {
     "byEmail": "By email",
     "byEmailHelp": "Invitations, list sharing (sent by the server)",
     "syncSection": "Synchronization",
-    "refreshDelay": "Refresh interval",
     "syncDelay": "Sync interval",
-    "enableSync": "Enable sync",
     "appearance": "Appearance",
     "theme": "Theme",
     "themeSystem": "System",
@@ -373,7 +356,6 @@ class S {
     "quickPanel": "Quick panel",
     "quit": "Quit",
     "openApp": "Open the app",
-    "pinAlwaysVisible": "Always on top (pinned)",
     "pinEnable": "Pin: always visible",
     "pin": "Pin",
     "unpin": "Unpin",
@@ -401,6 +383,7 @@ class S {
     "sunday": "Sunday",
     "addButton": "Add",
     "deleteAction": "Delete",
+    "openAction": "Open",
   };
 
   /// Apply the synced per-user language ("fr", "en"…). Unknown -> French.
@@ -437,6 +420,9 @@ class S {
   static String get undo => t("undo");
   static String get today => t("today");
   static String get tomorrow => t("tomorrow");
+  static String get todayLabel => t("todayLabel");
+  static String get tomorrowLabel => t("tomorrowLabel");
+  static String get yesterdayOverdue => t("yesterdayOverdue");
   static String get dayAfterTomorrow => t("dayAfterTomorrow");
   static String get every30s => t("every30s");
   static String get every30sShort => t("every30sShort");
@@ -515,7 +501,6 @@ class S {
   static String get folder => t("folder");
   static String get folderEllipsis => t("folderEllipsis");
   static String get folderName => t("folderName");
-  static String get groupByFolder => t("groupByFolder");
   static String get shareFolder => t("shareFolder");
   static String get shareList => t("shareList");
   static String get members => t("members");
@@ -529,6 +514,8 @@ class S {
   static String get codeCopied => t("codeCopied");
   static String get listAdded => t("listAdded");
   static String get roleOwner => t("roleOwner");
+  static String get roleEditor => t("roleEditor");
+  static String get roleViewer => t("roleViewer");
   static String get features => t("features");
   static String get featuresHelp => t("featuresHelp");
   static String get alerts => t("alerts");
@@ -557,9 +544,7 @@ class S {
   static String get byEmail => t("byEmail");
   static String get byEmailHelp => t("byEmailHelp");
   static String get syncSection => t("syncSection");
-  static String get refreshDelay => t("refreshDelay");
   static String get syncDelay => t("syncDelay");
-  static String get enableSync => t("enableSync");
   static String get appearance => t("appearance");
   static String get theme => t("theme");
   static String get themeSystem => t("themeSystem");
@@ -569,7 +554,6 @@ class S {
   static String get quickPanel => t("quickPanel");
   static String get quit => t("quit");
   static String get openApp => t("openApp");
-  static String get pinAlwaysVisible => t("pinAlwaysVisible");
   static String get pinEnable => t("pinEnable");
   static String get pin => t("pin");
   static String get unpin => t("unpin");
@@ -580,7 +564,6 @@ class S {
   static String get prevList => t("prevList");
   static String get nextList => t("nextList");
   static String get switchList => t("switchList");
-  static String get adminRole => t("admin");
   static String get promoteAdmin => t("promoteAdmin");
   static String get demoteAdmin => t("demoteAdmin");
   static String get activate => t("activate");
@@ -596,7 +579,6 @@ class S {
   static String dueDateOf(String label) => "${t("dueDate")} — $label";
   static String shareFolderOf(String folder) => "${t("shareFolder")} « $folder »";
   static String deleteListOf(String title) => "${t("delete")} « $title » ?";
-  static String roleOf(String role) => "${t("adminRole")} · rôle : $role";
   static String nInFolder(int n) => "$n ${n > 1 ? "listes" : "liste"}";
   static String nDueToday(int n) => "$n à faire aujourd'hui";
 }

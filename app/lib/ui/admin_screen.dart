@@ -134,7 +134,7 @@ class _AdminScreenState extends State<AdminScreen> {
                   ),
                   title: Text(u["email"]),
                   subtitle: Text(
-                      "${u["is_admin"] ? "admin · " : ""}${u["is_active"] ? "actif" : S.disabled}"),
+                      "${u["is_admin"] ? "admin · " : ""}${u["is_active"] ? S.active : S.disabled}"),
                   trailing: PopupMenuButton<String>(
                     onSelected: (action) async {
                       try {
@@ -165,7 +165,7 @@ class _AdminScreenState extends State<AdminScreen> {
                         value: "admin",
                         child: Text(u["is_admin"]
                             ? S.demoteAdmin
-                            : "Promouvoir admin"),
+                            : S.promoteAdmin),
                       ),
                       PopupMenuItem(
                         value: "reset",

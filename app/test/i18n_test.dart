@@ -28,11 +28,18 @@ void main() {
       S.ok, S.cancel, S.settings, S.login, S.dueDate, S.folders,
       S.members, S.features, S.notifications, S.syncSection,
       S.appearance, S.compact, S.flyoutClose, S.promoteAdmin,
+      S.active, S.roleViewer, S.roleEditor,
       S.t("monday"), S.t("sunday"), S.unpin, S.pollOff,
     ]) {
       expect(probe.isNotEmpty, true);
       expect(probe.contains("é"), false, reason: probe);
     }
+    S.setLocale("fr");
+  });
+
+  test("i18n : openAction traduite en EN (lot T, T5)", () {
+    S.setLocale("en");
+    expect(S.openAction, "Open");
     S.setLocale("fr");
   });
 }

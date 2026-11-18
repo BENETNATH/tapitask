@@ -39,4 +39,33 @@ void main() {
             "dialogue d'aide (avant fix : le tap ne fait rien)");
     await db.close();
   });
+
+  testWidgets("T1 : le switch « Actions visibles » écrit visible_actions",
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDb.forTesting(NativeDatabase.memory());
+    final state = AppState(db: db);
+    state.api = await ApiClient.load();
+    state.settings["visible_actions"] = true;
+
+    tester.view.physicalSize = const Size(720, 1280);
+    tester.view.devicePixelRatio = 2.0;
+    await tester.pumpWidget(MaterialApp(
+        localizationsDelegates: const [GlobalMaterialLocalizations.delegate],
+        home: SettingsScreen(state: state)));
+    await tester.pumpAndSettle();
+
+    final row = find
+        .ancestor(of: find.text(S.visibleActions), matching: find.byType(Row))
+        .first;
+    final sw = find.descendant(of: row, matching: find.byType(Switch)).first;
+    expect(tester.widget<Switch>(sw).value, true);
+    await tester.tap(sw);
+    await tester.pumpAndSettle();
+
+    expect(state.settings["visible_actions"], false,
+        reason: "T1 : le toggle doit écrire visible_actions (avant fix : "
+            "il écrivait une autre clé — le réglage n'avait aucun effet)");
+    await db.close();
+  });
 }

@@ -1,10 +1,11 @@
 import "package:material_ui/material_ui.dart";
 import "package:flutter/services.dart";
 
+import "../data/database.dart";
 import "../state/app_state.dart";
 import "../l10n/s.dart";
 
-/// Recherche globale (Ctrl+K côté bureau) sur tous les items de toutes les listes.
+/// Recherche globale (Ctrl+F côté bureau) sur tous les items de toutes les listes.
 class SearchScreen extends StatefulWidget {
   final AppState state;
   const SearchScreen({super.key, required this.state});
@@ -15,7 +16,7 @@ class SearchScreen extends StatefulWidget {
 
 class _SearchScreenState extends State<SearchScreen> {
   final _controller = TextEditingController();
-  List<dynamic>? _results;
+  List<LocalItem>? _results;
   Map<String, String> _listTitles = {};
   // Debounce: one DB query per typing pause, not one per keystroke.
   int _searchGeneration = 0;

@@ -6,6 +6,8 @@ import "package:flutter/services.dart";
 
 import "../data/database.dart";
 import "../state/app_state.dart";
+import "due_format.dart";
+import "list_dialogs.dart";
 import "share_screen.dart";
 import "../l10n/s.dart";
 
@@ -96,96 +98,21 @@ class _ListScreenState extends State<ListScreen> {
   }
 
   Future<void> _renameList(LocalList list) async {
-    final controller = TextEditingController(text: list.title);
-    final title = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(S.renameList),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          onSubmitted: (v) => Navigator.pop(context, v),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context), child: const Text("Annuler")),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text),
-              child: Text(S.rename)),
-        ],
-      ),
-    );
+    final title = await renameListDialog(context, list);
     if (title != null && title.trim().isNotEmpty) {
       await widget.state.renameList(list.id, title.trim());
     }
   }
 
   Future<void> _pickColor(LocalList list) async {
-    const palette = [
-      null,
-      "#00897B", "#43A047", "#1E88E5", "#5E35B1", "#D32F2F",
-      "#F4511E", "#F6BF26", "#6D4C41", "#546E7A", "#37474F",
-    ];
-    final choice = await showDialog<String?>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(S.listColor),
-        content: Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            for (final hex in palette)
-              InkWell(
-                onTap: () => Navigator.pop(context, hex),
-                child: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: hex == null
-                        ? null
-                        : Color(int.parse(hex.replaceFirst("#", "0xFF"))),
-                    border: Border.all(
-                        color: Theme.of(context).colorScheme.outline),
-                    shape: BoxShape.circle,
-                  ),
-                  child: hex == null
-                      ? const Icon(Icons.format_color_reset, size: 20)
-                      : null,
-                ),
-              ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context), child: Text(S.close)),
-        ],
-      ),
-    );
+    final choice = await pickListColorDialog(context);
     if (choice != list.color) {
       await widget.state.setListColor(list.id, choice);
     }
   }
 
   Future<void> _deleteList(LocalList list) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text("Supprimer « ${list.title} » ?"),
-        content: Text(S.deleteListBody),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text("Annuler")),
-          FilledButton.tonalIcon(
-              icon: const Icon(Icons.delete_outline),
-              style: FilledButton.styleFrom(
-                  backgroundColor: Theme.of(context).colorScheme.errorContainer),
-              onPressed: () => Navigator.pop(context, true),
-              label: Text(S.delete)),
-        ],
-      ),
-    );
-    if (confirmed == true) {
+    if (await deleteListDialog(context, list)) {
       await widget.state.deleteList(list.id);
       if (mounted) Navigator.pop(context);
     }
@@ -282,7 +209,7 @@ class _ListScreenState extends State<ListScreen> {
                     actions: [
                       TextButton(
                           onPressed: () => Navigator.pop(context, false),
-                          child: const Text("Annuler")),
+                          child: Text(S.cancel)),
                       FilledButton(
                           onPressed: () => Navigator.pop(context, true),
                           child: Text(S.clean)),
@@ -752,7 +679,7 @@ class _ListScreenState extends State<ListScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context), child: const Text("Annuler")),
+              onPressed: () => Navigator.pop(context), child: Text(S.cancel)),
           FilledButton(
               onPressed: () => Navigator.pop(context, controller.text),
               child: Text(S.ok)),
@@ -764,35 +691,9 @@ class _ListScreenState extends State<ListScreen> {
     }
   }
 
-  String _dueLabel(DateTime d) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final day = DateTime(d.year, d.month, d.day);
-    final diff = day.difference(today).inDays;
-    final hh = d.hour.toString().padLeft(2, "0");
-    final mm = d.minute.toString().padLeft(2, "0");
-    switch (diff) {
-      case 0:
-        return "aujourd'hui ${d.hour == 0 && d.minute == 0 ? "" : "$hh:$mm"}".trim();
-      case 1:
-        return "demain ${d.hour == 0 && d.minute == 0 ? "" : "$hh:$mm"}".trim();
-      case -1:
-        return "hier (en retard)";
-      default:
-        return "${day.day}/${day.month}${d.hour == 0 && d.minute == 0 ? "" : " $hh:$mm"}";
-    }
-  }
+  String _dueLabel(DateTime d) => dueLabel(d, withTime: true);
 
-  Future<LocalList?> _list() async {
-    try {
-      return await (widget.state.db
-              .select(widget.state.db.localLists)
-            ..where((l) => l.id.equals(_listId)))
-          .getSingle();
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<LocalList?> _list() => widget.state.db.getList(_listId);
 
   Widget _subtitlePart(IconData icon, String text, {Color? color}) => Row(
       mainAxisSize: MainAxisSize.min,

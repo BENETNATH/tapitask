@@ -179,6 +179,17 @@ class AppDb extends _$AppDb {
     );
   }
 
+  /// Single list by id, or null (try/getSingle/catch → null partagé par
+  /// list/today/todo-all, spec lot T, T9).
+  Future<LocalList?> getList(String id) async {
+    try {
+      return await (select(localLists)..where((l) => l.id.equals(id)))
+          .getSingle();
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ---- Items ----
 
   Future<List<LocalItem>> itemsOf(String listId) {
@@ -250,23 +261,6 @@ class AppDb extends _$AppDb {
     );
   }
 
-  /// Every unchecked item across every synced list, grouped by list.
-  Future<List<LocalItem>> allUncheckedItems() async {
-    final q = select(localItems).join([
-      innerJoin(localLists, localLists.id.equalsExp(localItems.listId)),
-    ]);
-    q.where(localItems.deleted.equals(false) &
-        localItems.done.equals(false) &
-        localLists.localOnly.equals(false) &
-        localLists.deleted.equals(false));
-    q.orderBy([
-      OrderingTerm.asc(localLists.title),
-      OrderingTerm.asc(localItems.position),
-    ]);
-    final rows = await q.get();
-    return rows.map((r) => r.readTable(localItems)).toList();
-  }
-
   /// Items due today or overdue, across every synced list.
   /// [endOfDay] is exclusive: defaults to the start of tomorrow.
   Future<List<LocalItem>> dueItems([DateTime? endOfDay]) async {
@@ -294,10 +288,6 @@ class AppDb extends _$AppDb {
           updatedAt: Value(now),
           dirty: const Value(true)),
     );
-  }
-
-  Future<LocalItem> getItem(String id) async {
-    return (select(localItems)..where((i) => i.id.equals(id))).getSingle();
   }
 
   Future<void> deleteItem(String id, DateTime now) async {

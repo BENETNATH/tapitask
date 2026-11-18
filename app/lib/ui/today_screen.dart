@@ -107,14 +107,5 @@ class _TodayScreenState extends State<TodayScreen> {
     );
   }
 
-  Future<LocalList?> _listOf(String id) async {
-    try {
-      return await (widget.state.db
-              .select(widget.state.db.localLists)
-            ..where((l) => l.id.equals(id)))
-          .getSingle();
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<LocalList?> _listOf(String id) => widget.state.db.getList(id);
 }

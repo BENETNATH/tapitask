@@ -162,9 +162,9 @@ class _ShareScreenState extends State<ShareScreen> {
               const SizedBox(width: 8),
               DropdownButton<String>(
                 value: _role,
-                items: const [
-                  DropdownMenuItem(value: "viewer", child: Text("Viewer")),
-                  DropdownMenuItem(value: "editor", child: Text("Editor")),
+                items: [
+                  DropdownMenuItem(value: "viewer", child: Text(S.roleViewer)),
+                  DropdownMenuItem(value: "editor", child: Text(S.roleEditor)),
                 ],
                 onChanged: (v) => setState(() => _role = v ?? "viewer"),
               ),
@@ -209,7 +209,7 @@ class _ShareScreenState extends State<ShareScreen> {
                   title: Text(m["email"] ?? ""),
                   subtitle: isOwner
                       ? Text(S.roleOwner)
-                      : Text("rôle : $role"),
+                      : Text(role == "viewer" ? S.roleViewer : S.roleEditor),
                   trailing: isOwner
                       ? null
                       : Row(
@@ -218,11 +218,11 @@ class _ShareScreenState extends State<ShareScreen> {
                             DropdownButton<String>(
                               value: role,
                               underline: const SizedBox.shrink(),
-                              items: const [
+                              items: [
                                 DropdownMenuItem(
-                                    value: "viewer", child: Text("Viewer")),
+                                    value: "viewer", child: Text(S.roleViewer)),
                                 DropdownMenuItem(
-                                    value: "editor", child: Text("Editor")),
+                                    value: "editor", child: Text(S.roleEditor)),
                               ],
                               onChanged: (v) {
                                 if (v != null && v != role) {

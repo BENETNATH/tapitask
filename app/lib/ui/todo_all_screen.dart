@@ -3,6 +3,7 @@ import "package:material_ui/material_ui.dart";
 import "../data/database.dart";
 import "../l10n/s.dart";
 import "../state/app_state.dart";
+import "due_format.dart";
 
 /// Vue « À faire » : tous les items non cochés, toutes listes confondues
 /// (uniquement les listes synchronisées), groupés par liste.
@@ -100,26 +101,7 @@ class _TodoAllScreenState extends State<TodoAllScreen> {
     );
   }
 
-  String _fmtDue(DateTime d) {
-    final local = d.toLocal();
-    final today = DateTime.now();
-    final day = DateTime(today.year, today.month, today.day);
-    final diff = DateTime(local.year, local.month, local.day)
-        .difference(day)
-        .inDays;
-    if (diff == 0) return "aujourd'hui";
-    if (diff == 1) return "demain";
-    return "${local.day}/${local.month}";
-  }
+  String _fmtDue(DateTime d) => dueLabel(d.toLocal(), withTime: false);
 
-  Future<LocalList?> _listOf(String id) async {
-    try {
-      return await (widget.state.db
-              .select(widget.state.db.localLists)
-            ..where((l) => l.id.equals(id)))
-          .getSingle();
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<LocalList?> _listOf(String id) => widget.state.db.getList(id);
 }

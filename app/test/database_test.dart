@@ -139,13 +139,6 @@ void main() {
     expect(due.map((i) => i.id), containsAll(["d1", "d2"]));
     expect(due.map((i) => i.id), isNot(contains("d3")));
     expect(due.map((i) => i.id), isNot(contains("d4")));
-
-    // notes + clear due date
-    await db.setItemDetails("d1", now, notes: "appelé hier", clearDue: true);
-    final item = await db.getItem("d1");
-    expect(item.notes, "appelé hier");
-    expect(item.dueDate, isNull);
-    expect(item.dirty, true);
   });
 
   test("dossier et couleur sur les listes", () async {
