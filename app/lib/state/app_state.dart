@@ -116,7 +116,6 @@ class AppState extends ChangeNotifier {
         _widgetChannel.setMethodCallHandler(_onWidgetLaunch);
         final cold =
             await _widgetChannel.invokeMethod<String>("getLaunchUri");
-        debugPrint("TAPITASK-FLOW init: getLaunchUri → $cold");
         await _applyWidgetUri(cold == null ? null : Uri.parse(cold));
       } else {
         try {
@@ -149,28 +148,22 @@ class AppState extends ChangeNotifier {
   /// synchronisé au prochain login (dirty outbox).
   Future<void> _applyWidgetUri(Uri? uri) async {
     if (uri == null || uri.scheme != "tapitask") {
-      debugPrint("TAPITASK-FLOW applyWidgetUri: $uri → bad-scheme");
       return;
     }
     if (uri.path != "quickadd" && uri.host != "quickadd") {
-      debugPrint("TAPITASK-FLOW applyWidgetUri: $uri → bad-path");
       return;
     }
     final ids = (await db.visibleLists()).map((l) => l.id).toSet();
     final list = validateQuickAddUri(uri, ids);
     if (list == null) {
-      debugPrint("TAPITASK-FLOW applyWidgetUri: $uri → bad-list");
       return;
     }
     quickAddRequested = true;
     quickAddListId = list.isEmpty ? null : list;
-    debugPrint(
-        "TAPITASK-FLOW applyWidgetUri: $uri → quickAddRequested (post-frame)");
     // Post-frame : le push natif ne doit pas muter l'arbre au milieu d'une
     // frame (spec lot F, crash 2).
     SchedulerBinding.instance
         .addPostFrameCallback((_) {
-      debugPrint("TAPITASK-FLOW post-frame: widget notifyListeners");
       notifyListeners();
     });
   }
@@ -211,7 +204,6 @@ class AppState extends ChangeNotifier {
   Future<void> applyWidgetToggles() async {
     try {
       final ids = await WidgetService.pendingToggles();
-      debugPrint("TAPITASK-FLOW applyWidgetToggles: ${ids.length} id(s)");
       if (ids.isEmpty) return;
       final now = DateTime.now().toUtc();
       for (final id in ids) {

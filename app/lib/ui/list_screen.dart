@@ -67,10 +67,8 @@ class _ListScreenState extends State<ListScreen> {
       // SOFT_INPUT_STATE_VISIBLE à l'onResume sans cible de saisie ; un
       // requestFocus trop tôt (au montage/post-frame) a son show IME avalé,
       // le clavier ne s'ouvre qu'au prochain tap.
-      debugPrint("TAPITASK-FLOW ListScreen: focusAdd scheduled");
       Future<void>.delayed(const Duration(milliseconds: 400), () {
         if (!mounted) return;
-        debugPrint("TAPITASK-FLOW ListScreen: requestFocus (mounted=$mounted)");
         _addFocus.requestFocus();
       });
     }

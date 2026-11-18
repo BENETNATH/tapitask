@@ -58,8 +58,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Opened from the 1x1 quick-add widget: preselect a list and focus add.
   Future<void> _maybeQuickAdd() async {
-    debugPrint("TAPITASK-FLOW maybeQuickAdd: enter "
-        "requested=${widget.state.quickAddRequested}");
     // `quickAddRequested` EST la garde par requête (le latch permanent
     // bloquait toute relance warm — lot Q / Q1). Lecture → effacement
     // synchrones avant tout await : le 2e call-site du même post-frame
@@ -74,7 +72,6 @@ class _HomeScreenState extends State<HomeScreen> {
       final visible = await widget.state.db.visibleLists();
       if (!visible.any((l) => l.id == target)) return;
       if (!mounted) return;
-      debugPrint("TAPITASK-FLOW maybeQuickAdd: push ListScreen $target");
       await Navigator.push(
         context,
         MaterialPageRoute(
@@ -92,7 +89,6 @@ class _HomeScreenState extends State<HomeScreen> {
       final pinned = await widget.state.db.pinnedLists();
       final fallback = pinned.isNotEmpty ? pinned.first : lists.first;
       if (!mounted) return;
-      debugPrint("TAPITASK-FLOW maybeQuickAdd: push ListScreen ${fallback.id}");
       await Navigator.push(
         context,
         MaterialPageRoute(
