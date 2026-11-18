@@ -35,8 +35,11 @@ class _ListScreenState extends State<ListScreen> {
     widget.state.addListener(_onChanged);
     if (widget.focusAdd) {
       // Post-frame : le focus (donc le clavier) une fois l'arbre monté.
-      WidgetsBinding.instance
-          .addPostFrameCallback((_) => _addFocus.requestFocus());
+      debugPrint("TAPITASK-FLOW ListScreen: focusAdd scheduled");
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        debugPrint("TAPITASK-FLOW ListScreen: requestFocus (mounted=$mounted)");
+        _addFocus.requestFocus();
+      });
     }
   }
 

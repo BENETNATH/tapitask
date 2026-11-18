@@ -17,14 +17,32 @@ final appState = AppState();
 TrayController? trayController;
 
 Future<void> main(List<String> args) async {
+  debugPrint("TAPITASK-FLOW main: start");
   WidgetsFlutterBinding.ensureInitialized();
   await appState.init();
+  debugPrint("TAPITASK-FLOW main: init() done");
   trayController = TrayController(appState);
   await trayController!.init();
   // Window hooks used by the flyout bridge (guarantee: opening the flyout
   // never hides the main window).
   appState.isMainWindowVisible = trayController!.isMainWindowVisible;
   appState.restoreMainWindow = trayController!.restoreMainWindow;
+  // Identification de l'écran rouge (lot M) : si c'est un ErrorWidget,
+  // le logcat portera ROOT_ERROR + ROOT_STACK complets.
+  ErrorWidget.builder = (details) {
+    // Signature SDK : ErrorWidgetBuilder = Widget Function(FlutterErrorDetails).
+    debugPrint('TAPITASK-FLOW ROOT_ERROR: ${details.exception}');
+    debugPrint('TAPITASK-FLOW ROOT_STACK: ${details.stack}');
+    return const ColoredBox(
+      color: Colors.red,
+      child: Align(alignment: Alignment.topCenter, child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Text('Tapitask error — voir logcat TAPITASK-FLOW',
+            style: TextStyle(color: Colors.white, fontSize: 14)),
+      )),
+    );
+  };
+  debugPrint("TAPITASK-FLOW main: runApp");
   runApp(const ChecklistsApp());
 }
 
@@ -57,6 +75,7 @@ class _ChecklistsAppState extends State<ChecklistsApp>
   /// the WebSocket push and the periodic poll.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    debugPrint("TAPITASK-FLOW lifecycle: $state");
     if (state == AppLifecycleState.resumed) {
       // Item coché dans le widget : l'activity singleTask est resumée, pas
       // re-créée → init() ne rejoue pas ; applyWidgetToggles() au resume

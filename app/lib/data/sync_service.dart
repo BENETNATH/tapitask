@@ -2,6 +2,7 @@ import "dart:async";
 import "dart:convert";
 
 import "package:drift/drift.dart";
+import "package:flutter/foundation.dart";
 import "package:shared_preferences/shared_preferences.dart";
 import "package:web_socket_channel/web_socket_channel.dart";
 
@@ -99,6 +100,7 @@ class SyncService {
   }
 
   Future<void> fullSync() async {
+    debugPrint("TAPITASK-FLOW fullSync: start");
     if (_disposed) return;
     if (!api.isConfigured || api.accessToken == null) return;
     if (_running) return;
@@ -267,6 +269,7 @@ class SyncService {
     } else if (since == null && serverTime != null) {
       await _saveLastSync(serverTime.subtract(const Duration(seconds: 5)));
     }
+    debugPrint("TAPITASK-FLOW fullSync: done → onChanged notify");
     onChanged?.call();
   }
 
