@@ -153,7 +153,31 @@ au premier plan et après chaque action.
 
 1. **Clé API** : `POST /api-keys` (lecture seule ou lecture+écriture, scope par liste, révocable)
 2. **REST** : `POST /lists/{id}/items/bulk` (texte multi-lignes), `/summary`, webhooks signés HMAC
-3. **MCP** : `python server/mcp_server.py` (`CHECKLISTS_URL`, `CHECKLISTS_API_KEY`) — ou MCP HTTP/SSE intégré
+3. **MCP** : `python server/mcp_server.py` (`CHECKLISTS_URL`, `CHECKLISTS_API_KEY_FILE`) — ou MCP HTTP/SSE intégré
+
+### Exemple : brancher un agent (client MCP, transport stdio)
+
+```bash
+python server/mcp_setup.py --url https://checklists.example.com setup
+```
+
+L'assistant demande le mot de passe (sans écho) et, si le compte a la 2FA, le code, puis
+liste vos listes : choisissez **une liste** ou **toutes**. La clé est **en lecture seule par
+défaut** ; la lecture+écriture exige de taper `write`. La clé est enregistrée dans un fichier
+`0600` d'un dossier `0700` (`~/.config/tapitask/`) et n'est jamais affichée. La commande
+imprime ce qu'il faut déclarer dans votre client MCP (serveur MCP, transport stdio) :
+
+```text
+command: /usr/bin/python3 /chemin/vers/tapitask/server/mcp_server.py
+environment:
+  CHECKLISTS_URL=https://checklists.example.com
+  CHECKLISTS_API_KEY_FILE=/home/vous/.config/tapitask/agent-groceries-ro.key
+```
+
+Rotation : `python server/mcp_setup.py rotate` crée la clé de remplacement (mêmes droits et
+même liste), la **vérifie**, remplace le fichier, puis *propose* de révoquer l'ancienne (réponse
+par défaut : non — rien n'est jamais révoqué automatiquement ; `mcp_setup.py revoke` le fait plus
+tard). `mcp_server.py` relit le fichier à chaque requête : pas de redémarrage nécessaire.
 
 ## Environnement de développement — serveur
 

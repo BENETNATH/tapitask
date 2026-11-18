@@ -1454,6 +1454,23 @@ async def test_scoped_key_creation_requires_access(client):
 
 
 @pytest.mark.asyncio
+async def test_readonly_key_write_probe_is_403_not_422(client):
+    """mcp_setup.py verifies a read-only key by POSTing an EMPTY body to
+    /lists: a read-only key must get 403 (and a write key a validation error),
+    so the probe can never create anything."""
+    ta = await register(client, "probe@example.com")
+    ha = auth_headers(ta)
+    ro = (await client.post("/api-keys", json={"name": "ro", "read_only": True},
+                            headers=ha)).json()["key"]
+    rw = (await client.post("/api-keys", json={"name": "rw"}, headers=ha)).json()["key"]
+    r = await client.post("/lists", json={}, headers={"Authorization": f"Bearer {ro}"})
+    assert r.status_code == 403, r.text
+    r = await client.post("/lists", json={}, headers={"Authorization": f"Bearer {rw}"})
+    assert r.status_code in (400, 422), r.text   # validation error, not created
+    assert (await client.get("/lists", headers=ha)).json() == []
+
+
+@pytest.mark.asyncio
 async def test_rest_patch_clamps_future_updated_at(client):
     """REST PATCH item must clamp future client clocks like /sync does
     (audit run-3, tapitask.sync.client_clock_lww_cursor_poison, REST residue)."""

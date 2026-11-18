@@ -62,9 +62,14 @@ Résolution de conflits : **last-write-wins sur `updated_at`** (suffisant pour d
 ## MCP (agents)
 
 ```bash
+python mcp_setup.py setup            # crée la clé (fichier 0600) et affiche la commande à déclarer dans votre client MCP
 export CHECKLISTS_URL=https://checklists.example.com
-export CHECKLISTS_API_KEY=chk_...
+export CHECKLISTS_API_KEY_FILE=~/.config/tapitask/<nom>.key
 python mcp_server.py
 ```
+
+`CHECKLISTS_API_KEY=chk_...` (clé dans l'environnement) reste supporté ; si les deux sont
+définis, le fichier l'emporte. Sous-commandes de `mcp_setup.py` : `setup`, `rotate`, `revoke`
+(`--help` pour les options non interactives : `--list`, `--access`, `--name`, `--key-file`).
 
 Outils : `list_lists`, `get_list`, `add_items`, `check_item`.
