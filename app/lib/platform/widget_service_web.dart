@@ -5,7 +5,6 @@ import "../state/app_state.dart";
 /// Same public surface as the native [WidgetService].
 class WidgetService {
   static const maxLists = 5;
-  static const maxItems = 5;
 
   static Future<void> update(AppState state, AppDb db,
       List<LocalList> pinnedLists) async {}

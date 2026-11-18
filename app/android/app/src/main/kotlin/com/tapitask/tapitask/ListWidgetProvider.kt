@@ -15,8 +15,9 @@ import es.antonborri.home_widget.HomeWidgetPlugin
 /**
  * Tapitask list widget (resizable).
  * - Title = pinned list name; ◀ / ▶ switch to the previous / next pinned list.
- * - Up to 5 unchecked items; tapping an item checks it locally (instant),
- *   the app syncs the change on next open (widget_toggled).
+ * - All items (S3 : ListView RemoteAdapter, scroll vertical, pas de plafond) ;
+ *   tapping an unchecked item checks it locally (instant), the app syncs the
+ *   change on next open (widget_toggled).
  * - The list color tints the widget background.
  * - "Ouvrir l'application" launches the app.
  */
@@ -62,7 +63,6 @@ class ListWidgetProvider : AppWidgetProvider() {
                 bindOpen(context, views, null)
                 views.setViewVisibility(R.id.widget_prev, android.view.View.GONE)
                 views.setViewVisibility(R.id.widget_next, android.view.View.GONE)
-                for (i in 0 until MAX_ITEMS) hideItem(views, i)
                 appWidgetManager.updateAppWidget(appWidgetId, views)
             }
             return
@@ -82,7 +82,6 @@ class ListWidgetProvider : AppWidgetProvider() {
         private val ITEM_ID_REGEX =
             Regex("^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$", RegexOption.IGNORE_CASE)
 
-        const val MAX_ITEMS = 5
         const val ACTION_CYCLE = "com.tapitask.tapitask.action.CYCLE_LIST"
         const val ACTION_TOGGLE = "com.tapitask.tapitask.action.TOGGLE_ITEM"
         const val EXTRA_ITEM_ID = "item_id"
@@ -120,14 +119,6 @@ class ListWidgetProvider : AppWidgetProvider() {
             } catch (_: Exception) {
                 themeBg
             }
-        }
-
-        fun itemRow(i: Int): Int = when (i) {
-            0 -> R.id.widget_item_0
-            1 -> R.id.widget_item_1
-            2 -> R.id.widget_item_2
-            3 -> R.id.widget_item_3
-            else -> R.id.widget_item_4
         }
 
         fun triggerUpdate(context: Context) {
@@ -205,13 +196,11 @@ class ListWidgetProvider : AppWidgetProvider() {
         views.setInt(R.id.widget_root, "setBackgroundColor",
             widgetBackground(dark, colorHex))
         val titleColor = if (dark) Color.rgb(235, 235, 235) else Color.parseColor("#00695C")
-        val itemColor = if (dark) Color.rgb(226, 226, 226) else Color.parseColor("#1B1B1B")
         // NOTE: RemoteViews.setTextColor() requires API 31 — the reflection
         // action below works on every API level.
         views.setInt(R.id.widget_title, "setTextColor", titleColor)
         views.setInt(R.id.widget_prev, "setTextColor", titleColor)
         views.setInt(R.id.widget_next, "setTextColor", titleColor)
-        for (i in 0 until MAX_ITEMS) views.setInt(itemRow(i), "setTextColor", itemColor)
 
         bindOpen(context, views, data.getString("list_" + index + "_id", null))
         views.setViewVisibility(R.id.widget_prev,
@@ -221,25 +210,18 @@ class ListWidgetProvider : AppWidgetProvider() {
         bindCycle(context, views, R.id.widget_prev, index, total, -1)
         bindCycle(context, views, R.id.widget_next, index, total, +1)
 
-        val count = data.getInt("list_${index}_count", 0)
-        val doneIds = readDoneIds(data)
-        var visible = 0
-        for (i in 0 until MAX_ITEMS) {
-            val label = data.getString("list_${index}_item_$i", "") ?: ""
-            val itemId = data.getString("list_${index}_item_${i}_id", "") ?: ""
-            if (i < count && label.isNotEmpty() && itemId.isNotEmpty() && itemId !in doneIds) {
-                setItem(context, views, i, itemId, label)
-                visible++
-            } else {
-                hideItem(views, i)
-            }
-        }
-        if (visible == 0) {
-            views.setTextViewText(R.id.widget_item_0,
-                "✓  " + data.getString("label_all_done", "Tout est coché"))
-            views.setViewVisibility(R.id.widget_item_0, android.view.View.VISIBLE)
-            views.setOnClickPendingIntent(R.id.widget_item_0, null)
-        }
+        // S3 : les lignes sont générées par l'adapter RemoteAdapter (scroll
+        // natif, pas de plafond). Le PendingIntent ci-dessous sert de
+        // template : chaque ligne merge son fill-in intent (ACTION_TOGGLE +
+        // EXTRA_ITEM_ID) avec ce template → onReceive inchangé.
+        views.setPendingIntentTemplate(
+            R.id.widget_items,
+            PendingIntent.getBroadcast(context, 0,
+                Intent(context, ListWidgetProvider::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+        views.setRemoteAdapter(R.id.widget_items,
+            Intent(context, WidgetItemsRemoteViewsService::class.java)
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))
         appWidgetManager.updateAppWidget(appWidgetId, views)
     }
 
@@ -302,29 +284,4 @@ class ListWidgetProvider : AppWidgetProvider() {
         }
     }
 
-    private fun setItem(
-        context: Context,
-        views: RemoteViews,
-        i: Int,
-        itemId: String,
-        label: String
-    ) {
-        val row = itemRow(i)
-        views.setViewVisibility(row, android.view.View.VISIBLE)
-        views.setTextViewText(row, "☐  $label")
-        val toggle = Intent(context, ListWidgetProvider::class.java).apply {
-            action = ACTION_TOGGLE
-            putExtra(EXTRA_ITEM_ID, itemId)
-        }
-        views.setOnClickPendingIntent(
-            row,
-            PendingIntent.getBroadcast(
-                context, itemId.hashCode(), toggle,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-    }
-
-    private fun hideItem(views: RemoteViews, i: Int) {
-        views.setViewVisibility(itemRow(i), android.view.View.GONE)
-        views.setOnClickPendingIntent(itemRow(i), null)
-    }
 }

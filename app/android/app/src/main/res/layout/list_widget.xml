@@ -45,55 +45,18 @@
             android:text="▶" />
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/widget_item_0"
+    <!-- S3 : les lignes sont générées par un RemoteAdapter (WidgetItemAdapter)
+         — scroll vertical natif, plus de plafond de 5 lignes. Le fond des
+         lignes suit le fond du widget (transparent) ; la couleur du texte
+         est posée par l'adapter selon le thème. -->
+    <ListView
+        android:id="@+id/widget_items"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:textSize="13sp"
-        android:textColor="#1B1B1B"
-        android:paddingVertical="4dp"
-        android:maxLines="1"
-        android:ellipsize="end" />
-
-    <TextView
-        android:id="@+id/widget_item_1"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:textSize="13sp"
-        android:textColor="#1B1B1B"
-        android:paddingVertical="4dp"
-        android:maxLines="1"
-        android:ellipsize="end" />
-
-    <TextView
-        android:id="@+id/widget_item_2"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:textSize="13sp"
-        android:textColor="#1B1B1B"
-        android:paddingVertical="4dp"
-        android:maxLines="1"
-        android:ellipsize="end" />
-
-    <TextView
-        android:id="@+id/widget_item_3"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:textSize="13sp"
-        android:textColor="#1B1B1B"
-        android:paddingVertical="4dp"
-        android:maxLines="1"
-        android:ellipsize="end" />
-
-    <TextView
-        android:id="@+id/widget_item_4"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:textSize="13sp"
-        android:textColor="#1B1B1B"
-        android:paddingVertical="4dp"
-        android:maxLines="1"
-        android:ellipsize="end" />
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:divider="@null"
+        android:dividerHeight="0dp"
+        android:paddingTop="4dp" />
 
     <LinearLayout
         android:layout_width="match_parent"

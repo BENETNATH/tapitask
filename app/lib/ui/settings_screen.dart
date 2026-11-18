@@ -59,9 +59,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Tooltip(
                 message: info,
                 preferBelow: false,
-                child: Icon(Icons.info_outline,
-                    size: 16,
-                    color: Theme.of(context).colorScheme.outline),
+                child: InkWell(
+                  onTap: () => _showInfo(title, info),
+                  child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: Icon(Icons.info_outline,
+                          size: 16,
+                          color:
+                              Theme.of(context).colorScheme.outline)),
+                ),
               ),
             Switch(value: value, onChanged: onChanged),
           ],
@@ -159,6 +166,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   // ---- dialogues ----
+
+  /// Aides des réglages : tapable sur Android (Tooltip seul = long-press).
+  Future<void> _showInfo(String title, String text) => showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(title),
+          content: Text(text),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(S.close)),
+          ],
+        ),
+      );
 
   Future<void> _pickTheme() async {
     final s = widget.state;
@@ -301,6 +322,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Column(
               children: [
+                _switchRow(S.hideDone, flag("hide_done", dflt: true),
+                    (v) => _toggle("hide_done", v),
+                    info: S.hideDoneHelp),
+                _divider(),
                 _switchRow(S.compactDue, flag("compact_due", dflt: true),
                     (v) => _toggle("compact_due", v),
                     info: S.compactDueHelp),

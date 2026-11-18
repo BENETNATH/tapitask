@@ -153,6 +153,8 @@ class S {
     "compactHelp": "Choisissez les fonctions visibles dans les surfaces compactes (volet Windows, widget Android).",
     "compactDue": "Échéances affichées",
     "compactDueHelp": "Badge d'échéance sur les items du volet",
+    "hideDone": "Cacher les items cochés",
+    "hideDoneHelp": "Le volet et le widget n'affichent plus les items cochés. Les items cochés restent dans la liste (voir dans l'app)",
     "compactDelete": "Poubelle au survol",
     "compactDeleteHelp": "Bouton supprimer sur chaque item du volet",
     "notifications": "Notifications",
@@ -344,6 +346,8 @@ class S {
     "compactHelp": "Choose the functions visible in compact surfaces (Windows flyout, Android widget).",
     "compactDue": "Show due dates",
     "compactDueHelp": "Due-date badge on flyout items",
+    "hideDone": "Hide checked items",
+    "hideDoneHelp": "The flyout and the widget no longer show checked items. They stay in the list (see in the app)",
     "compactDelete": "Trash on hover",
     "compactDeleteHelp": "Delete button on each flyout item",
     "notifications": "Notifications",
@@ -544,6 +548,8 @@ class S {
   static String get compactHelp => t("compactHelp");
   static String get compactDue => t("compactDue");
   static String get compactDueHelp => t("compactDueHelp");
+  static String get hideDone => t("hideDone");
+  static String get hideDoneHelp => t("hideDoneHelp");
   static String get compactDelete => t("compactDelete");
   static String get compactDeleteHelp => t("compactDeleteHelp");
   static String get notifications => t("notifications");

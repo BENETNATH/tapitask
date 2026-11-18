@@ -14,7 +14,6 @@ import "../state/app_state.dart";
 /// recorded in `widget_toggled` and applied by the app on next open.
 class WidgetService {
   static const maxLists = 5;
-  static const maxItems = 5;
 
   static Future<void> update(AppState state, AppDb db,
                             List<LocalList> pinnedLists) async {
@@ -32,29 +31,34 @@ class WidgetService {
             : "light")
         : setting;
     await HomeWidget.saveWidgetData("theme", theme);
+    // S2 : réglage « Cacher les items cochés » (défaut true) — ON : non-cochés
+    // seulement ; OFF : tous les items, cochés préfixés « ✓  » et sans id
+    // de ligne (ligne non cliquable, le widget reste unidirectionnel).
+    final hideDone = state.settings["hide_done"] as bool? ?? true;
     await HomeWidget.saveWidgetData(
         "list_count_lists", pinnedLists.length.clamp(0, maxLists).toInt());
     for (var li = 0; li < maxLists; li++) {
       if (li < pinnedLists.length) {
         final list = pinnedLists[li];
-        final items = await db.uncheckedItemsOf(list.id);
+        final items = hideDone
+            ? await db.uncheckedItemsOf(list.id)
+            : await db.itemsOf(list.id);
         await HomeWidget.saveWidgetData("list_${li}_id", list.id);
         await HomeWidget.saveWidgetData("list_${li}_title", list.title);
         await HomeWidget.saveWidgetData("list_${li}_color", list.color ?? "");
-        await HomeWidget.saveWidgetData(
-            "list_${li}_count", items.length.clamp(0, maxItems).toInt());
-        for (var i = 0; i < maxItems; i++) {
+        await HomeWidget.saveWidgetData("list_${li}_count", items.length);
+        for (var i = 0; i < items.length; i++) {
           // Due-date badge appended to the label (per-user setting), same as
-          // the Windows flyout — homogeneous ecosystem.
-          final badge = i < items.length ? state.dueSuffix(items[i]) : null;
+          // the Windows flyout — homogeneous ecosystem. RemoteViews ne fait
+          // pas de barré : préfixe ☐ = non-coché, ✓ = coché (S2).
+          final badge = state.dueSuffix(items[i]);
+          final label = badge == null || badge.isEmpty
+              ? items[i].label
+              : "${items[i].label}  •  $badge";
           await HomeWidget.saveWidgetData("list_${li}_item_$i",
-              i < items.length
-                  ? (badge == null || badge.isEmpty
-                      ? items[i].label
-                      : "${items[i].label}  •  $badge")
-                  : "");
+              items[i].done ? "✓  $label" : "☐  $label");
           await HomeWidget.saveWidgetData("list_${li}_item_${i}_id",
-              i < items.length ? items[i].id : "");
+              items[i].done ? "" : items[i].id);
         }
       } else {
         await HomeWidget.saveWidgetData("list_${li}_count", 0);

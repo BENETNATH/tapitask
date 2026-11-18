@@ -452,7 +452,10 @@ class _ListScreenState extends State<ListScreen> {
     final state = widget.state;
     final scheme = Theme.of(context).colorScheme;
     final items = _items;
-    final top = items.where((i) => i.parentId == null).toList();
+    final hideDone = widget.state.settings["hide_done"] as bool? ?? true;
+    final top = items
+        .where((i) => i.parentId == null && (!hideDone || !i.done))
+        .toList();
     if (top.isEmpty) {
       return Center(
         child: Text(S.nothingToDoAdd,
@@ -468,8 +471,15 @@ class _ListScreenState extends State<ListScreen> {
         // de l'élément déplacé (plus de décrément manuel).
         final moved = top.removeAt(oldIndex);
         top.insert(newIndex, moved);
-        for (var pos = 0; pos < top.length; pos++) {
-          await state.reorderItem(top[pos].id, pos);
+        // hide_done ON : liste visible ≠ ordre absolu — réécrire les
+        // positions absolues en ordre stable : les items masqués (cochés)
+        // gardent leur slot, les visibles se répartissent dans les slots
+        // restants, dans le nouvel ordre visible.
+        final all = items.where((i) => i.parentId == null).toList();
+        var k = 0;
+        for (var pos = 0; pos < all.length; pos++) {
+          await state.reorderItem(
+              hideDone && all[pos].done ? all[pos].id : top[k++].id, pos);
         }
       },
       itemBuilder: (context, i) {
