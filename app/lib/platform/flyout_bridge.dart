@@ -4,6 +4,7 @@ import "dart:io";
 import "package:flutter/foundation.dart";
 import "package:flutter/services.dart";
 
+import "../data/database.dart";
 import "../l10n/s.dart";
 import "../state/app_state.dart";
 
@@ -73,9 +74,7 @@ class FlyoutBridge {
         "\t${_clean(S.nothingToDo)}\t${_clean(S.pinListsHelp)}");
     // Fine-grained flyout settings: open-app button visibility.
     buf.writeln("F\t${state.settings["flyout_open_button"] == false ? 0 : 1}");
-    final items = _activeList == null
-        ? const []
-        : await state.db.uncheckedItemsOf(_activeList!);
+    final items = _activeList == null ? const [] : await itemsFor(_activeList!);
     for (final i in items) {
       final due = state.dueSuffix(i);
       buf.writeln("I\t${i.id}\t${i.done ? 1 : 0}\t${_clean(i.label)}"
@@ -85,6 +84,20 @@ class FlyoutBridge {
       await _ch.invokeMethod("updateFlyoutData", {"data": buf.toString()});
     } catch (_) {}
   }
+
+  /// W3 : les items du volet selon le réglage hide_done (volet/widget) :
+  /// ON (défaut) → non-cochés seulement ; OFF → tous, les cochés arrivent
+  /// avec done=1 (cochés côté natif, re-décochables via « uncheck »).
+  Future<List<LocalItem>> itemsFor(String listId) async {
+    final hideDone = state.settings["hide_done"] as bool? ?? true;
+    return hideDone
+        ? state.db.uncheckedItemsOf(listId)
+        : state.db.itemsOf(listId);
+  }
+
+  /// W1 : re-pousse la donnée courante (appelé par AppState.onSettingsChanged).
+  /// No-op hors Windows via la garde isAvailable de _push.
+  Future<void> refresh() => _push();
 
   static String _clean(String s) => s.replaceAll("\t", " ").replaceAll("\n", " ");
 

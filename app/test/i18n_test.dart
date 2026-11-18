@@ -30,6 +30,7 @@ void main() {
       S.appearance, S.compact, S.flyoutClose, S.promoteAdmin,
       S.active, S.roleViewer, S.roleEditor,
       S.t("monday"), S.t("sunday"), S.unpin, S.pollOff,
+      S.hideDoneApp, S.hideDoneAppHelp,
     ]) {
       expect(probe.isNotEmpty, true);
       expect(probe.contains("é"), false, reason: probe);

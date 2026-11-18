@@ -53,6 +53,10 @@ class AppState extends ChangeNotifier {
     "flyout_open_button": true,
     "start_hidden": false,
     "compact_delete": true,
+    // Volet/widget : masquer les items cochés. App : même feature, réglage
+    // distinct (lot W — le réglage app ne pilote pas les surfaces compactes).
+    "hide_done": true,
+    "hide_done_app": true,
   };
   final List<void Function()> _undoStack = [];
 
@@ -292,6 +296,10 @@ class AppState extends ChangeNotifier {
   Future<bool> Function()? isMainWindowVisible;
   Future<void> Function()? restoreMainWindow;
 
+  /// W1 : posé par le TrayController (Windows) → flyout.refresh() à chaque
+  /// changement de réglage (le volet suit hide_done comme le widget).
+  VoidCallback? onSettingsChanged;
+
   /// Localized due-date badge for compact surfaces (Windows flyout, Android
   /// widget), shown only if the user enabled it (settings["compact_due"]).
   String? dueSuffix(dynamic item) {
@@ -324,6 +332,11 @@ class AppState extends ChangeNotifier {
     } catch (_) {}
     await _cacheSettings();
     notifyListeners();
+    // W1 : les surfaces compactes (widget, flyout) suivent IMMÉDIATEMENT
+    // tout changement de réglage — le widget n'était réécrit que sur les
+    // mutations d'items (bug W0 : le toggle hide_done n'avait aucun effet).
+    await _refreshWidget();
+    onSettingsChanged?.call();
   }
 
   static const _cachedSettingsPref = "cached_settings";

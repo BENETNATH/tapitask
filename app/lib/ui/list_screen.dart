@@ -379,7 +379,9 @@ class _ListScreenState extends State<ListScreen> {
     final state = widget.state;
     final scheme = Theme.of(context).colorScheme;
     final items = _items;
-    final hideDone = widget.state.settings["hide_done"] as bool? ?? true;
+    // W2 : le réglage de l'app est hide_done_app (hide_done pilote seul le
+    // volet/widget).
+    final hideDone = widget.state.settings["hide_done_app"] as bool? ?? true;
     final top = items
         .where((i) => i.parentId == null && (!hideDone || !i.done))
         .toList();
@@ -398,7 +400,7 @@ class _ListScreenState extends State<ListScreen> {
         // de l'élément déplacé (plus de décrément manuel).
         final moved = top.removeAt(oldIndex);
         top.insert(newIndex, moved);
-        // hide_done ON : liste visible ≠ ordre absolu — réécrire les
+        // hide_done_app ON : liste visible ≠ ordre absolu — réécrire les
         // positions absolues en ordre stable : les items masqués (cochés)
         // gardent leur slot, les visibles se répartissent dans les slots
         // restants, dans le nouvel ordre visible.

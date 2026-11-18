@@ -87,6 +87,9 @@ class TrayController {
 
     // Native flyout: data streams + user actions (Windows only).
     flyout.init();
+    // W1 : le volet suit immédiatement tout changement de réglage
+    // (notamment hide_done) — refresh() est no-op hors Windows.
+    state.onSettingsChanged = () => flyout.refresh();
     _initialized = true;
   }
 

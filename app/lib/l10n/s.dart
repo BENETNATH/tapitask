@@ -138,6 +138,8 @@ class S {
     "dueDatesHelp": "Dates d'échéance sur les items, vue « Aujourd'hui »",
     "visibleActions": "Actions visibles sur les items",
     "visibleActionsHelp": "Icônes échéance/actions sur chaque item ; sinon appui long",
+    "hideDoneApp": "Cacher les items cochés",
+    "hideDoneAppHelp": "La liste de l'application n'affiche plus les items cochés. Indépendant du réglage Volet & widget.",
     "dueKeywords": "Mots-clés d'échéance",
     "dueKeywordsHelp": "Vos raccourcis pour l'ajout rapide : tapez le mot-clé dans la barre d'ajout, il devient une échéance. Ex. « j+7 » → +7 jours, « réunion » → lundi.",
     "addKeyword": "Ajouter un mot-clé…",
@@ -322,6 +324,8 @@ class S {
     "dueDatesHelp": "Due dates on items, “Today” view",
     "visibleActions": "Visible actions on items",
     "visibleActionsHelp": "Due date/action icons on each item; otherwise long-press",
+    "hideDoneApp": "Hide checked items",
+    "hideDoneAppHelp": "The app list no longer shows checked items. Independent of the flyout & widget setting.",
     "dueKeywords": "Due-date keywords",
     "dueKeywordsHelp": "Your quick-add shortcuts: type the keyword in the add bar and it becomes a due date. E.g. “j+7” → +7 days, “meeting” → Monday.",
     "addKeyword": "Add a keyword…",
@@ -526,6 +530,8 @@ class S {
   static String get dueDatesHelp => t("dueDatesHelp");
   static String get visibleActions => t("visibleActions");
   static String get visibleActionsHelp => t("visibleActionsHelp");
+  static String get hideDoneApp => t("hideDoneApp");
+  static String get hideDoneAppHelp => t("hideDoneAppHelp");
   static String get dueKeywords => t("dueKeywords");
   static String get dueKeywordsHelp => t("dueKeywordsHelp");
   static String get addKeyword => t("addKeyword");
