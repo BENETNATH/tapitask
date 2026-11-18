@@ -1,8 +1,13 @@
 """MCP server exposing checklist tools to AI agents (stdio transport).
 
 Run:  python mcp_server.py
-Requires an API key with the desired scope:
-      export CHECKLISTS_API_KEY=chk_... CHECKLISTS_URL=https://checklists.example.com
+Requires an API key with the desired scope, preferably from a 0600 file
+(see mcp_setup.py, which creates it):
+      export CHECKLISTS_API_KEY_FILE=~/.config/tapitask/agent.key
+      export CHECKLISTS_URL=https://checklists.example.com
+CHECKLISTS_API_KEY (the key itself in the environment) still works; when both
+are set the file wins. The file is re-read on every request, so a rotated key
+is picked up without restarting the server.
 """
 from __future__ import annotations
 
@@ -14,13 +19,43 @@ import urllib.request
 
 URL = os.environ.get("CHECKLISTS_URL", "http://localhost:8000")
 KEY = os.environ.get("CHECKLISTS_API_KEY", "")
+KEY_FILE = os.environ.get("CHECKLISTS_API_KEY_FILE", "")
+
+
+def _load_key() -> str:
+    """The API key: from CHECKLISTS_API_KEY_FILE when set, else the env var."""
+    if KEY_FILE:
+        try:
+            with open(os.path.expanduser(KEY_FILE), encoding="utf-8") as f:
+                key = f.read().strip()
+        except OSError as e:
+            # Never echo the file content; the path and the OS reason are enough.
+            raise RuntimeError(f"cannot read CHECKLISTS_API_KEY_FILE: {e.strerror}") from None
+        if not key:
+            raise RuntimeError("CHECKLISTS_API_KEY_FILE is empty")
+        return key
+    return KEY
+
+
+def _key_file_warning() -> str | None:
+    """POSIX only: a key file that other users can read is worth a warning."""
+    if not KEY_FILE or os.name == "nt":
+        return None
+    try:
+        mode = os.stat(os.path.expanduser(KEY_FILE)).st_mode & 0o777
+    except OSError:
+        return None
+    if mode & 0o077:
+        return (f"warning: {KEY_FILE} is accessible by other users "
+                f"(mode {mode:04o}); run chmod 600 on it")
+    return None
 
 
 def _api(method: str, path: str, body: dict | None = None) -> str:
     req = urllib.request.Request(
         f"{URL}{path}",
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {_load_key()}", "Content-Type": "application/json"},
         method=method,
     )
     with urllib.request.urlopen(req) as resp:
@@ -146,9 +181,17 @@ def handle_line(line: str) -> dict | None:
 
 
 def main() -> None:
-    if not KEY:
-        print("CHECKLISTS_API_KEY is not set", file=sys.stderr)
+    try:
+        key = _load_key()
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
         sys.exit(1)
+    if not key:
+        print("CHECKLISTS_API_KEY_FILE (or CHECKLISTS_API_KEY) is not set", file=sys.stderr)
+        sys.exit(1)
+    warning = _key_file_warning()
+    if warning:
+        print(warning, file=sys.stderr)
     for line in sys.stdin:
         line = line.strip()
         if not line:
