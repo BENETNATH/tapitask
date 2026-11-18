@@ -188,7 +188,7 @@ class _ListScreenState extends State<ListScreen> {
                       fontWeight: FontWeight.w600));
             }
             return Row(
-              mainAxisSize: MainAxisSize.min,
+              mainAxisSize: MainAxisSize.max,
               children: [
                 IconButton(
                   tooltip: S.prevList,
@@ -197,7 +197,7 @@ class _ListScreenState extends State<ListScreen> {
                       ? () => _switchList(lists[index - 1].id)
                       : null,
                 ),
-                Flexible(
+                Expanded(
                   child: PopupMenuButton<String>(
                     tooltip: S.switchList,
                     initialValue: widget.listId,
@@ -242,41 +242,37 @@ class _ListScreenState extends State<ListScreen> {
           },
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.delete_sweep_outlined),
-            tooltip: S.cleanDone,
-            onPressed: () async {
-              final confirmed = await showDialog<bool>(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: Text(S.cleanDoneConfirm),
-                  content: Text(S.cleanDoneBody),
-                  actions: [
-                    TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text("Annuler")),
-                    FilledButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        child: Text(S.clean)),
-                  ],
-                ),
-              );
-              if (confirmed == true) await state.purgeDone(widget.listId);
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.share),
-            tooltip: S.share,
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) =>
-                    ShareScreen(state: state, listId: widget.listId),
-              ),
-            ),
-          ),
           PopupMenuButton<String>(
             onSelected: (action) async {
+              // clean / share : déplaçés des anciens IconButtons pour libérer
+              // la zone du titre (spec lot P, P2b) — logique déplacée, pas dupliquée.
+              if (action == "clean") {
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: Text(S.cleanDoneConfirm),
+                    content: Text(S.cleanDoneBody),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text("Annuler")),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: Text(S.clean)),
+                    ],
+                  ),
+                );
+                if (confirmed == true) await state.purgeDone(widget.listId);
+              }
+              if (action == "share") {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ShareScreen(state: state, listId: widget.listId),
+                  ),
+                );
+              }
               final list = await _list();
               if (list == null) return;
               if (action == "rename") await _renameList(list);
@@ -287,6 +283,22 @@ class _ListScreenState extends State<ListScreen> {
               if (action == "color") await _pickColor(list);
             },
             itemBuilder: (context) => [
+              PopupMenuItem(
+                value: "clean",
+                child: Row(children: [
+                  Icon(Icons.delete_sweep_outlined),
+                  const SizedBox(width: 12),
+                  Text(S.cleanDone),
+                ]),
+              ),
+              PopupMenuItem(
+                value: "share",
+                child: Row(children: [
+                  Icon(Icons.share),
+                  const SizedBox(width: 12),
+                  Text(S.share),
+                ]),
+              ),
               PopupMenuItem(
                 value: "color",
                 child: Row(children: [

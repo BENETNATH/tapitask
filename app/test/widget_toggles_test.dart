@@ -75,6 +75,27 @@ void main() {
     await db.close();
   });
 
+  test("les listeners sont notifiés quand un toggle en attente est appliqué",
+      () async {
+    final (db, state) =
+        await makeState({"widget_done_ids": itemId}, itemId);
+    var count = 0;
+    state.addListener(() => count++);
+    await state.applyWidgetToggles();
+    expect(count, greaterThan(0),
+        reason: "le home doit rebâtir son aperçu après application");
+    await db.close();
+  });
+
+  test("rien en attente : aucun notify", () async {
+    final (db, state) = await makeState({}, "");
+    var count = 0;
+    state.addListener(() => count++);
+    await state.applyWidgetToggles();
+    expect(count, 0);
+    await db.close();
+  });
+
   test("rien en attente : aucun effet, aucune exception", () async {
     final (db, state) = await makeState({}, "");
     await expectLater(state.applyWidgetToggles(), completes);

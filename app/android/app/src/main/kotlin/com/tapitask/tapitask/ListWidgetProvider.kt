@@ -101,6 +101,27 @@ class ListWidgetProvider : AppWidgetProvider() {
             }
         }
 
+        /// Fond du widget : couleur de liste éclaircie (light) / assombrie (dark),
+        /// sinon fond par thème. `""` (le Dart écrit `list.color ?? ""`) = liste
+        /// sans couleur ; un hex illisible retombe sur le fond par thème — le fond
+        /// est toujours posé, jamais le default du drawable.
+        fun widgetBackground(dark: Boolean, colorHex: String?): Int {
+            val themeBg = if (dark) Color.rgb(27, 27, 27) else Color.rgb(247, 250, 250)
+            if (colorHex == null || colorHex.isEmpty()) return themeBg
+            return try {
+                val c = Color.parseColor(colorHex)
+                if (dark) {
+                    Color.rgb(Color.red(c) / 2, Color.green(c) / 2, Color.blue(c) / 2)
+                } else {
+                    Color.rgb((Color.red(c) + 255 * 3) / 4,
+                              (Color.green(c) + 255 * 3) / 4,
+                              (Color.blue(c) + 255 * 3) / 4)
+                }
+            } catch (_: Exception) {
+                themeBg
+            }
+        }
+
         fun itemRow(i: Int): Int = when (i) {
             0 -> R.id.widget_item_0
             1 -> R.id.widget_item_1
@@ -181,27 +202,8 @@ class ListWidgetProvider : AppWidgetProvider() {
         // List color tints the background: lightened in light mode,
         // darkened in dark mode — text stays readable either way.
         val colorHex = data.getString("list_${index}_color", null)
-        try {
-            if (colorHex != null) {
-                val c = Color.parseColor(colorHex)
-                val r: Int; val g: Int; val b: Int
-                if (dark) {
-                    r = Color.red(c) / 2
-                    g = Color.green(c) / 2
-                    b = Color.blue(c) / 2
-                } else {
-                    r = (Color.red(c) + 255 * 3) / 4
-                    g = (Color.green(c) + 255 * 3) / 4
-                    b = (Color.blue(c) + 255 * 3) / 4
-                }
-                views.setInt(R.id.widget_root, "setBackgroundColor", Color.rgb(r, g, b))
-            } else {
-                // Liste sans couleur : fond par thème (clair = default du drawable).
-                views.setInt(R.id.widget_root, "setBackgroundColor",
-                    if (dark) Color.rgb(27, 27, 27) else Color.rgb(247, 250, 250))
-            }
-        } catch (_: Exception) {
-        }
+        views.setInt(R.id.widget_root, "setBackgroundColor",
+            widgetBackground(dark, colorHex))
         val titleColor = if (dark) Color.rgb(235, 235, 235) else Color.parseColor("#00695C")
         val itemColor = if (dark) Color.rgb(226, 226, 226) else Color.parseColor("#1B1B1B")
         // NOTE: RemoteViews.setTextColor() requires API 31 — the reflection

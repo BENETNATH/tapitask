@@ -219,6 +219,7 @@ class AppState extends ChangeNotifier {
           await db.setDone(id, true, now);
         } catch (_) {}
       }
+      notifyListeners();
       await WidgetService.clearToggles();
       if (api.isConfigured && api.accessToken != null) {
         sync.syncSoon();
