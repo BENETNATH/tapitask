@@ -4,7 +4,9 @@ pytest tmp directory is read or written."""
 from __future__ import annotations
 
 import io
+import json
 import os
+import sys
 
 import pytest
 
@@ -83,6 +85,8 @@ def test_setup_one_list_read_only_default(api, cfg):
     assert stored_key(path) == rec["raw"]
     # printed: the stdio command + the key FILE path, never the key
     assert "mcp_server.py" in out
+    assert f"command: {json.dumps(sys.executable)}" in out
+    assert f"args: {json.dumps([os.path.abspath(mcp_setup.__file__.replace('mcp_setup.py', 'mcp_server.py'))])}" in out
     assert f"CHECKLISTS_API_KEY_FILE={path}" in out
     assert f"CHECKLISTS_URL={api.url}" in out
     assert_no_secret_leak(api, out, err, *inp.prompts, *sec.prompts)

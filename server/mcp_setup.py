@@ -380,7 +380,9 @@ def print_client_block(con: Console, url: str, key_file: str) -> None:
     command = f"{shlex.quote(sys.executable)} {shlex.quote(server)}"
     con.say()
     con.say("MCP client configuration (stdio server):")
-    con.say(f"  command: {command}")
+    # command and args are separate (and JSON-quoted), as most clients expect.
+    con.say(f"  command: {json.dumps(sys.executable)}")
+    con.say(f"  args: {json.dumps([server])}")
     con.say("  environment:")
     con.say(f"    CHECKLISTS_URL={url}")
     con.say(f"    CHECKLISTS_API_KEY_FILE={key_file}")
