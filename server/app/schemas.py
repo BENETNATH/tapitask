@@ -282,4 +282,5 @@ class ApiKeyOut(BaseModel):
     name: str
     key_prefix: str
     read_only: bool
+    list_scope: UUID | None = None
     created_at: datetime

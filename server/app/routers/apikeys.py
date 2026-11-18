@@ -21,6 +21,9 @@ async def create_api_key(
     principal: Principal = Depends(require_write),
     session: AsyncSession = Depends(get_session),
 ):
+    if principal.list_scope is not None and data.list_scope != principal.list_scope:
+        # Une clé scopée ne peut pas en créer une plus large (ni non scopée).
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "API key scoped to another list")
     if data.list_scope is not None:
         # Le scope doit pointer sur une liste que le caller accède réellement
         # (404 inconnu/supprimé/non-membre) — sinon on crée une clé qui lit
@@ -62,6 +65,7 @@ async def list_api_keys(
             name=k.name,
             key_prefix=k.key_prefix,
             read_only=k.read_only,
+            list_scope=k.list_scope,
             created_at=k.created_at,
         )
         for k in result.scalars()

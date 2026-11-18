@@ -1624,6 +1624,36 @@ async def test_scoped_key_creation_requires_access(client):
 
 
 @pytest.mark.asyncio
+async def test_scoped_key_cannot_mint_unscoped_key(client):
+    """A list-scoped key must not create a key with a wider scope (an
+    unscoped key reaches every list of the owner)."""
+    ta = await register(client, "mint-a@example.com")
+    ha = auth_headers(ta)
+    l1 = (await client.post("/lists", json={"title": "L1"}, headers=ha)).json()["id"]
+    k1 = (await client.post("/api-keys", json={"name": "k1", "list_scope": l1},
+                            headers=ha)).json()["key"]
+    k1h = {"Authorization": f"Bearer {k1}"}
+    r = await client.post("/api-keys", json={"name": "wide"}, headers=k1h)
+    assert r.status_code == 403, r.text
+    # same scope is still allowed
+    r = await client.post("/api-keys", json={"name": "same", "list_scope": l1},
+                          headers=k1h)
+    assert r.status_code == 201, r.text
+
+
+@pytest.mark.asyncio
+async def test_api_key_listing_exposes_scope(client):
+    ta = await register(client, "keyscope@example.com")
+    ha = auth_headers(ta)
+    l1 = (await client.post("/lists", json={"title": "L1"}, headers=ha)).json()["id"]
+    await client.post("/api-keys", json={"name": "scoped", "list_scope": l1}, headers=ha)
+    await client.post("/api-keys", json={"name": "all"}, headers=ha)
+    rows = {k["name"]: k for k in (await client.get("/api-keys", headers=ha)).json()}
+    assert rows["scoped"]["list_scope"] == l1
+    assert rows["all"]["list_scope"] is None
+
+
+@pytest.mark.asyncio
 async def test_rest_patch_clamps_future_updated_at(client):
     """REST PATCH item must clamp future client clocks like /sync does
     (audit run-3, tapitask.sync.client_clock_lww_cursor_poison, REST residue)."""
