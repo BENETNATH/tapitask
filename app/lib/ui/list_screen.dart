@@ -1,3 +1,5 @@
+import "dart:async";
+
 import "package:flutter/foundation.dart";
 import "package:material_ui/material_ui.dart";
 import "package:flutter/services.dart";
@@ -29,9 +31,36 @@ class _ListScreenState extends State<ListScreen> {
   String _recurrence = "none";
   String? _parentIdForNextAdd;
 
+  /// Switch de liste en place (lot Q / Q2) : même État, `setState` —
+  /// pas de `pushReplacementNamed` (un État neuf flashait un titre
+  /// « Liste » + l'état vide au 1er frame). Les caches gardent les
+  /// dernières données affichées pendant le rechargement.
+  String _listId = "";
+  List<LocalList> _lists = const [];
+  List<LocalItem> _items = const [];
+  StreamSubscription? _itemsSub;
+
+  void _loadLists() {
+    widget.state.db.visibleLists().then((l) {
+      if (!mounted) return;
+      setState(() => _lists = l);
+    });
+  }
+
+  void _loadItems() {
+    _itemsSub?.cancel();
+    _itemsSub = widget.state.db.watchItemsOf(_listId).listen((items) {
+      if (!mounted) return;
+      setState(() => _items = items);
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    _listId = widget.listId;
+    _loadLists();
+    _loadItems();
     widget.state.addListener(_onChanged);
     if (widget.focusAdd) {
       // Différé ~400 ms : après un cold-start, la fenêtre a demandé
@@ -47,16 +76,22 @@ class _ListScreenState extends State<ListScreen> {
     }
   }
 
-  void _onChanged() => setState(() {});
+  void _onChanged() {
+    setState(() {});
+    _loadLists();
+  }
 
   /// Switch directly to another list without going back to the home screen.
   void _switchList(String listId) {
-    if (listId == widget.listId) return;
-    Navigator.pushReplacementNamed(context, "/list", arguments: listId);
+    if (listId == _listId) return;
+    _listId = listId;
+    _loadItems();
+    setState(() {});
   }
 
   @override
   void dispose() {
+    _itemsSub?.cancel();
     widget.state.removeListener(_onChanged);
     _addFocus.dispose();
     super.dispose();
@@ -158,6 +193,71 @@ class _ListScreenState extends State<ListScreen> {
     }
   }
 
+  /// Titre de l'app bar, construit sur le cache `_lists` : sur un État
+  /// neuf, l'ancien FutureBuilder flashait « Liste » au 1er frame (lot Q).
+  Widget _title(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final index = _lists.indexWhere((l) => l.id == _listId);
+    final list = index >= 0 ? _lists[index] : null;
+    final titleStyle = TextStyle(
+        color: list?.color == null
+            ? scheme.onSurface
+            : Color(int.parse(list!.color!.replaceFirst("#", "0xFF"))),
+        fontWeight: FontWeight.w600);
+    // Le sélecteur ◀ ▾ ▶ n'apparaît qu'à partir de 2 listes actives.
+    if (_lists.length < 2) {
+      return Text(list?.title ?? "Liste",
+          maxLines: 1, overflow: TextOverflow.ellipsis, style: titleStyle);
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.max,
+      children: [
+        IconButton(
+          tooltip: S.prevList,
+          icon: const Icon(Icons.chevron_left, size: 22),
+          onPressed:
+              index > 0 ? () => _switchList(_lists[index - 1].id) : null,
+        ),
+        Expanded(
+          child: PopupMenuButton<String>(
+            tooltip: S.switchList,
+            initialValue: _listId,
+            onSelected: _switchList,
+            itemBuilder: (context) => [
+              for (final l in _lists)
+                PopupMenuItem(
+                  value: l.id,
+                  child: Row(children: [
+                    if (l.id == _listId)
+                      const Icon(Icons.check, size: 16)
+                    else
+                      const SizedBox(width: 16),
+                    const SizedBox(width: 8),
+                    Flexible(
+                        child: Text(l.title,
+                            overflow: TextOverflow.ellipsis)),
+                  ]),
+                ),
+            ],
+            child: Text(
+              "${list?.title ?? "Liste"} ▾",
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: titleStyle,
+            ),
+          ),
+        ),
+        IconButton(
+          tooltip: S.nextList,
+          icon: const Icon(Icons.chevron_right, size: 22),
+          onPressed: index >= 0 && index < _lists.length - 1
+              ? () => _switchList(_lists[index + 1].id)
+              : null,
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
@@ -169,78 +269,7 @@ class _ListScreenState extends State<ListScreen> {
       },
       child: Scaffold(
       appBar: AppBar(
-        title: FutureBuilder<List<LocalList>>(
-          future: state.db.visibleLists(),
-          builder: (context, snapshot) {
-            final lists = snapshot.data ?? [];
-            final index = lists.indexWhere((l) => l.id == widget.listId);
-            final list = index >= 0 ? lists[index] : null;
-            // Le sélecteur ◀ ▾ ▶ n'apparaît qu'à partir de 2 listes actives.
-            if (lists.length < 2) {
-              return Text(list?.title ?? "Liste",
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      color: list?.color == null
-                          ? scheme.onSurface
-                          : Color(int.parse(
-                              list!.color!.replaceFirst("#", "0xFF"))),
-                      fontWeight: FontWeight.w600));
-            }
-            return Row(
-              mainAxisSize: MainAxisSize.max,
-              children: [
-                IconButton(
-                  tooltip: S.prevList,
-                  icon: const Icon(Icons.chevron_left, size: 22),
-                  onPressed: index > 0
-                      ? () => _switchList(lists[index - 1].id)
-                      : null,
-                ),
-                Expanded(
-                  child: PopupMenuButton<String>(
-                    tooltip: S.switchList,
-                    initialValue: widget.listId,
-                    onSelected: _switchList,
-                    itemBuilder: (context) => [
-                      for (final l in lists)
-                        PopupMenuItem(
-                          value: l.id,
-                          child: Row(children: [
-                            if (l.id == widget.listId)
-                              const Icon(Icons.check, size: 16)
-                            else
-                              const SizedBox(width: 16),
-                            const SizedBox(width: 8),
-                            Flexible(child: Text(l.title,
-                                overflow: TextOverflow.ellipsis)),
-                          ]),
-                        ),
-                    ],
-                    child: Text(
-                      "${list?.title ?? "Liste"} ▾",
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          color: list?.color == null
-                              ? scheme.onSurface
-                              : Color(int.parse(
-                                  list!.color!.replaceFirst("#", "0xFF"))),
-                          fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: S.nextList,
-                  icon: const Icon(Icons.chevron_right, size: 22),
-                  onPressed: index >= 0 && index < lists.length - 1
-                      ? () => _switchList(lists[index + 1].id)
-                      : null,
-                ),
-              ],
-            );
-          },
-        ),
+        title: _title(context),
         actions: [
           PopupMenuButton<String>(
             onSelected: (action) async {
@@ -262,14 +291,14 @@ class _ListScreenState extends State<ListScreen> {
                     ],
                   ),
                 );
-                if (confirmed == true) await state.purgeDone(widget.listId);
+                if (confirmed == true) await state.purgeDone(_listId);
               }
               if (action == "share") {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
                     builder: (_) =>
-                        ShareScreen(state: state, listId: widget.listId),
+                        ShareScreen(state: state, listId: _listId),
                   ),
                 );
               }
@@ -412,151 +441,151 @@ class _ListScreenState extends State<ListScreen> {
               ),
             ),
           ),
-          Expanded(
-            child: StreamBuilder(
-              stream: state.db.watchItemsOf(widget.listId),
-              builder: (context, snapshot) {
-                final items = snapshot.data ?? [];
-                final top = items.where((i) => i.parentId == null).toList();
-                if (top.isEmpty) {
-                  return Center(
-                    child: Text(S.nothingToDoAdd,
-                        style: TextStyle(color: scheme.outline)),
-                  );
-                }
-                return ReorderableListView.builder(
-                  buildDefaultDragHandles: true,
-                  padding: const EdgeInsets.fromLTRB(8, 4, 8, 24),
-                  itemCount: top.length,
-                  onReorderItem: (oldIndex, newIndex) async {
-                    // onReorderItem fournit déjà le newIndex ajusté au retrait
-                    // de l'élément déplacé (plus de décrément manuel).
-                    final moved = top.removeAt(oldIndex);
-                    top.insert(newIndex, moved);
-                    for (var pos = 0; pos < top.length; pos++) {
-                      await state.reorderItem(top[pos].id, pos);
-                    }
-                  },
-                  itemBuilder: (context, i) {
-                    final item = top[i];
-                    final children =
-                        items.where((c) => c.parentId == item.id).toList();
-                    return Dismissible(
-                      key: ValueKey(item.id),
-                      direction: DismissDirection.endToStart,
-                      background: Container(
-                        color: scheme.errorContainer,
-                        alignment: Alignment.centerRight,
-                        padding: const EdgeInsets.only(right: 20),
-                        margin: const EdgeInsets.symmetric(vertical: 2),
-                        child: Icon(Icons.delete_outline,
-                            color: scheme.onErrorContainer),
-                      ),
-                      onDismissed: (_) async {
-                        final messenger = ScaffoldMessenger.of(context);
-                        final undo = await state.deleteItem(item.id);
-                        if (!mounted) return;
-                        {
-                          messenger.showSnackBar(
-                            SnackBar(
-                              content: Text("« ${item.label} » supprimé"),
-                              action: SnackBarAction(
-                                label: "ANNULER",
-                                onPressed: () => undo(),
-                              ),
-                              duration: const Duration(seconds: 5),
-                            ),
-                          );
-                        }
-                      },
-                      child: Column(
-                        key: ValueKey("col-${item.id}"),
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          GestureDetector(
-                            onLongPress: () =>
-                                _itemActions(item),
-                            child: CheckboxListTile(
-                              dense: true,
-                              value: item.done,
-                              controlAffinity:
-                                  ListTileControlAffinity.leading,
-                              title: Text(
-                                item.label,
-                                style: TextStyle(
-                                  decoration: item.done
-                                      ? TextDecoration.lineThrough
-                                      : null,
-                                  color: item.done ? scheme.outline : null,
-                                ),
-                              ),
-                              subtitle: _itemSubtitle(item),
-                              secondary: state.visibleActions
-                                  ? Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        if (state.featureDueDates)
-                                          IconButton(
-                                            tooltip: item.dueDate == null
-                                                ? S.setDueDate
-                                                : S.editDueDate,
-                                            icon: Icon(
-                                              item.dueDate == null
-                                                  ? Icons.event_outlined
-                                                  : Icons.event,
-                                              size: 20,
-                                              color: item.dueDate == null
-                                                  ? scheme.outline
-                                                  : scheme.primary,
-                                            ),
-                                            onPressed: () =>
-                                                _pickDueDate(item),
-                                          ),
-                                        IconButton(
-                                          tooltip: S.itemActions,
-                                          icon: Icon(Icons.more_vert,
-                                              size: 20,
-                                              color: scheme.outline),
-                                          onPressed: () =>
-                                              _itemActions(item),
-                                        ),
-                                      ],
-                                    )
-                                  : null,
-                              onChanged: (v) =>
-                                  state.toggleItem(item.id, v ?? false),
-                            ),
-                          ),
-                          for (final child in children)
-                            Padding(
-                              padding:
-                                  const EdgeInsets.only(left: 32, bottom: 2),
-                              child: CheckboxListTile(
-                                dense: true,
-                                controlAffinity:
-                                    ListTileControlAffinity.leading,
-                                value: child.done,
-                                title: Text(child.label,
-                                    style: TextStyle(
-                                        fontSize: 13,
-                                        color: child.done
-                                            ? scheme.outline
-                                            : null)),
-                                onChanged: (v) =>
-                                    state.toggleItem(child.id, v ?? false),
-                              ),
-                            ),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
+          Expanded(child: _itemsBody()),
         ],
       ),
     ),
+    );
+  }
+
+  /// Corps de la liste, construit sur le cache `_items` : l'ancien
+  /// StreamBuilder flashait l'état vide au 1er frame d'un État neuf (lot Q).
+  Widget _itemsBody() {
+    final state = widget.state;
+    final scheme = Theme.of(context).colorScheme;
+    final items = _items;
+    final top = items.where((i) => i.parentId == null).toList();
+    if (top.isEmpty) {
+      return Center(
+        child: Text(S.nothingToDoAdd,
+            style: TextStyle(color: scheme.outline)),
+      );
+    }
+    return ReorderableListView.builder(
+      buildDefaultDragHandles: true,
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 24),
+      itemCount: top.length,
+      onReorderItem: (oldIndex, newIndex) async {
+        // onReorderItem fournit déjà le newIndex ajusté au retrait
+        // de l'élément déplacé (plus de décrément manuel).
+        final moved = top.removeAt(oldIndex);
+        top.insert(newIndex, moved);
+        for (var pos = 0; pos < top.length; pos++) {
+          await state.reorderItem(top[pos].id, pos);
+        }
+      },
+      itemBuilder: (context, i) {
+        final item = top[i];
+        final children = items.where((c) => c.parentId == item.id).toList();
+        return Dismissible(
+          key: ValueKey(item.id),
+          direction: DismissDirection.endToStart,
+          background: Container(
+            color: scheme.errorContainer,
+            alignment: Alignment.centerRight,
+            padding: const EdgeInsets.only(right: 20),
+            margin: const EdgeInsets.symmetric(vertical: 2),
+            child: Icon(Icons.delete_outline,
+                color: scheme.onErrorContainer),
+          ),
+          onDismissed: (_) async {
+            final messenger = ScaffoldMessenger.of(context);
+            final undo = await state.deleteItem(item.id);
+            if (!mounted) return;
+            {
+              messenger.showSnackBar(
+                SnackBar(
+                  content: Text("« ${item.label} » supprimé"),
+                  action: SnackBarAction(
+                    label: "ANNULER",
+                    onPressed: () => undo(),
+                  ),
+                  duration: const Duration(seconds: 5),
+                ),
+              );
+            }
+          },
+          child: Column(
+            key: ValueKey("col-${item.id}"),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              GestureDetector(
+                onLongPress: () =>
+                    _itemActions(item),
+                child: CheckboxListTile(
+                  dense: true,
+                  value: item.done,
+                  controlAffinity:
+                      ListTileControlAffinity.leading,
+                  title: Text(
+                    item.label,
+                    style: TextStyle(
+                      decoration: item.done
+                          ? TextDecoration.lineThrough
+                          : null,
+                      color: item.done ? scheme.outline : null,
+                    ),
+                  ),
+                  subtitle: _itemSubtitle(item),
+                  secondary: state.visibleActions
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (state.featureDueDates)
+                              IconButton(
+                                tooltip: item.dueDate == null
+                                    ? S.setDueDate
+                                    : S.editDueDate,
+                                icon: Icon(
+                                  item.dueDate == null
+                                      ? Icons.event_outlined
+                                      : Icons.event,
+                                  size: 20,
+                                  color: item.dueDate == null
+                                      ? scheme.outline
+                                      : scheme.primary,
+                                ),
+                                onPressed: () =>
+                                    _pickDueDate(item),
+                              ),
+                            IconButton(
+                              tooltip: S.itemActions,
+                              icon: Icon(Icons.more_vert,
+                                  size: 20,
+                                  color: scheme.outline),
+                              onPressed: () =>
+                                  _itemActions(item),
+                            ),
+                          ],
+                        )
+                      : null,
+                  onChanged: (v) =>
+                      state.toggleItem(item.id, v ?? false),
+                ),
+              ),
+              for (final child in children)
+                Padding(
+                  padding:
+                      const EdgeInsets.only(left: 32, bottom: 2),
+                  child: CheckboxListTile(
+                    dense: true,
+                    controlAffinity:
+                        ListTileControlAffinity.leading,
+                    value: child.done,
+                    title: Text(child.label,
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: child.done
+                                ? scheme.outline
+                                : null)),
+                    onChanged: (v) =>
+                        state.toggleItem(child.id, v ?? false),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -750,7 +779,7 @@ class _ListScreenState extends State<ListScreen> {
     try {
       return await (widget.state.db
               .select(widget.state.db.localLists)
-            ..where((l) => l.id.equals(widget.listId)))
+            ..where((l) => l.id.equals(_listId)))
           .getSingle();
     } catch (_) {
       return null;
@@ -803,7 +832,7 @@ class _ListScreenState extends State<ListScreen> {
     if (text.trim().isEmpty) return;
     _quickAdd.clear();
     await widget.state.addQuickItems(
-      widget.listId,
+      _listId,
       text,
       parentId: _parentIdForNextAdd,
       recurrence: _recurrence,

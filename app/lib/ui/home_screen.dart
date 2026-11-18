@@ -21,7 +21,6 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Lists whose inline items are COLLAPSED. Items are shown by default.
   final Set<String> _collapsed = {};
   final _newList = TextEditingController();
-  bool _quickAddShown = false;
 
   static const _templates = {
     "Courses": [
@@ -59,10 +58,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Opened from the 1x1 quick-add widget: preselect a list and focus add.
   Future<void> _maybeQuickAdd() async {
-    debugPrint("TAPITASK-FLOW maybeQuickAdd: enter shown=$_quickAddShown "
+    debugPrint("TAPITASK-FLOW maybeQuickAdd: enter "
         "requested=${widget.state.quickAddRequested}");
-    if (_quickAddShown || !widget.state.quickAddRequested) return;
-    _quickAddShown = true;
+    // `quickAddRequested` EST la garde par requête (le latch permanent
+    // bloquait toute relance warm — lot Q / Q1). Lecture → effacement
+    // synchrones avant tout await : le 2e call-site du même post-frame
+    // voit false → no-op, pas de double-push.
+    if (!widget.state.quickAddRequested) return;
     widget.state.quickAddRequested = false;
     final target = widget.state.quickAddListId;
     widget.state.quickAddListId = null;

@@ -3,8 +3,60 @@ import "package:flutter_test/flutter_test.dart";
 import "package:drift/native.dart";
 import "package:material_ui/material_ui.dart";
 import "package:tapitask/data/database.dart";
+import "package:tapitask/l10n/s.dart";
 import "package:tapitask/state/app_state.dart";
 import "package:tapitask/ui/list_screen.dart";
+
+/// Ralentit les seules lectures (SELECT) : la DB en mémoire répond avant
+/// le 1er frame de l'État neuf (switch lot Q) — le flash « Liste » + vide
+/// serait invisible. L'horloge de test n'avance que via pumpAndSettle,
+/// donc le 1er frame après le switch voit toujours les données nulles.
+class _SlowExecutor extends QueryExecutor {
+  _SlowExecutor(this._inner);
+  final QueryExecutor _inner;
+
+  @override
+  SqlDialect get dialect => _inner.dialect;
+
+  @override
+  Future<bool> ensureOpen(QueryExecutorUser user) => _inner.ensureOpen(user);
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+      String statement, List<Object?> args) async {
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    return _inner.runSelect(statement, args);
+  }
+
+  @override
+  Future<int> runInsert(String statement, List<Object?> args) =>
+      _inner.runInsert(statement, args);
+
+  @override
+  Future<int> runUpdate(String statement, List<Object?> args) =>
+      _inner.runUpdate(statement, args);
+
+  @override
+  Future<int> runDelete(String statement, List<Object?> args) =>
+      _inner.runDelete(statement, args);
+
+  @override
+  Future<void> runCustom(String statement, [List<Object?>? args]) =>
+      _inner.runCustom(statement, args);
+
+  @override
+  Future<void> runBatched(BatchedStatements statements) =>
+      _inner.runBatched(statements);
+
+  @override
+  TransactionExecutor beginTransaction() => _inner.beginTransaction();
+
+  @override
+  QueryExecutor beginExclusive() => _inner.beginExclusive();
+
+  @override
+  Future<void> close() => _inner.close();
+}
 
 void main() {
   const longTitle =
@@ -141,6 +193,83 @@ void main() {
     expect(title.data, longTitle);
     expect(title.maxLines, 1);
     expect(title.overflow, TextOverflow.ellipsis);
+    await db.close();
+  });
+
+  testWidgets(
+      "Q2 : switch de liste en place — pas de frame « Liste » ni frame vide",
+      (tester) async {
+    // 2 listes : alpha (index 0, updatedAt le plus récent) puis beta.
+    // alpha → next (chevron ▶) → beta.
+    final db = AppDb.forTesting(_SlowExecutor(NativeDatabase.memory()));
+    final state = AppState(db: db);
+    const idA = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const idB = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    final now = DateTime(2026, 11, 18);
+    await db.upsertList(LocalListsCompanion(
+      id: const Value(idA),
+      title: const Value("alpha"),
+      ownerId: const Value(""),
+      updatedAt: Value(now),
+      dirty: const Value(false),
+      localOnly: const Value(true),
+    ));
+    await db.upsertList(LocalListsCompanion(
+      id: const Value(idB),
+      title: const Value("beta"),
+      ownerId: const Value(""),
+      updatedAt: Value(now.subtract(const Duration(hours: 1))),
+      dirty: const Value(false),
+      localOnly: const Value(true),
+    ));
+    await db.addItem("itemA", idA, "a1", 0, now);
+    await db.addItem("itemB", idB, "b1", 0, now);
+
+    tester.view.physicalSize = const Size(720, 1280);
+    tester.view.devicePixelRatio = 2.0;
+
+    // Route nommée "/list" comme main.dart : le switch passe par
+    // pushReplacementNamed avant le fix (État neuf → frame « Liste » + vide).
+    await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: const [GlobalMaterialLocalizations.delegate],
+      onGenerateRoute: (settings) => settings.name == "/list"
+          ? MaterialPageRoute(
+              builder: (_) => ListScreen(
+                  state: state, listId: settings.arguments as String))
+          : null,
+      home: ListScreen(state: state, listId: idA),
+    ));
+    // pumpAndSettle n'attend pas un futur en attente (horloge factice) :
+    // avancer explicitement au-delà du délai de lecture de _SlowExecutor.
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(find.text("alpha ▾"), findsOneWidget);
+    expect(find.text("a1"), findsOneWidget);
+
+    await tester.tap(find.byTooltip(S.nextList));
+    // pushReplacementNamed (avant fix) : la nouvelle route n'entre dans
+    // l'arbre qu'au 2e frame après up() — les 2 pump() ci-dessous donnent
+    // le 1er frame de l'écran après le switch. (Horloge factice gelée :
+    // les lectures retardées de _SlowExecutor n'ont pas abouti → si un
+    // État neuf est monté, il est obligatoirement dans un état nul.)
+    await tester.pump();
+    await tester.pump(); // le 1er frame de l'écran après le switch
+
+    expect(find.text("Liste"), findsNothing,
+        reason: "Q2 : le titre ne doit pas flasher « Liste » au 1er frame");
+    expect(find.text(S.nothingToDoAdd), findsNothing,
+        reason: "Q2 : le corps ne doit pas flasher l'état vide au 1er frame");
+    expect(find.text("a1"), findsOneWidget,
+        reason: "Q2 : les données précédentes restent affichées le temps du "
+            "rechargement");
+
+    // Rechargement : laisser les lectures retardées aboutir.
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+    expect(find.text("beta ▾"), findsOneWidget);
+    expect(find.text("b1"), findsOneWidget);
+    expect(find.text("a1"), findsNothing);
     await db.close();
   });
 }
