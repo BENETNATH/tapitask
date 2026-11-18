@@ -218,7 +218,7 @@ class ListWidgetProvider : AppWidgetProvider() {
             R.id.widget_items,
             PendingIntent.getBroadcast(context, 0,
                 Intent(context, ListWidgetProvider::class.java),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE))
         views.setRemoteAdapter(R.id.widget_items,
             Intent(context, WidgetItemsRemoteViewsService::class.java)
                 .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))
