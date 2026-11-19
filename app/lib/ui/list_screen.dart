@@ -8,6 +8,7 @@ import "../data/database.dart";
 import "../state/app_state.dart";
 import "due_format.dart";
 import "list_dialogs.dart";
+import "due_picker.dart";
 import "share_screen.dart";
 import "../l10n/s.dart";
 
@@ -342,49 +343,71 @@ class _ListScreenState extends State<ListScreen> {
                               onPressed: () =>
                                   setState(() => _parentIdForNextAdd = null),
                             ),
-                          Flexible(
-                            child: InputChip(
-                              visualDensity: VisualDensity.compact,
-                              materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                              avatar: Icon(
+                          // Expanded + Align : la puce prend sa taille naturelle
+                          // et ne se tronque que si la place manque.
+                          Expanded(
+                            child: Align(
+                              alignment: AlignmentDirectional.centerStart,
+                              child: InputChip(
+                                visualDensity: VisualDensity.compact,
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                avatar: Icon(
+                                    _newDue == null
+                                        ? Icons.event_outlined
+                                        : Icons.event,
+                                    size: 18,
+                                    color: _newDue == null
+                                        ? scheme.outline
+                                        : scheme.primary),
+                                label: Text(
                                   _newDue == null
-                                      ? Icons.event_outlined
-                                      : Icons.event,
-                                  size: 18,
-                                  color: _newDue == null
-                                      ? scheme.outline
-                                      : scheme.primary),
-                              label: Text(
-                                _newDue == null
-                                    ? S.dueDate
-                                    : _dueLabel(_newDue!),
-                                overflow: TextOverflow.ellipsis,
+                                      ? S.dueDate
+                                      : _dueLabel(_newDue!),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                tooltip: S.setDueDate,
+                                onPressed: _pickNewDue,
+                                onDeleted: _newDue == null
+                                    ? null
+                                    : () => setState(() => _newDue = null),
                               ),
-                              tooltip: S.setDueDate,
-                              onPressed: _pickNewDue,
-                              onDeleted: _newDue == null
-                                  ? null
-                                  : () => setState(() => _newDue = null),
                             ),
                           ),
-                          const Spacer(),
-                          DropdownButton<String>(
-                            value: _recurrence,
-                            underline: const SizedBox.shrink(),
-                            isDense: true,
-                            items: [
-                              DropdownMenuItem(
-                                  value: "none", child: Text(S.noRepeat)),
-                              DropdownMenuItem(
-                                  value: "daily", child: Text(S.daily)),
-                              DropdownMenuItem(
-                                  value: "weekly", child: Text(S.weekly)),
-                              DropdownMenuItem(
-                                  value: "monthly", child: Text(S.monthly)),
-                            ],
-                            onChanged: (v) =>
-                                setState(() => _recurrence = v ?? "none"),
+                          // Flexible + isExpanded : le libellé se tronque au
+                          // lieu de déborder (petits écrans, grande police).
+                          Flexible(
+                            child: DropdownButton<String>(
+                              value: _recurrence,
+                              underline: const SizedBox.shrink(),
+                              isDense: true,
+                              isExpanded: true,
+                              alignment: AlignmentDirectional.centerEnd,
+                              items: [
+                                for (final r in const [
+                                  "none",
+                                  "daily",
+                                  "weekly",
+                                  "monthly",
+                                ])
+                                  DropdownMenuItem(
+                                    value: r,
+                                    alignment: AlignmentDirectional.centerEnd,
+                                    child: Text(
+                                      switch (r) {
+                                        "daily" => S.daily,
+                                        "weekly" => S.weekly,
+                                        "monthly" => S.monthly,
+                                        _ => S.noRepeat,
+                                      },
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                              ],
+                              onChanged: (v) =>
+                                  setState(() => _recurrence = v ?? "none"),
+                            ),
                           ),
                         ],
                       ),
@@ -538,7 +561,6 @@ class _ListScreenState extends State<ListScreen> {
   }
 
   Future<void> _itemActions(LocalItem item) async {
-    final state = widget.state;
     final action = await showModalBottomSheet<String>(
       context: context,
       builder: (context) => SafeArea(
@@ -586,7 +608,7 @@ class _ListScreenState extends State<ListScreen> {
   /// date/heure complet si besoin. Aussi accessible via l'icône
   /// calendrier sur chaque item (pas besoin d'un appui long).
   Future<void> _pickDueDate(LocalItem item) async {
-    final choice = await _chooseDueDate(item.label, item.dueDate);
+    final choice = await chooseDueDate(context, item.label, item.dueDate);
     if (choice == null || !mounted) return;
     if (choice.date == null) {
       await widget.state.setItemDetails(item.id, clearDue: true);
@@ -598,97 +620,10 @@ class _ListScreenState extends State<ListScreen> {
   /// Échéance de la tâche en cours de saisie (zone d'ajout).
   Future<void> _pickNewDue() async {
     final title = _quickAdd.text.trim().split("\n").first;
-    final choice =
-        await _chooseDueDate(title.isEmpty ? S.dueDate : title, _newDue);
+    final choice = await chooseDueDate(
+        context, title.isEmpty ? S.dueDate : title, _newDue);
     if (choice == null || !mounted) return;
     setState(() => _newDue = choice.date);
-  }
-
-  /// Raccourcis en un tap puis sélecteur date/heure complet.
-  /// Retourne null si annulé ; `_DueChoice(null)` si l'échéance est retirée.
-  Future<_DueChoice?> _chooseDueDate(String title, DateTime? current) async {
-    final now = DateTime.now();
-    final choice = await showDialog<String>(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title:
-            Text("${S.dueDate} — $title", style: const TextStyle(fontSize: 16)),
-        children: [
-          SimpleDialogOption(
-            child: ListTile(
-              dense: true,
-              leading: const Icon(Icons.today_outlined),
-              title: Text(S.today),
-            ),
-            onPressed: () => Navigator.pop(context, "today"),
-          ),
-          SimpleDialogOption(
-            child: ListTile(
-              dense: true,
-              leading: const Icon(Icons.arrow_outward),
-              title: Text(S.tomorrow),
-            ),
-            onPressed: () => Navigator.pop(context, "tomorrow"),
-          ),
-          SimpleDialogOption(
-            child: ListTile(
-              dense: true,
-              leading: const Icon(Icons.date_range_outlined),
-              title: Text(S.inAWeek),
-            ),
-            onPressed: () => Navigator.pop(context, "week"),
-          ),
-          SimpleDialogOption(
-            child: ListTile(
-              dense: true,
-              leading: const Icon(Icons.calendar_month_outlined),
-              title: Text(S.chooseDate),
-            ),
-            onPressed: () => Navigator.pop(context, "custom"),
-          ),
-          if (current != null)
-            SimpleDialogOption(
-              child: ListTile(
-                dense: true,
-                leading: const Icon(Icons.event_busy),
-                title: Text(S.removeDueDate),
-              ),
-              onPressed: () => Navigator.pop(context, "clear"),
-            ),
-        ],
-      ),
-    );
-    if (choice == null || !mounted) return null;
-    switch (choice) {
-      case "today":
-        return _DueChoice(DateTime(now.year, now.month, now.day, 18));
-      case "tomorrow":
-        return _DueChoice(DateTime(now.year, now.month, now.day + 1, 9));
-      case "week":
-        final d = now.add(const Duration(days: 7));
-        return _DueChoice(DateTime(d.year, d.month, d.day, 9));
-      case "clear":
-        return const _DueChoice(null);
-    }
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: current ?? now,
-      firstDate: now.subtract(const Duration(days: 365)),
-      lastDate: now.add(const Duration(days: 365 * 3)),
-      helpText: S.dueDate,
-    );
-    if (picked == null || !mounted) return null;
-    final time = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(current ?? now),
-    );
-    return _DueChoice(DateTime(
-      picked.year,
-      picked.month,
-      picked.day,
-      time?.hour ?? 0,
-      time?.minute ?? 0,
-    ));
   }
 
   Future<void> _editNotes(LocalItem item) async {
@@ -775,10 +710,4 @@ class _ListScreenState extends State<ListScreen> {
       _newDue = null;
     });
   }
-}
-
-/// Résultat du sélecteur d'échéance : [date] null = échéance retirée.
-class _DueChoice {
-  final DateTime? date;
-  const _DueChoice(this.date);
 }
