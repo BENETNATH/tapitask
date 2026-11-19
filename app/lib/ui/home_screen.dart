@@ -416,7 +416,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         floatingActionButton: FloatingActionButton.extended(
           icon: const Icon(Icons.add),
-          label: Text(S.addButton.replaceFirst("＋", "").trim()),
+          label: Text(S.add),
           onPressed: _onAddPressed,
         ),
       ),
@@ -891,7 +891,6 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final addLabel = S.addButton.replaceFirst("＋", "").trim();
     return AlertDialog(
       title: Text(S.newTask),
       content: SizedBox(
@@ -946,7 +945,7 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context), child: Text(S.cancel)),
-        FilledButton(onPressed: _submit, child: Text(addLabel)),
+        FilledButton(onPressed: _submit, child: Text(S.add)),
       ],
     );
   }
