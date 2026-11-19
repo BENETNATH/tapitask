@@ -238,8 +238,26 @@ class _ListScreenState extends State<ListScreen> {
                   await widget.state.setListLocalOnly(list.id, !list.localOnly);
                 }
                 if (action == "color") await _pickColor(list);
+                if (action == "default") {
+                  await widget.state.setDefaultList(
+                      widget.state.defaultListId == list.id ? null : list.id);
+                }
               },
               itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: "default",
+                  child: Row(children: [
+                    Icon(widget.state.defaultListId == _listId
+                        ? Icons.star
+                        : Icons.star_border),
+                    const SizedBox(width: 12),
+                    Flexible(
+                      child: Text(widget.state.defaultListId == _listId
+                          ? S.unsetDefaultList
+                          : S.setDefaultList),
+                    ),
+                  ]),
+                ),
                 PopupMenuItem(
                   value: "clean",
                   child: Row(children: [
