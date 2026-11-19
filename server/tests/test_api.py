@@ -1011,7 +1011,9 @@ async def test_mcp_http_errors_keep_request_id(client):
                        "arguments": {"list_id": "x",
                                      "item_id": "00000000-0000-0000-0000-000000000000"}}})
         reply = await asyncio.wait_for(q.get(), 2.0)
-        assert reply["id"] == "req-9" and reply["error"]["code"] == -32603
+        # A tool that ran and failed is a tool result, not a JSON-RPC error.
+        assert reply["id"] == "req-9" and "error" not in reply
+        assert reply["result"]["isError"] is True
 
         await client.post(url, headers=h,
                           json={"jsonrpc": "2.0", "id": 0, "method": "tools/call"})
@@ -1031,6 +1033,59 @@ async def test_mcp_http_errors_keep_request_id(client):
         assert q.empty()
     finally:
         mcp_http._sessions.pop("ids", None)
+
+
+@pytest.mark.asyncio
+async def test_mcp_http_tool_failures_are_iserror_results(client):
+    """Tool execution failures come back as isError results the model can
+    read; protocol failures (unknown tool, bad or missing arguments) stay
+    JSON-RPC errors."""
+    import asyncio
+
+    from app import mcp_http
+
+    h, uid = await _mcp_user(client, "mcpiserror@example.com")
+    list_id = (await client.post("/lists", json={"title": "Groceries"},
+                                 headers=h)).json()["id"]
+    ro_key = (await client.post("/api-keys", json={"name": "ro", "read_only": True},
+                                headers=h)).json()["key"]
+    ro = {"Authorization": f"Bearer {ro_key}"}
+    q = asyncio.Queue()
+    mcp_http._sessions["iserr"] = mcp_http._Session(user_id=uid, queue=q)
+    url = "/mcp/messages?sessionId=iserr"
+
+    async def call(headers, req_id, name, arguments):
+        await client.post(url, headers=headers, json={
+            "jsonrpc": "2.0", "id": req_id, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments}})
+        reply = await asyncio.wait_for(q.get(), 2.0)
+        assert reply["id"] == req_id
+        return reply
+
+    try:
+        # Read-only key writing: refused with the REST wording, as a result.
+        reply = await call(ro, 1, "add_items", {"list_id": list_id, "text": "milk"})
+        assert reply["result"]["isError"] is True
+        assert reply["result"]["content"][0]["text"] == "HTTP 403: Read-only credentials"
+        assert (await client.get(f"/lists/{list_id}/items", headers=h)).json() == []
+
+        # Bad id value: invalid input data, reported as a tool failure.
+        reply = await call(h, 2, "get_list", {"list_id": "not-a-uuid"})
+        assert reply["result"]["isError"] is True
+
+        # Success carries no isError flag.
+        reply = await call(h, 3, "get_list", {"list_id": list_id})
+        assert "isError" not in reply["result"]
+
+        # Protocol failures stay JSON-RPC errors.
+        reply = await call(h, 4, "nope", {})
+        assert reply["error"]["code"] == -32602 and "result" not in reply
+        reply = await call(h, 5, "get_list", {})  # list_id missing
+        assert reply["error"]["code"] == -32602
+        reply = await call(h, 6, "get_list", ["not", "an", "object"])
+        assert reply["error"]["code"] == -32602
+    finally:
+        mcp_http._sessions.pop("iserr", None)
 
 
 @pytest.mark.asyncio
@@ -1130,11 +1185,12 @@ async def test_mcp_cross_tenant_isolation(client):
             return reply
 
         def error_of(reply) -> str:
-            assert "error" in reply, reply
-            return reply["error"]["message"]
+            # Refusals are tool execution errors: isError results (MCP).
+            assert reply.get("result", {}).get("isError") is True, reply
+            return reply["result"]["content"][0]["text"]
 
         def text_of(reply) -> str:
-            assert "result" in reply, reply
+            assert "result" in reply and not reply["result"].get("isError"), reply
             return reply["result"]["content"][0]["text"]
 
         qa, qv, qm = queues["mcpatt@example.com"], queues["mcpvic@example.com"], \
