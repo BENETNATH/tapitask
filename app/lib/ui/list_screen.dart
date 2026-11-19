@@ -144,8 +144,7 @@ class _ListScreenState extends State<ListScreen> {
         IconButton(
           tooltip: S.prevList,
           icon: const Icon(Icons.chevron_left, size: 22),
-          onPressed:
-              index > 0 ? () => _switchList(_lists[index - 1].id) : null,
+          onPressed: index > 0 ? () => _switchList(_lists[index - 1].id) : null,
         ),
         Expanded(
           child: PopupMenuButton<String>(
@@ -163,8 +162,7 @@ class _ListScreenState extends State<ListScreen> {
                       const SizedBox(width: 16),
                     const SizedBox(width: 8),
                     Flexible(
-                        child: Text(l.title,
-                            overflow: TextOverflow.ellipsis)),
+                        child: Text(l.title, overflow: TextOverflow.ellipsis)),
                   ]),
                 ),
             ],
@@ -193,213 +191,212 @@ class _ListScreenState extends State<ListScreen> {
     final scheme = Theme.of(context).colorScheme;
     return CallbackShortcuts(
       bindings: {
-        const SingleActivator(LogicalKeyboardKey.keyZ, control: true):
-            () => widget.state.undoLast(),
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () =>
+            widget.state.undoLast(),
       },
       child: Scaffold(
-      appBar: AppBar(
-        title: _title(context),
-        actions: [
-          PopupMenuButton<String>(
-            onSelected: (action) async {
-              // clean / share : déplaçés des anciens IconButtons pour libérer
-              // la zone du titre (spec lot P, P2b) — logique déplacée, pas dupliquée.
-              if (action == "clean") {
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: Text(S.cleanDoneConfirm),
-                    content: Text(S.cleanDoneBody),
-                    actions: [
-                      TextButton(
-                          onPressed: () => Navigator.pop(context, false),
-                          child: Text(S.cancel)),
-                      FilledButton(
-                          onPressed: () => Navigator.pop(context, true),
-                          child: Text(S.clean)),
-                    ],
-                  ),
-                );
-                if (confirmed == true) await state.purgeDone(_listId);
-              }
-              if (action == "share") {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        ShareScreen(state: state, listId: _listId),
-                  ),
-                );
-              }
-              final list = await _list();
-              if (list == null) return;
-              if (action == "rename") await _renameList(list);
-              if (action == "delete") await _deleteList(list);
-              if (action == "sync") {
-                await widget.state.setListLocalOnly(list.id, !list.localOnly);
-              }
-              if (action == "color") await _pickColor(list);
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: "clean",
-                child: Row(children: [
-                  Icon(Icons.delete_sweep_outlined),
-                  const SizedBox(width: 12),
-                  Text(S.cleanDone),
-                ]),
-              ),
-              PopupMenuItem(
-                value: "share",
-                child: Row(children: [
-                  Icon(Icons.share),
-                  const SizedBox(width: 12),
-                  Text(S.share),
-                ]),
-              ),
-              PopupMenuItem(
-                value: "color",
-                child: Row(children: [
-                  Icon(Icons.palette_outlined),
-                  SizedBox(width: 12),
-                  Text(S.color),
-                ]),
-              ),
-              PopupMenuItem(
-                value: "sync",
-                child: FutureBuilder<LocalList?>(
-                  future: _list(),
-                  builder: (context, snap) => Row(children: [
-                    Icon(snap.data?.localOnly == true
-                        ? Icons.cloud_off_outlined
-                        : Icons.cloud_done_outlined),
-                    const SizedBox(width: 12),
-                    Text(snap.data?.localOnly == true
-                        ? "Activer la synchro"
-                        : "Local uniquement"),
-                  ]),
-                ),
-              ),
-              PopupMenuItem(
-                value: "rename",
-                child: Row(children: [
-                  Icon(Icons.drive_file_rename_outline),
-                  SizedBox(width: 12),
-                  Text(S.rename),
-                ]),
-              ),
-              PopupMenuItem(
-                value: "delete",
-                child: Row(children: [
-                  Icon(Icons.delete_outline),
-                  SizedBox(width: 12),
-                  Text(S.delete),
-                ]),
-              ),
-            ],
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Card(
-            elevation: 0,
-            margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-              side: BorderSide(color: scheme.outlineVariant),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
-              child: Column(
-                children: [
-                  TextField(
-                    controller: _quickAdd,
-                    focusNode: _addFocus,
-                    autofocus:
-                        defaultTargetPlatform == TargetPlatform.windows,
-                    maxLines: 3,
-                    minLines: 1,
-                    textInputAction: TextInputAction.newline,
-                    decoration: InputDecoration(
-                      border: InputBorder.none,
-                      hintText: _parentIdForNextAdd != null
-                          ? S.subtaskHint
-                          : "Ajouter… (collez plusieurs lignes = plusieurs items)",
-                      suffixIcon: IconButton(
-                        icon: Icon(Icons.add_circle,
-                            color: scheme.primary),
-                        onPressed: _submit,
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    height: 40,
-                    child: Row(
-                      children: [
-                        if (_parentIdForNextAdd != null)
-                          ActionChip(
-                            label: Text(S.subtask),
-                            avatar: const Icon(Icons.subdirectory_arrow_right,
-                                size: 18),
-                            onPressed: () => setState(
-                                () => _parentIdForNextAdd = null),
-                          ),
-                        Flexible(
-                          child: InputChip(
-                            visualDensity: VisualDensity.compact,
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                            avatar: Icon(
-                                _newDue == null
-                                    ? Icons.event_outlined
-                                    : Icons.event,
-                                size: 18,
-                                color: _newDue == null
-                                    ? scheme.outline
-                                    : scheme.primary),
-                            label: Text(
-                              _newDue == null
-                                  ? S.dueDate
-                                  : _dueLabel(_newDue!),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            tooltip: S.setDueDate,
-                            onPressed: _pickNewDue,
-                            onDeleted: _newDue == null
-                                ? null
-                                : () => setState(() => _newDue = null),
-                          ),
-                        ),
-                        const Spacer(),
-                        DropdownButton<String>(
-                          value: _recurrence,
-                          underline: const SizedBox.shrink(),
-                          isDense: true,
-                          items: [
-                            DropdownMenuItem(
-                                value: "none", child: Text(S.noRepeat)),
-                            DropdownMenuItem(
-                                value: "daily", child: Text(S.daily)),
-                            DropdownMenuItem(
-                                value: "weekly", child: Text(S.weekly)),
-                            DropdownMenuItem(
-                                value: "monthly", child: Text(S.monthly)),
-                          ],
-                          onChanged: (v) =>
-                              setState(() => _recurrence = v ?? "none"),
-                        ),
+        appBar: AppBar(
+          title: _title(context),
+          actions: [
+            PopupMenuButton<String>(
+              onSelected: (action) async {
+                // clean / share : déplaçés des anciens IconButtons pour libérer
+                // la zone du titre (spec lot P, P2b) — logique déplacée, pas dupliquée.
+                if (action == "clean") {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: Text(S.cleanDoneConfirm),
+                      content: Text(S.cleanDoneBody),
+                      actions: [
+                        TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: Text(S.cancel)),
+                        FilledButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            child: Text(S.clean)),
                       ],
                     ),
+                  );
+                  if (confirmed == true) await state.purgeDone(_listId);
+                }
+                if (action == "share") {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          ShareScreen(state: state, listId: _listId),
+                    ),
+                  );
+                }
+                final list = await _list();
+                if (list == null) return;
+                if (action == "rename") await _renameList(list);
+                if (action == "delete") await _deleteList(list);
+                if (action == "sync") {
+                  await widget.state.setListLocalOnly(list.id, !list.localOnly);
+                }
+                if (action == "color") await _pickColor(list);
+              },
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: "clean",
+                  child: Row(children: [
+                    Icon(Icons.delete_sweep_outlined),
+                    const SizedBox(width: 12),
+                    Text(S.cleanDone),
+                  ]),
+                ),
+                PopupMenuItem(
+                  value: "share",
+                  child: Row(children: [
+                    Icon(Icons.share),
+                    const SizedBox(width: 12),
+                    Text(S.share),
+                  ]),
+                ),
+                PopupMenuItem(
+                  value: "color",
+                  child: Row(children: [
+                    Icon(Icons.palette_outlined),
+                    SizedBox(width: 12),
+                    Text(S.color),
+                  ]),
+                ),
+                PopupMenuItem(
+                  value: "sync",
+                  child: FutureBuilder<LocalList?>(
+                    future: _list(),
+                    builder: (context, snap) => Row(children: [
+                      Icon(snap.data?.localOnly == true
+                          ? Icons.cloud_off_outlined
+                          : Icons.cloud_done_outlined),
+                      const SizedBox(width: 12),
+                      Text(snap.data?.localOnly == true
+                          ? "Activer la synchro"
+                          : "Local uniquement"),
+                    ]),
                   ),
-                ],
+                ),
+                PopupMenuItem(
+                  value: "rename",
+                  child: Row(children: [
+                    Icon(Icons.drive_file_rename_outline),
+                    SizedBox(width: 12),
+                    Text(S.rename),
+                  ]),
+                ),
+                PopupMenuItem(
+                  value: "delete",
+                  child: Row(children: [
+                    Icon(Icons.delete_outline),
+                    SizedBox(width: 12),
+                    Text(S.delete),
+                  ]),
+                ),
+              ],
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            Card(
+              elevation: 0,
+              margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: BorderSide(color: scheme.outlineVariant),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+                child: Column(
+                  children: [
+                    TextField(
+                      controller: _quickAdd,
+                      focusNode: _addFocus,
+                      autofocus:
+                          defaultTargetPlatform == TargetPlatform.windows,
+                      maxLines: 3,
+                      minLines: 1,
+                      textInputAction: TextInputAction.newline,
+                      decoration: InputDecoration(
+                        border: InputBorder.none,
+                        hintText: _parentIdForNextAdd != null
+                            ? S.subtaskHint
+                            : "Ajouter… (collez plusieurs lignes = plusieurs items)",
+                        suffixIcon: IconButton(
+                          icon: Icon(Icons.add_circle, color: scheme.primary),
+                          onPressed: _submit,
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      height: 40,
+                      child: Row(
+                        children: [
+                          if (_parentIdForNextAdd != null)
+                            ActionChip(
+                              label: Text(S.subtask),
+                              avatar: const Icon(Icons.subdirectory_arrow_right,
+                                  size: 18),
+                              onPressed: () =>
+                                  setState(() => _parentIdForNextAdd = null),
+                            ),
+                          Flexible(
+                            child: InputChip(
+                              visualDensity: VisualDensity.compact,
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              avatar: Icon(
+                                  _newDue == null
+                                      ? Icons.event_outlined
+                                      : Icons.event,
+                                  size: 18,
+                                  color: _newDue == null
+                                      ? scheme.outline
+                                      : scheme.primary),
+                              label: Text(
+                                _newDue == null
+                                    ? S.dueDate
+                                    : _dueLabel(_newDue!),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              tooltip: S.setDueDate,
+                              onPressed: _pickNewDue,
+                              onDeleted: _newDue == null
+                                  ? null
+                                  : () => setState(() => _newDue = null),
+                            ),
+                          ),
+                          const Spacer(),
+                          DropdownButton<String>(
+                            value: _recurrence,
+                            underline: const SizedBox.shrink(),
+                            isDense: true,
+                            items: [
+                              DropdownMenuItem(
+                                  value: "none", child: Text(S.noRepeat)),
+                              DropdownMenuItem(
+                                  value: "daily", child: Text(S.daily)),
+                              DropdownMenuItem(
+                                  value: "weekly", child: Text(S.weekly)),
+                              DropdownMenuItem(
+                                  value: "monthly", child: Text(S.monthly)),
+                            ],
+                            onChanged: (v) =>
+                                setState(() => _recurrence = v ?? "none"),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-          Expanded(child: _itemsBody()),
-        ],
+            Expanded(child: _itemsBody()),
+          ],
+        ),
       ),
-    ),
     );
   }
 
@@ -417,8 +414,7 @@ class _ListScreenState extends State<ListScreen> {
         .toList();
     if (top.isEmpty) {
       return Center(
-        child: Text(S.nothingToDoAdd,
-            style: TextStyle(color: scheme.outline)),
+        child: Text(S.nothingToDoAdd, style: TextStyle(color: scheme.outline)),
       );
     }
     return ReorderableListView.builder(
@@ -452,8 +448,7 @@ class _ListScreenState extends State<ListScreen> {
             alignment: Alignment.centerRight,
             padding: const EdgeInsets.only(right: 20),
             margin: const EdgeInsets.symmetric(vertical: 2),
-            child: Icon(Icons.delete_outline,
-                color: scheme.onErrorContainer),
+            child: Icon(Icons.delete_outline, color: scheme.onErrorContainer),
           ),
           onDismissed: (_) async {
             final messenger = ScaffoldMessenger.of(context);
@@ -477,19 +472,15 @@ class _ListScreenState extends State<ListScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               GestureDetector(
-                onLongPress: () =>
-                    _itemActions(item),
+                onLongPress: () => _itemActions(item),
                 child: CheckboxListTile(
                   dense: true,
                   value: item.done,
-                  controlAffinity:
-                      ListTileControlAffinity.leading,
+                  controlAffinity: ListTileControlAffinity.leading,
                   title: Text(
                     item.label,
                     style: TextStyle(
-                      decoration: item.done
-                          ? TextDecoration.lineThrough
-                          : null,
+                      decoration: item.done ? TextDecoration.lineThrough : null,
                       color: item.done ? scheme.outline : null,
                     ),
                   ),
@@ -511,41 +502,32 @@ class _ListScreenState extends State<ListScreen> {
                                     ? scheme.outline
                                     : scheme.primary,
                               ),
-                              onPressed: () =>
-                                  _pickDueDate(item),
+                              onPressed: () => _pickDueDate(item),
                             ),
                             IconButton(
                               tooltip: S.itemActions,
                               icon: Icon(Icons.more_vert,
-                                  size: 20,
-                                  color: scheme.outline),
-                              onPressed: () =>
-                                  _itemActions(item),
+                                  size: 20, color: scheme.outline),
+                              onPressed: () => _itemActions(item),
                             ),
                           ],
                         )
                       : null,
-                  onChanged: (v) =>
-                      state.toggleItem(item.id, v ?? false),
+                  onChanged: (v) => state.toggleItem(item.id, v ?? false),
                 ),
               ),
               for (final child in children)
                 Padding(
-                  padding:
-                      const EdgeInsets.only(left: 32, bottom: 2),
+                  padding: const EdgeInsets.only(left: 32, bottom: 2),
                   child: CheckboxListTile(
                     dense: true,
-                    controlAffinity:
-                        ListTileControlAffinity.leading,
+                    controlAffinity: ListTileControlAffinity.leading,
                     value: child.done,
                     title: Text(child.label,
                         style: TextStyle(
                             fontSize: 13,
-                            color: child.done
-                                ? scheme.outline
-                                : null)),
-                    onChanged: (v) =>
-                        state.toggleItem(child.id, v ?? false),
+                            color: child.done ? scheme.outline : null)),
+                    onChanged: (v) => state.toggleItem(child.id, v ?? false),
                   ),
                 ),
             ],
@@ -616,8 +598,8 @@ class _ListScreenState extends State<ListScreen> {
   /// Échéance de la tâche en cours de saisie (zone d'ajout).
   Future<void> _pickNewDue() async {
     final title = _quickAdd.text.trim().split("\n").first;
-    final choice = await _chooseDueDate(
-        title.isEmpty ? S.dueDate : title, _newDue);
+    final choice =
+        await _chooseDueDate(title.isEmpty ? S.dueDate : title, _newDue);
     if (choice == null || !mounted) return;
     setState(() => _newDue = choice.date);
   }
@@ -629,8 +611,8 @@ class _ListScreenState extends State<ListScreen> {
     final choice = await showDialog<String>(
       context: context,
       builder: (context) => SimpleDialog(
-        title: Text("${S.dueDate} — $title",
-            style: const TextStyle(fontSize: 16)),
+        title:
+            Text("${S.dueDate} — $title", style: const TextStyle(fontSize: 16)),
         children: [
           SimpleDialogOption(
             child: ListTile(
@@ -701,8 +683,11 @@ class _ListScreenState extends State<ListScreen> {
       initialTime: TimeOfDay.fromDateTime(current ?? now),
     );
     return _DueChoice(DateTime(
-      picked.year, picked.month, picked.day,
-      time?.hour ?? 0, time?.minute ?? 0,
+      picked.year,
+      picked.month,
+      picked.day,
+      time?.hour ?? 0,
+      time?.minute ?? 0,
     ));
   }
 
@@ -736,9 +721,8 @@ class _ListScreenState extends State<ListScreen> {
 
   Future<LocalList?> _list() => widget.state.db.getList(_listId);
 
-  Widget _subtitlePart(IconData icon, String text, {Color? color}) => Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
+  Widget _subtitlePart(IconData icon, String text, {Color? color}) =>
+      Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(icon, size: 12, color: color),
         const SizedBox(width: 3),
         Text(text,
@@ -754,12 +738,10 @@ class _ListScreenState extends State<ListScreen> {
       parts.add(_subtitlePart(
           overdue ? Icons.warning_amber_rounded : Icons.event,
           _dueLabel(item.dueDate!),
-          color:
-              overdue ? Theme.of(context).colorScheme.error : null));
+          color: overdue ? Theme.of(context).colorScheme.error : null));
     }
     if (item.recurrence != "none") {
-      parts.add(
-          _subtitlePart(Icons.replay, _recurrenceLabel(item.recurrence)));
+      parts.add(_subtitlePart(Icons.replay, _recurrenceLabel(item.recurrence)));
     }
     if (item.notes != null && item.notes!.isNotEmpty) {
       parts.add(_subtitlePart(Icons.notes_outlined, item.notes!));
