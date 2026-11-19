@@ -222,6 +222,7 @@ class _ListScreenState extends State<ListScreen> {
                   if (confirmed == true) await state.purgeDone(_listId);
                 }
                 if (action == "share") {
+                  if (!context.mounted) return;
                   Navigator.push(
                     context,
                     MaterialPageRoute(
