@@ -125,8 +125,33 @@ def _handle(name: str, args: dict) -> str:
     raise ValueError(f"Unknown tool: {name}")
 
 
+TOOL_NAMES = {t["name"] for t in TOOLS}
+
+
 def _error(req_id, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+
+
+def _http_detail(e: urllib.error.HTTPError) -> str:
+    """The API's error message: FastAPI's {"detail": "..."} when present
+    (same wording as the HTTP bridge), else the raw body, else the reason."""
+    body = e.read().decode(errors="replace")[:500]
+    try:
+        detail = json.loads(body).get("detail")
+    except (ValueError, AttributeError):
+        detail = None
+    return detail if isinstance(detail, str) else (body or str(e.reason))
+
+
+def _tool_result(text: str, is_error: bool = False) -> dict:
+    """A tools/call result. A tool that ran but failed (API refusal, missing
+    item, unreachable API) is reported here with isError, not as a JSON-RPC
+    error: MCP keeps JSON-RPC errors for protocol failures, and clients show
+    isError results to the model as an ordinary tool outcome."""
+    result: dict = {"content": [{"type": "text", "text": text}]}
+    if is_error:
+        result["isError"] = True
+    return result
 
 
 def handle_line(line: str) -> dict | None:
@@ -136,6 +161,10 @@ def handle_line(line: str) -> dict | None:
     client can settle that request immediately instead of waiting for a
     timeout. Only an unparseable line gets id null (JSON-RPC 2.0, §5).
     Notifications (no "id" member) never get a reply, not even on failure.
+
+    Malformed requests, unknown methods or tools, missing arguments and
+    server-side faults (e.g. an unreadable key file) are JSON-RPC errors.
+    A known tool that runs and fails returns an isError result instead.
     """
     try:
         request = json.loads(line)
@@ -160,16 +189,24 @@ def handle_line(line: str) -> dict | None:
             if not isinstance(params, dict) or not isinstance(params.get("name"), str):
                 return None if is_notification else _error(
                     req_id, -32602, "Invalid params: 'name' is required")
-            text = _handle(params["name"], params.get("arguments") or {})
-            result = {"content": [{"type": "text", "text": text}]}
+            name, arguments = params["name"], params.get("arguments")
+            if name not in TOOL_NAMES:
+                return None if is_notification else _error(
+                    req_id, -32602, f"Unknown tool: {name}")
+            if arguments is not None and not isinstance(arguments, dict):
+                return None if is_notification else _error(
+                    req_id, -32602, "Invalid params: 'arguments' must be an object")
+            try:
+                result = _tool_result(_handle(name, arguments or {}))
+            except urllib.error.HTTPError as e:
+                result = _tool_result(f"HTTP {e.code}: {_http_detail(e)}", is_error=True)
+            except urllib.error.URLError as e:
+                result = _tool_result(
+                    f"Cannot reach the Tapitask API at {URL}: {e.reason}", is_error=True)
         elif is_notification:
             return None  # notifications/initialized, cancelled, ...
         else:
             return _error(req_id, -32601, f"Unknown method {method}")
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")[:500]
-        return None if is_notification else _error(
-            req_id, -32603, f"HTTP {e.code}: {detail or e.reason}")
     except KeyError as e:
         return None if is_notification else _error(
             req_id, -32602, f"Invalid params: missing {e}")

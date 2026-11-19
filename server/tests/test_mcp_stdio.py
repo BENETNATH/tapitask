@@ -24,16 +24,17 @@ def test_tool_failure_keeps_request_id(monkeypatch):
                    "arguments": {"list_id": "l", "item_id": "i"}},
     }))
     assert reply["id"] == 42
-    assert reply["error"]["code"] == -32603
-    assert "404" in reply["error"]["message"]
-    assert "Item not found" in reply["error"]["message"]
+    # A tool that ran and failed is a tool result, not a JSON-RPC error.
+    assert "error" not in reply and reply["result"]["isError"] is True
+    text = reply["result"]["content"][0]["text"]
+    assert "404" in text and "Item not found" in text
 
 
 def test_unknown_tool_and_bad_params_keep_request_id():
     reply = mcp_server.handle_line(json.dumps({
         "jsonrpc": "2.0", "id": "abc", "method": "tools/call",
         "params": {"name": "nope", "arguments": {}}}))
-    assert reply["id"] == "abc" and "error" in reply
+    assert reply["id"] == "abc" and reply["error"]["code"] == -32602
 
     reply = mcp_server.handle_line(json.dumps({
         "jsonrpc": "2.0", "id": 7, "method": "tools/call",
@@ -43,6 +44,63 @@ def test_unknown_tool_and_bad_params_keep_request_id():
     reply = mcp_server.handle_line(json.dumps({
         "jsonrpc": "2.0", "id": 8, "method": "tools/call"}))  # no params
     assert reply["id"] == 8 and reply["error"]["code"] == -32602
+
+
+def test_read_only_refusal_and_unreachable_api_are_iserror(monkeypatch):
+    def refused(method, path, body=None):
+        raise _http_error(403, '{"detail":"Read-only credentials"}')
+
+    monkeypatch.setattr(mcp_server, "_api", refused)
+    reply = mcp_server.handle_line(json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "add_items",
+                   "arguments": {"list_id": "l", "text": "milk"}}}))
+    assert reply["result"]["isError"] is True
+    # Same wording as the HTTP bridge: FastAPI's detail, not the raw JSON.
+    assert reply["result"]["content"][0]["text"] == "HTTP 403: Read-only credentials"
+
+    def proxy(method, path, body=None):
+        raise _http_error(502, "<html>Bad gateway</html>")
+
+    monkeypatch.setattr(mcp_server, "_api", proxy)
+    reply = mcp_server.handle_line(json.dumps({
+        "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+        "params": {"name": "list_lists"}}))
+    assert reply["result"]["content"][0]["text"] == "HTTP 502: <html>Bad gateway</html>"
+
+    def down(method, path, body=None):
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr(mcp_server, "_api", down)
+    reply = mcp_server.handle_line(json.dumps({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "list_lists"}}))
+    assert reply["result"]["isError"] is True
+    assert "Connection refused" in reply["result"]["content"][0]["text"]
+
+
+def test_protocol_and_server_faults_stay_jsonrpc_errors(monkeypatch):
+    reply = mcp_server.handle_line(json.dumps({
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": "get_list", "arguments": ["l"]}}))
+    assert reply["error"]["code"] == -32602 and "result" not in reply
+
+    def no_key(method, path, body=None):
+        raise RuntimeError("cannot read CHECKLISTS_API_KEY_FILE: No such file")
+
+    monkeypatch.setattr(mcp_server, "_api", no_key)
+    reply = mcp_server.handle_line(json.dumps({
+        "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+        "params": {"name": "list_lists"}}))
+    assert reply["error"]["code"] == -32603
+
+
+def test_success_has_no_iserror(monkeypatch):
+    monkeypatch.setattr(mcp_server, "_api", lambda m, p, b=None: "[]")
+    reply = mcp_server.handle_line(json.dumps({
+        "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "list_lists"}}))
+    assert reply["result"] == {"content": [{"type": "text", "text": "[]"}]}
 
 
 def test_success_unknown_method_and_id_zero():

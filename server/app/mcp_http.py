@@ -78,7 +78,20 @@ TOOLS = [
     },
 ]
 
+TOOL_NAMES = {t["name"] for t in TOOLS}
+
 REPLY_TIMEOUT = 5.0  # seconds to wait for room on a saturated stream
+
+
+def _tool_result(text: str, is_error: bool = False) -> dict[str, Any]:
+    """A tools/call result. A tool that ran but failed (access refused, item
+    missing, bad id value) is reported here with isError, not as a JSON-RPC
+    error: MCP keeps JSON-RPC errors for protocol failures, and clients show
+    isError results to the model as an ordinary tool outcome."""
+    result: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
+    if is_error:
+        result["isError"] = True
+    return result
 
 
 @dataclass
@@ -167,15 +180,32 @@ async def messages(
     elif method == "tools/list":
         message["result"] = {"tools": TOOLS}
     elif method == "tools/call":
+        # Protocol failures (malformed params, unknown tool, missing argument,
+        # unexpected server fault) are JSON-RPC errors; a known tool that runs
+        # and fails returns an isError result.
         params = payload.get("params")
+        arguments = params.get("arguments") if isinstance(params, dict) else None
         if not isinstance(params, dict) or not isinstance(params.get("name"), str):
             message["error"] = {"code": -32602,
                                 "message": "Invalid params: 'name' is required"}
+        elif params["name"] not in TOOL_NAMES:
+            message["error"] = {"code": -32602,
+                                "message": f"Unknown tool: {params['name']}"}
+        elif arguments is not None and not isinstance(arguments, dict):
+            message["error"] = {"code": -32602,
+                                "message": "Invalid params: 'arguments' must be an object"}
         else:
             try:
-                result = await _call_tool(
-                    principal, params["name"], params.get("arguments") or {})
-                message["result"] = {"content": [{"type": "text", "text": result}]}
+                result = await _call_tool(principal, params["name"], arguments or {})
+                message["result"] = _tool_result(result)
+            except KeyError as e:
+                message["error"] = {"code": -32602,
+                                    "message": f"Invalid params: missing {e}"}
+            except HTTPException as e:
+                message["result"] = _tool_result(
+                    f"HTTP {e.status_code}: {e.detail}", is_error=True)
+            except ValueError as e:
+                message["result"] = _tool_result(str(e), is_error=True)
             except Exception as e:
                 message["error"] = {"code": -32603, "message": str(e)}
     elif is_notification:
@@ -262,7 +292,7 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
             # Write tool: editor role on the target list, and read-only
             # principals (scoped API keys) must be refused.
             if principal.read_only:
-                raise ValueError("Read-only credentials")
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "Read-only credentials")
             await accessible_list(_uuid(args["list_id"]), principal, session, min_role=Role.editor)
             from .routers.lists import _add_single
             from .events import record_change, notify_list
@@ -284,7 +314,7 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
             # principals refused (authorizes the list the item belongs to, not
             # a caller-supplied list_id).
             if principal.read_only:
-                raise ValueError("Read-only credentials")
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "Read-only credentials")
             await accessible_list(item.list_id, principal, session, min_role=Role.editor)
             done = args.get("done", True)
             if not isinstance(done, bool):
