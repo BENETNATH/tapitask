@@ -7,7 +7,7 @@ import "package:tapitask/state/app_state.dart";
 
 /// Spec lot W (W3) : le flyout respecte le réglage hide_done (volet/widget) —
 /// ON (défaut) : uniquement les items non-cochés ; OFF : tous les items,
-/// les cochés passent le flag done de la ligne (I <id> 1 <label>).
+/// les cochés passent le flag done de la ligne (`I <id> 1 <label>`).
 void main() {
   const listId = "11111111-2222-3333-4444-555555555555";
   const openId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";

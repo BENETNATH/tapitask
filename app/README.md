@@ -90,8 +90,7 @@ lib/
 │   ├── todo_all_screen.dart# « À faire » : non cochés groupés par liste
 │   ├── settings_screen.dart# réglages par utilisateur + thème
 │   ├── login_screen.dart   # login / invite / URL serveur
-│   ├── widgets.dart        # widgets partagés (tile, icône d'échéance…)
-│   └── tray_panel.dart     # contenu du volet rapide (Windows)
+│   └── widgets.dart        # widgets partagés (tile, icône d'échéance…)
 ├── widgets/
 │   └── home_widget.dart    # bridge Dart ↔ natif (prefs partagées, toggles)
 ├── platform/
