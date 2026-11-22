@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from .models import Role as RoleEnum
 
@@ -105,6 +105,8 @@ class ItemIn(BaseModel):
 
 
 class ItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     list_id: UUID
     parent_id: UUID | None = None
@@ -162,7 +164,6 @@ class SyncEvent(BaseModel):
     recurrence: str | None = None
     due_date: datetime | None = None
     updated_at: datetime
-    deleted: bool = False
 
 
 class SyncIn(BaseModel):

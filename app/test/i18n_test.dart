@@ -26,8 +26,8 @@ void main() {
     S.setLocale("en");
     for (final probe in [
       S.ok, S.cancel, S.settings, S.login, S.dueDate, S.folders,
-      S.members, S.features, S.notifications, S.syncSection,
-      S.appearance, S.compact, S.flyoutClose, S.promoteAdmin,
+      S.features, S.notifications, S.syncSection,
+      S.appearance, S.compact, S.promoteAdmin,
       S.active, S.roleViewer, S.roleEditor,
       S.t("monday"), S.t("sunday"), S.unpin, S.pollOff,
       S.hideDoneApp, S.hideDoneAppHelp,

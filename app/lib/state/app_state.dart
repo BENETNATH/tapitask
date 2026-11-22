@@ -25,8 +25,6 @@ class AppState extends ChangeNotifier {
   late final ApiClient api;
   late final SyncService sync;
 
-  bool ready = false;
-  String? error;
   bool isAdmin = false;
   bool quickAddRequested = false;
   String? quickAddListId;
@@ -51,7 +49,6 @@ class AppState extends ChangeNotifier {
     "compact_due": true,
     "flyout_open_button": true,
     "start_hidden": false,
-    "compact_delete": true,
     // Volet/widget : masquer les items cochés. App : même feature, réglage
     // distinct (lot W — le réglage app ne pilote pas les surfaces compactes).
     "hide_done": true,
@@ -79,9 +76,6 @@ class AppState extends ChangeNotifier {
   /// Échéances affichées dans le volet / widget.
   bool get compactDueDates => settings["compact_due"] != false;
 
-  /// Poubelle visible dans le volet.
-  bool get compactDelete => settings["compact_delete"] != false;
-
   /// [lightweight] skips everything network-related (full sync, profile,
   /// alerts, widget-launch URI): used by the Windows flyout, which must be
   /// instant and only reads/writes the local database.
@@ -94,7 +88,6 @@ class AppState extends ChangeNotifier {
       // The flyout reads the locally cached settings (written by the main
       // window on every profile reload / settings save) — no network needed.
       await _loadCachedSettings();
-      ready = true;
       notifyListeners();
       return;
     }
@@ -131,7 +124,6 @@ class AppState extends ChangeNotifier {
         _widgetClickSub = WidgetService.clicks.listen(_applyWidgetUri);
       }
     }
-    ready = true;
     notifyListeners();
   }
 

@@ -4,7 +4,7 @@ import asyncio
 import json
 from uuid import UUID
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket
 from sqlalchemy import select
 
 from .config import settings
@@ -56,7 +56,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.close(code=4401)
                     return
                 await websocket.send_text(json.dumps({"kind": "ping"}))
-    except (WebSocketDisconnect, Exception):
+    except Exception:
         pass
     finally:
         hub.unsubscribe(user_id, queue)

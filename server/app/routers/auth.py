@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..events import hub
 from ..db import get_session
-from ..deps import Principal, RateLimiter, client_key, get_principal, require_write
+from ..deps import Principal, RateLimiter, client_key, get_principal
 from ..models import RefreshToken, User, utcnow
 from ..schemas import (
     UserSettingsIn,

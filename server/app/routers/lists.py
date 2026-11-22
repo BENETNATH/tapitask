@@ -115,7 +115,6 @@ async def create_list(
 @router.get("/{list_id}/items", response_model=list[ItemOut])
 async def list_items(
     list_id: UUID,
-    filter_done: bool | None = Query(default=None, alias="filter"),
     unchecked_only: bool = Query(default=False),
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
@@ -129,7 +128,7 @@ async def list_items(
     if unchecked_only:
         query = query.where(Item.done.is_(False))
     result = await session.execute(query)
-    return [ItemOut(**_item_out(i)) for i in result.scalars()]
+    return [ItemOut.model_validate(i) for i in result.scalars()]
 
 
 @router.post("/{list_id}/items", response_model=list[ItemOut], status_code=status.HTTP_201_CREATED)
@@ -151,7 +150,7 @@ async def add_item(
                              parent_id=data.parent_id, recurrence=data.recurrence,
                              due_date=data.due_date, notes=data.notes,
                              assignee_id=data.assignee_id)
-    return [ItemOut(**_item_out(item))]
+    return [ItemOut.model_validate(item)]
 
 
 @router.post("/{list_id}/items/bulk", response_model=list[ItemOut], status_code=status.HTTP_201_CREATED)
@@ -182,7 +181,7 @@ async def add_items_bulk(
     out = []
     for item in items:
         await record_change(session, list_id=list_id, item_id=item.id, kind="item.upsert", commit=False)
-        out.append(ItemOut(**_item_out(item)))
+        out.append(ItemOut.model_validate(item))
     await session.commit()
     await notify_list(list_id, {"kind": "items.added", "list_id": str(list_id), "count": len(out)})
     return out
@@ -240,9 +239,9 @@ async def patch_item(
         "list_id": str(list_id), "item_id": str(item.id), "label": item.label,
         "recurrence": item.recurrence,
     })
-    result = ItemOut(**_item_out(item))
+    result = ItemOut.model_validate(item)
     if spawned is not None:
-        return [result, ItemOut(**_item_out(spawned))]
+        return [result, ItemOut.model_validate(spawned)]
     return [result]
 
 
@@ -405,22 +404,6 @@ async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID,
     else:
         await notify_list(item.list_id, {"kind": "item.upsert", "list_id": str(item.list_id), "id": str(next_item.id)})
     return next_item
-
-
-def _item_out(item: Item) -> dict:
-    return {
-        "id": item.id,
-        "list_id": item.list_id,
-        "parent_id": item.parent_id,
-        "label": item.label,
-        "done": item.done,
-        "position": item.position,
-        "recurrence": item.recurrence,
-        "due_date": item.due_date,
-        "notes": item.notes,
-        "assignee_id": item.assignee_id,
-        "updated_at": item.updated_at,
-    }
 
 
 @router.get("/{list_id}/summary", response_model=SummaryOut)

@@ -64,9 +64,6 @@ def check_messages(log: str) -> list:
 
 
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("-",):
-        # "-" = stdin ; un chemin de fichier est accepté aussi
-        pass
     if len(sys.argv) >= 2 and sys.argv[1] != "-":
         log = open(sys.argv[1]).read()
     else:

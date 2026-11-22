@@ -72,7 +72,7 @@ Future<String?> pickListColorDialog(BuildContext context) {
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: hex == null ? null : _parseColor(hex),
+                  color: hex == null ? null : parseColor(hex),
                   border: Border.all(
                       color: Theme.of(context).colorScheme.outline),
                   shape: BoxShape.circle,
@@ -92,7 +92,7 @@ Future<String?> pickListColorDialog(BuildContext context) {
   );
 }
 
-Color? _parseColor(String? hex) {
+Color? parseColor(String? hex) {
   if (hex == null) return null;
   final v = int.tryParse(hex.replaceFirst("#", "0xFF"));
   return v == null ? null : Color(v);

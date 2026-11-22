@@ -323,12 +323,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Color? _parseColor(String? hex) {
-    if (hex == null) return null;
-    final v = int.tryParse(hex.replaceFirst("#", "0xFF"));
-    return v == null ? null : Color(v);
-  }
-
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
@@ -581,8 +575,8 @@ class _HomeScreenState extends State<HomeScreen> {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),
         side: BorderSide(
-            color: _parseColor(list.color) ?? scheme.outlineVariant,
-            width: _parseColor(list.color) != null ? 1.5 : 1),
+            color: parseColor(list.color) ?? scheme.outlineVariant,
+            width: parseColor(list.color) != null ? 1.5 : 1),
       ),
       child: Column(
         children: [
@@ -593,7 +587,7 @@ class _HomeScreenState extends State<HomeScreen> {
           height: 12,
           margin: const EdgeInsets.only(right: 4),
           decoration: BoxDecoration(
-            color: _parseColor(list.color) ?? scheme.outline,
+            color: parseColor(list.color) ?? scheme.outline,
             shape: BoxShape.circle,
           ),
         ),
@@ -721,7 +715,7 @@ class _HomeScreenState extends State<HomeScreen> {
               value: "color",
               child: Row(children: [
                 Icon(Icons.palette_outlined,
-                    color: _parseColor(list.color)),
+                    color: parseColor(list.color)),
                 const SizedBox(width: 12),
                 Text(S.color),
               ]),

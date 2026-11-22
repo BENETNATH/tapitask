@@ -9,8 +9,6 @@ from .config import settings
 
 logger = logging.getLogger("tapitask.mail")
 
-SMTP_TLS = getattr(settings, "SMTP_TLS", None)
-
 
 def _sync_send(to: str, subject: str, body: str) -> None:
     if not settings.SMTP_ENABLED or not settings.SMTP_HOST:

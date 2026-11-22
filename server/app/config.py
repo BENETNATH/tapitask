@@ -4,7 +4,6 @@ import os
 
 
 class Settings:
-    APP_NAME: str = "tapitask"
     DATABASE_URL: str = os.environ.get(
         "DATABASE_URL",
         "postgresql+asyncpg://checklists:checklists@localhost:5432/checklists",

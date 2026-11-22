@@ -112,7 +112,7 @@ async def add_member(
         await send_email(
             user.email,
             f"Tapitask — « {checklist.title} » partagée avec vous",
-            f"Bonjour,\n\n{principal.user_id and ''}"
+            f"Bonjour,\n\n"
             f"La liste « {checklist.title} » a été partagée avec vous "
             f"(rôle : {data.role}).\nOuvrez Tapitask pour la consulter.",
         )
@@ -135,7 +135,6 @@ async def list_members(
         {"user_id": str(member.user_id), "email": email, "role": member.role.value}
         for member, email in result.all()
     ]
-    owner = await session.execute(select(User.email).where(User.id == principal.user_id))
     return members
 
 

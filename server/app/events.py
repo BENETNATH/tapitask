@@ -93,7 +93,6 @@ async def record_change(
     checklist_id: UUID | None = None,
     kind: str = "item.upsert",
     actor_id: UUID | None = None,
-    server_time: datetime | None = None,
     commit: bool = True,
 ) -> None:
     session.add(
@@ -103,7 +102,7 @@ async def record_change(
             checklist_id=checklist_id,
             kind=kind,
             actor_id=actor_id,
-            server_time=server_time or utcnow(),
+            server_time=utcnow(),
         )
     )
     if commit:

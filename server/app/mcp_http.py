@@ -20,7 +20,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .db import get_session
 from .deps import Principal, accessible_list, get_principal
 from .models import Role
-from .schemas import ApiKeyIn
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 

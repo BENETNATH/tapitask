@@ -18,10 +18,7 @@ import es.antonborri.home_widget.HomeWidgetPlugin
 class WidgetItemsRemoteViewsService : RemoteViewsService() {
     override fun onGetViewFactory(
         intent: Intent
-    ): RemoteViewsService.RemoteViewsFactory = WidgetItemAdapter(this,
-        intent.getIntExtra(
-            AppWidgetManager.EXTRA_APPWIDGET_ID,
-            AppWidgetManager.INVALID_APPWIDGET_ID))
+    ): RemoteViewsService.RemoteViewsFactory = WidgetItemAdapter(this)
 }
 
 /**
@@ -32,8 +29,7 @@ class WidgetItemsRemoteViewsService : RemoteViewsService() {
  *   que l'app applique le cochage (feedback immédiat, même qu'avant S3).
  */
 class WidgetItemAdapter(
-    private val context: Context,
-    @Suppress("UnusedPrivateMember") appWidgetId: Int
+    private val context: Context
 ) : RemoteViewsService.RemoteViewsFactory {
 
     private fun prefs() = HomeWidgetPlugin.getData(context)
