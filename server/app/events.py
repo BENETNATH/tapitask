@@ -94,6 +94,7 @@ async def record_change(
     kind: str = "item.upsert",
     actor_id: UUID | None = None,
     server_time: datetime | None = None,
+    commit: bool = True,
 ) -> None:
     session.add(
         ChangeLog(
@@ -105,7 +106,8 @@ async def record_change(
             server_time=server_time or utcnow(),
         )
     )
-    await session.commit()
+    if commit:
+        await session.commit()
 
 
 class Hub:

@@ -1898,6 +1898,240 @@ async def test_my_lists_scoped_key_sees_only_scoped_list(client):
     assert [e["id"] for e in r.json()] == [l9]
 
 
+def _spy_session_local(monkeypatch):
+    """Session factory counting commits — spec 2026-11-22 §§2-3 : la cadence
+    de commits est le comportement mesuré (batch = un seul commit)."""
+    from app.db import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    counts = {"n": 0}
+
+    class SpySession(AsyncSession):
+        async def commit(self):
+            counts["n"] += 1
+            return await super().commit()
+
+    spy = async_sessionmaker(engine, expire_on_commit=False, class_=SpySession)
+    monkeypatch.setattr("app.db.SessionLocal", spy)
+    return counts
+
+
+@pytest.mark.asyncio
+async def test_bulk_add_items_single_changelog_commit(client, monkeypatch):
+    """spec §2 : bulk de N items → N lignes ChangeLog (kind item.upsert,
+    list_id/item_id corrects) couvertes par le commit final existant —
+    un seul commit pour les items + un seul pour le changelog, pas N."""
+    from app.db import SessionLocal
+    from app.models import ChangeLog
+    from sqlalchemy import select
+
+    counts = _spy_session_local(monkeypatch)
+    tokens = await register(client, "bulkbatch@example.com")
+    h = auth_headers(tokens)
+    list_id = (await client.post("/lists", json={"title": "Bulk"}, headers=h)).json()["id"]
+    before = counts["n"]
+
+    r = await client.post(
+        f"/lists/{list_id}/items/bulk", json={"text": "a\nb\nc\n"}, headers=h
+    )
+    assert r.status_code == 201, r.text
+    out = r.json()
+    assert [i["label"] for i in out] == ["a", "b", "c"]
+    assert counts["n"] - before == 2
+
+    from uuid import UUID
+
+    async with SessionLocal() as s:
+        rows = (await s.execute(
+            select(ChangeLog).where(
+                ChangeLog.list_id == UUID(list_id), ChangeLog.kind == "item.upsert"
+            )
+        )).scalars().all()
+    assert len(rows) == 3
+    assert {str(row.item_id) for row in rows} == {i["id"] for i in out}
+
+
+@pytest.mark.asyncio
+async def test_sync_batch_savepoint_isolation(client):
+    """spec §3.1 : batch [valide, refusé(403), valide] → le refus est
+    rapporté dans `rejected`, ses écritures annulées (savepoint par
+    événement) SANS annuler les événements déjà appliqués dans le batch."""
+    import datetime as dt
+
+    t1 = await register(client, "sp-owner@example.com")
+    t2 = await register(client, "sp-other@example.com")
+    h1, h2 = auth_headers(t1), auth_headers(t2)
+    own = (await client.post("/lists", json={"title": "Own"}, headers=h1)).json()["id"]
+    other = (await client.post("/lists", json={"title": "Other"}, headers=h2)).json()["id"]
+    r = await client.post(f"/lists/{other}/members",
+                          json={"email": "sp-owner@example.com", "role": "viewer"},
+                          headers=h2)
+    assert r.status_code == 201, r.text
+
+    now = dt.datetime.now(dt.UTC).isoformat()
+    id1, id2, id3 = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    r = await client.post("/sync", json={"events": [
+        {"kind": "item.upsert", "id": id1, "list_id": own,
+         "label": "e1", "done": False, "position": 0, "updated_at": now},
+        {"kind": "item.upsert", "id": id2, "list_id": other,
+         "label": "e2", "done": False, "position": 0, "updated_at": now},
+        {"kind": "item.upsert", "id": id3, "list_id": own,
+         "label": "e3", "done": False, "position": 1, "updated_at": now},
+    ]}, headers=h1)
+    assert r.status_code == 200, r.text
+    assert r.json()["rejected"] == [id2]
+
+    # e1 et e3 sont persistés après la requête ; e2 (403) non
+    r = await client.get(f"/lists/{own}/items", headers=h1)
+    assert {i["label"] for i in r.json()} == {"e1", "e3"}
+    r = await client.get(f"/lists/{other}/items", headers=h2)
+    assert all(i["label"] != "e2" for i in r.json())
+
+
+@pytest.mark.asyncio
+async def test_sync_single_commit_and_notifications_after_commit(client, monkeypatch):
+    """spec §3.2 + §3.4 : un seul commit à la fin du batch (pas un par
+    événement) ; les notifications sont émises APRÈS ce commit, dans l'ordre
+    des événements — y compris celle d'une list.create du batch (perdue en
+    session fraîche si non différée)."""
+    from app.routers import sync as sync_mod
+
+    counts = _spy_session_local(monkeypatch)
+    calls = []
+
+    async def fake_notify(list_id, message):
+        calls.append((str(list_id), dict(message), counts["n"]))
+
+    monkeypatch.setattr(sync_mod, "notify_list", fake_notify)
+
+    tokens = await register(client, "syncsingle@example.com")
+    h = auth_headers(tokens)
+    import datetime as dt
+
+    now = dt.datetime.now(dt.UTC).isoformat()
+    new_list = str(uuid.uuid4())
+    before = counts["n"]
+    r = await client.post("/sync", json={"events": [
+        {"kind": "list.create", "id": new_list, "list_id": new_list,
+         "label": "L", "updated_at": now},
+        {"kind": "item.upsert", "id": str(uuid.uuid4()), "list_id": new_list,
+         "label": "x", "done": False, "position": 0, "updated_at": now},
+    ]}, headers=h)
+    assert r.status_code == 200, r.text
+
+    assert counts["n"] - before == 1
+    assert len(calls) == 2
+    assert [c[1]["kind"] for c in calls] == ["list.create", "item.upsert"]
+    assert all(c[0] == new_list for c in calls)
+    assert all(c[2] == counts["n"] for c in calls)  # émises après le commit final
+
+
+@pytest.mark.asyncio
+async def test_sync_infra_error_500_no_partial_commit(client, monkeypatch):
+    """spec §3.3 : une exception non-HTTPException (erreur infra) fait 500
+    le batch ; aucune écriture du batch n'est commitée ; le client peut
+    rejouer le batch en entier."""
+    from app.routers import sync as sync_mod
+
+    counts = _spy_session_local(monkeypatch)
+    tokens = await register(client, "infraerr@example.com")
+    h = auth_headers(tokens)
+    list_id = (await client.post("/lists", json={"title": "I"}, headers=h)).json()["id"]
+    before = counts["n"]
+
+    orig = sync_mod._apply_event
+    calls = {"n": 0}
+
+    async def flaky(session, event, principal, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("DB dead")
+        await orig(session, event, principal, *args, **kwargs)
+
+    monkeypatch.setattr(sync_mod, "_apply_event", flaky)
+
+    import datetime as dt
+
+    now = dt.datetime.now(dt.UTC).isoformat()
+    events = [
+        {"kind": "item.upsert", "id": str(uuid.uuid4()), "list_id": list_id,
+         "label": "e1", "done": False, "position": 0, "updated_at": now},
+        {"kind": "item.upsert", "id": str(uuid.uuid4()), "list_id": list_id,
+         "label": "e2", "done": False, "position": 1, "updated_at": now},
+    ]
+    # Starlette envoie la 500 puis re-lève (logging serveur) : sous
+    # ASGITransport, l'exception non gérée remonte au lieu du 500.
+    with pytest.raises(RuntimeError, match="DB dead"):
+        await client.post("/sync", json={"events": events}, headers=h)
+
+    # aucune écriture du batch n'est commitée (0 commit sur la requête ;
+    # en prod, le reset du pool referme la session orpheline)
+    assert counts["n"] == before
+
+    # le client rejoue le batch : succès, les deux items sont là
+    r = await client.post("/sync", json={"events": events}, headers=h)
+    assert r.status_code == 200, r.text
+    r = await client.get(f"/lists/{list_id}/items", headers=h)
+    assert {i["label"] for i in r.json()} == {"e1", "e2"}
+
+
+@pytest.mark.asyncio
+async def test_sync_notifications_delivered_in_order(client):
+    """spec §3.4 : après un batch [list.create, item.upsert], le hub reçoit
+    les 2 messages dans l'ordre, avec le bon list_id — y compris la
+    notification de la liste créée."""
+    import asyncio
+    from uuid import UUID
+
+    from app.events import hub
+
+    tokens = await register(client, "syncnotif@example.com")
+    h = auth_headers(tokens)
+    user_id = UUID((await client.get("/auth/me", headers=h)).json()["id"])
+    queue = hub.subscribe(user_id)
+    try:
+        import datetime as dt
+
+        now = dt.datetime.now(dt.UTC).isoformat()
+        new_list = str(uuid.uuid4())
+        r = await client.post("/sync", json={"events": [
+            {"kind": "list.create", "id": new_list, "list_id": new_list,
+             "label": "N", "updated_at": now},
+            {"kind": "item.upsert", "id": str(uuid.uuid4()), "list_id": new_list,
+             "label": "x", "done": False, "position": 0, "updated_at": now},
+        ]}, headers=h)
+        assert r.status_code == 200, r.text
+
+        msgs = [await asyncio.wait_for(queue.get(), timeout=2.0) for _ in range(2)]
+        assert [m["kind"] for m in msgs] == ["list.create", "item.upsert"]
+        assert all(m["list_id"] == new_list for m in msgs)
+    finally:
+        hub.unsubscribe(user_id, queue)
+
+
+@pytest.mark.asyncio
+async def test_sync_lww_older_timestamp_writes_nothing(client):
+    """spec §3.5 : LWW inchangé — un item.upsert plus ancien que l'existant
+    n'écrit rien."""
+    tokens = await register(client, "lwwpin@example.com")
+    h = auth_headers(tokens)
+    list_id = (await client.post("/lists", json={"title": "LWW"}, headers=h)).json()["id"]
+    item = (await client.post(
+        f"/lists/{list_id}/items", json={"label": "current"}, headers=h)).json()[0]
+
+    r = await client.post("/sync", json={"events": [
+        {"kind": "item.upsert", "id": item["id"], "list_id": list_id,
+         "label": "stale", "done": True, "updated_at": "2000-01-01T00:00:00"},
+    ]}, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["rejected"] == []
+
+    r = await client.get(f"/lists/{list_id}/items", headers=h)
+    stored = next(i for i in r.json() if i["id"] == item["id"])
+    assert stored["label"] == "current"
+    assert stored["done"] is not True
+
+
 @pytest.mark.asyncio
 async def test_my_lists_scoped_key_no_access(client):
     """A scoped key whose list is deleted, or whose membership was revoked,
@@ -1927,3 +2161,63 @@ async def test_my_lists_scoped_key_no_access(client):
     assert (await client.delete(f"/lists/{l9}/members/{user_a}",
                                 headers=hb)).status_code == 204
     assert (await client.get("/lists", headers=k2h)).json() == []
+
+
+@pytest.mark.asyncio
+async def test_sync_recurrence_spawn_uses_real_item_id(client, monkeypatch):
+    """spec §3 — recurrence via /sync : l'occurrence spawned est captée APRÈS la
+    génération de son id (le default new_id s'applique au flush). Le changelog
+    et la notification item.upsert doivent porter le VRAI id de l'occurrence,
+    pas None : regression id NULL / notification "None" du chemin commit=False."""
+    from app.routers import sync as sync_mod
+
+    calls = []
+
+    async def fake_notify(list_id, message):
+        calls.append(dict(message))
+
+    monkeypatch.setattr(sync_mod, "notify_list", fake_notify)
+
+    t = await register(client, "recaudit@example.com")
+    h = auth_headers(t)
+    r = await client.post("/lists", json={"title": "Rec"}, headers=h)
+    list_id = r.json()["id"]
+    r = await client.post(f"/lists/{list_id}/items",
+                          json={"label": "Sport", "recurrence": "daily"}, headers=h)
+    item_id = r.json()[0]["id"]
+    item_uuid = uuid.UUID(item_id)
+
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    r = await client.post("/sync", json={"events": [
+        {"kind": "item.upsert", "id": item_id, "list_id": list_id,
+         "label": "Sport", "done": True, "position": 0,
+         "recurrence": "daily",
+         "due_date": (now - timedelta(days=1)).isoformat(),
+         "updated_at": (now + timedelta(seconds=1)).isoformat()},
+    ]}, headers=h)
+    assert r.status_code == 200, r.text
+
+    from sqlalchemy import select
+    from app.db import SessionLocal
+    from app.models import ChangeLog, Item
+
+    async with SessionLocal() as session:
+        res = await session.execute(
+            select(Item).where(Item.recurrence_source_id == item_uuid))
+        spawned = res.scalar_one()
+        assert spawned.id is not None and str(spawned.id) != "None"
+        res = await session.execute(
+            select(ChangeLog).where(ChangeLog.item_id == spawned.id))
+        changelog_rows = res.scalars().all()
+        assert any(row.item_id == spawned.id for row in changelog_rows)
+        # aucune ligne item.upsert de cette liste sans item_id
+        res = await session.execute(select(ChangeLog).where(
+            ChangeLog.list_id == uuid.UUID(list_id),
+            ChangeLog.kind == "item.upsert",
+            ChangeLog.item_id.is_(None)))
+        assert res.scalars().all() == []
+
+    upserts = [c for c in calls if c.get("kind") == "item.upsert"]
+    assert str(spawned.id) in {c.get("id") for c in upserts}
+    assert "None" not in {c.get("id") for c in upserts}

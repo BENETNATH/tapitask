@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
 from ..deps import Principal, accessible_list, get_principal, require_write
-from ..models import Checklist, Item, ListMember, Role, utcnow
+from ..models import Checklist, Item, ListMember, Role, new_id, utcnow
 from ..schemas import (
     ChecklistIn,
     ChecklistOut,
@@ -181,7 +181,7 @@ async def add_items_bulk(
     await session.commit()
     out = []
     for item in items:
-        await record_change(session, list_id=list_id, item_id=item.id, kind="item.upsert")
+        await record_change(session, list_id=list_id, item_id=item.id, kind="item.upsert", commit=False)
         out.append(ItemOut(**_item_out(item)))
     await session.commit()
     await notify_list(list_id, {"kind": "items.added", "list_id": str(list_id), "count": len(out)})
@@ -349,13 +349,20 @@ def _add_months(dt: datetime, months: int) -> datetime:
     return dt.replace(year=year, month=month, day=day)
 
 
-async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID) -> Item | None:
+async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID,
+                      commit: bool = True, pending: list | None = None) -> Item | None:
     """Create the next occurrence of a recurring item (unchecked, next due date).
 
     Idempotent per source item: the occurrence records the id of the item it
     was spawned from, and a unique index allows only one. Completing the same
     item again (retry, concurrent request, uncheck + re-check) returns None
-    instead of creating a duplicate. Callers must have committed `item` first.
+    instead of creating a duplicate. The spawned id is generated up front
+    (new_id) so the changelog and the deferred notification carry the real id
+    without an intermediate flush.
+
+    commit=False (chemin sync) : pas de commit ni flush intermédiaires — le
+    commit de fin de batch de l'appelant couvre la ligne ; `pending` collecte
+    la notification au lieu de l'émettre (elle doit partir après ce commit).
     """
     from datetime import timedelta
 
@@ -373,6 +380,7 @@ async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID) -> Item 
     else:  # monthly: real calendar months, not a flat +30 days
         next_due = _add_months(due, 1)
     next_item = Item(
+        id=new_id(),
         list_id=item.list_id,
         parent_id=item.parent_id,
         label=item.label,
@@ -383,15 +391,19 @@ async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID) -> Item 
         recurrence_source_id=item.id,
     )
     session.add(next_item)
-    try:
-        await session.commit()
-    except IntegrityError:
-        # A concurrent completion won the race and already spawned it.
-        await session.rollback()
-        await session.refresh(item)  # rollback expired it; reload (async-safe)
-        return None
-    await record_change(session, list_id=item.list_id, item_id=next_item.id, kind="item.upsert")
-    await notify_list(item.list_id, {"kind": "item.upsert", "list_id": str(item.list_id), "id": str(next_item.id)})
+    if commit:
+        try:
+            await session.commit()
+        except IntegrityError:
+            # A concurrent completion won the race and already spawned it.
+            await session.rollback()
+            await session.refresh(item)  # rollback expired it; reload (async-safe)
+            return None
+    await record_change(session, list_id=item.list_id, item_id=next_item.id, kind="item.upsert", commit=commit)
+    if pending is not None:
+        pending.append((item.list_id, {"kind": "item.upsert", "list_id": str(item.list_id), "id": str(next_item.id)}))
+    else:
+        await notify_list(item.list_id, {"kind": "item.upsert", "list_id": str(item.list_id), "id": str(next_item.id)})
     return next_item
 
 

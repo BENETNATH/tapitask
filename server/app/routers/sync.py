@@ -46,18 +46,26 @@ async def sync(
     never aborting the whole batch — otherwise one poisoned event would
     block the client's outbox forever."""
     rejected: list = []
+    pending_notifies: list[tuple[UUID, dict]] = []
     for event in data.events:
         try:
-            await _apply_event(session, event, principal)
+            # Un savepoint par événement : un événement refusé ne rollback
+            # que lui-même, jamais les écritures des événements précédents.
+            async with session.begin_nested():
+                await _apply_event(session, event, principal, pending_notifies)
         except HTTPException:
             # Business rejection ONLY (403/404 from accessible_list: unknown
             # or deleted list, lost access). The event is reported so the
             # client drops it from its outbox.
-            await session.rollback()
             rejected.append(event.id)
         # Infrastructure errors (DB connection lost, timeout, deadlock…) are
         # NOT caught: the request fails with 500 and the client retries the
         # whole batch — never silently purging data.
+    # Un seul commit de fin de batch (cadence : plus d'un commit par
+    # événement) ; les notifications partent après, lues en session fraîche.
+    await session.commit()
+    for list_id, payload in pending_notifies:
+        await notify_list(list_id, payload)
     accessible = await _accessible_list_ids(principal, session)
     changes: list[SyncChange] = []
     if data.since is not None:
@@ -148,9 +156,9 @@ async def sync(
     return SyncOut(server_time=now, changes=changes, rejected=rejected)
 
 
-async def _apply_event(session: AsyncSession, event, principal) -> None:
+async def _apply_event(session: AsyncSession, event, principal, pending_notifies: list) -> None:
     if event.kind == "list.create":
-        await _apply_list_create(session, event, principal)
+        await _apply_list_create(session, event, principal, pending_notifies)
         return
     if event.kind == "list.delete":
         # Delete requires OWNER (checked below); viewer access is enough to
@@ -160,10 +168,11 @@ async def _apply_event(session: AsyncSession, event, principal) -> None:
             return
         checklist.deleted = True
         checklist.updated_at = _clamp_client_dt(event.updated_at)
-        await session.commit()
         await record_change(
-            session, list_id=event.list_id, checklist_id=checklist.id, kind="list.delete")
-        await notify_list(event.list_id, {"kind": "list.delete", "list_id": str(event.list_id)})
+            session, list_id=event.list_id, checklist_id=checklist.id, kind="list.delete",
+            commit=False)
+        pending_notifies.append(
+            (event.list_id, {"kind": "list.delete", "list_id": str(event.list_id)}))
         return
     # ALL other write kinds require the EDITOR role — same authorization as
     # the equivalent REST endpoints. A viewer pushing item.upsert, item.delete
@@ -171,13 +180,12 @@ async def _apply_event(session: AsyncSession, event, principal) -> None:
     checklist, _ = await accessible_list(
         event.list_id, principal, session, min_role=Role.editor)
     if event.kind == "item.upsert":
-        await _apply_item_upsert(session, event, principal)
+        await _apply_item_upsert(session, event, principal, pending_notifies)
     elif event.kind == "item.delete":
-        await _apply_item_delete(session, event, principal)
+        await _apply_item_delete(session, event, principal, pending_notifies)
     elif event.kind == "list.rename":
         checklist.title = event.label or checklist.title
         checklist.updated_at = _clamp_client_dt(event.updated_at)
-        await session.commit()
 
 
 async def _accessible_list_ids(principal: Principal, session: AsyncSession) -> list[UUID]:
@@ -205,7 +213,7 @@ async def _accessible_list_ids(principal: Principal, session: AsyncSession) -> l
     return ids
 
 
-async def _apply_list_create(session: AsyncSession, event, principal) -> None:
+async def _apply_list_create(session: AsyncSession, event, principal, pending_notifies: list) -> None:
     """A list created offline arrives here; create it if the server doesn't know it yet."""
     result = await session.execute(select(Checklist).where(Checklist.id == event.id))
     existing = result.scalar_one_or_none()
@@ -227,8 +235,8 @@ async def _apply_list_create(session: AsyncSession, event, principal) -> None:
             changed = True
         if changed:
             existing.updated_at = _clamp_client_dt(event.updated_at)
-            await session.commit()
-            await notify_list(event.list_id, {"kind": "list.rename", "id": str(event.list_id)})
+            pending_notifies.append(
+                (event.list_id, {"kind": "list.rename", "id": str(event.list_id)}))
         return
     stamp = _clamp_client_dt(event.updated_at)
     checklist = Checklist(
@@ -241,15 +249,15 @@ async def _apply_list_create(session: AsyncSession, event, principal) -> None:
         updated_at=stamp,
     )
     session.add(checklist)
-    await session.commit()
     await record_change(
         session, list_id=checklist.id, checklist_id=checklist.id,
         kind="list.create", actor_id=principal.user_id,
+        commit=False,
     )
-    await notify_list(checklist.id, {"kind": "list.create", "id": str(checklist.id)})
+    pending_notifies.append((checklist.id, {"kind": "list.create", "id": str(checklist.id)}))
 
 
-async def _apply_item_upsert(session: AsyncSession, event, principal) -> None:
+async def _apply_item_upsert(session: AsyncSession, event, principal, pending_notifies: list) -> None:
     stamp = _clamp_client_dt(event.updated_at)
     result = await session.execute(select(Item).where(Item.id == event.id))
     item = result.scalar_one_or_none()
@@ -279,19 +287,20 @@ async def _apply_item_upsert(session: AsyncSession, event, principal) -> None:
     item.notes = event.notes if event.notes is not None else item.notes
     item.assignee_id = event.assignee_id or item.assignee_id
     item.updated_at = stamp
-    await session.commit()
     # Recurrence: checking a recurring item from the app goes through the
     # outbox (item.upsert done=true), so the next occurrence must be spawned
     # here too — not only in PATCH /items/{id}.
     if newly_done and item.recurrence and item.recurrence != "none":
-        await _spawn_next(session, item, principal.user_id)
+        await _spawn_next(session, item, principal.user_id,
+                          commit=False, pending=pending_notifies)
     await record_change(
-        session, list_id=event.list_id, item_id=item.id, kind="item.upsert"
+        session, list_id=event.list_id, item_id=item.id, kind="item.upsert",
+        commit=False,
     )
-    await notify_list(event.list_id, {"kind": "item.upsert", "id": str(event.id)})
+    pending_notifies.append((event.list_id, {"kind": "item.upsert", "id": str(event.id)}))
 
 
-async def _apply_item_delete(session: AsyncSession, event, principal) -> None:
+async def _apply_item_delete(session: AsyncSession, event, principal, pending_notifies: list) -> None:
     stamp = _clamp_client_dt(event.updated_at)
     result = await session.execute(select(Item).where(Item.id == event.id))
     item = result.scalar_one_or_none()
@@ -304,6 +313,6 @@ async def _apply_item_delete(session: AsyncSession, event, principal) -> None:
         await accessible_list(item.list_id, principal, session, min_role=Role.editor)
     item.deleted = True
     item.updated_at = stamp
-    await session.commit()
-    await record_change(session, list_id=event.list_id, item_id=item.id, kind="item.delete")
-    await notify_list(event.list_id, {"kind": "item.delete", "id": str(event.id)})
+    await record_change(session, list_id=event.list_id, item_id=item.id, kind="item.delete",
+                        commit=False)
+    pending_notifies.append((event.list_id, {"kind": "item.delete", "id": str(event.id)}))

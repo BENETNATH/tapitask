@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import socket
+import uuid
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.config import settings
-from app.events import _webhook_host_allowed
+from app.events import _webhook_host_allowed, record_change
 from app.main import app
 
 
@@ -34,6 +35,38 @@ def _ga(ips):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 0)) for ip in ips]
 
     return fake
+
+
+@pytest.mark.asyncio
+async def test_record_change_commit_parameter():
+    """spec §1 : record_change(commit=False) ne fait aucun commit — la ligne
+    simplement addée et devient persistée par un commit ultérieur sur la
+    même session. Défaut (True) : le commit se fait immédiatement
+    (call-sites REST/MCP inchangés)."""
+    from app.db import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    counts = {"n": 0}
+
+    class SpySession(AsyncSession):
+        async def commit(self):
+            counts["n"] += 1
+            return await super().commit()
+
+    spy = async_sessionmaker(engine, expire_on_commit=False, class_=SpySession)
+
+    async with spy() as s:
+        await record_change(s, list_id=uuid.uuid4(), kind="item.upsert", commit=False)
+    assert counts["n"] == 0
+
+    async with spy() as s2:
+        await s2.commit()  # commit ultérieur sur la session : la ligne part
+    assert counts["n"] == 1
+
+    before = counts["n"]
+    async with spy() as s3:
+        await record_change(s3, list_id=uuid.uuid4(), kind="item.upsert")
+    assert counts["n"] == before + 1  # défaut : commit par appel
 
 
 @pytest.mark.asyncio

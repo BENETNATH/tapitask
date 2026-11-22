@@ -6,21 +6,29 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tempfile
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _compose_config(api_bind: str | None) -> dict:
-    env = dict(os.environ)
-    # hermetic: never read values from the repo's .env
-    env.update({"DB_PASSWORD": "x" * 20, "JWT_SECRET": "a" * 40,
-                "API_PORT": "8000", "API_BIND": api_bind or ""})
-    if not api_bind:
-        env.pop("API_BIND")
-    r = subprocess.run(
-        ["docker", "compose", "config", "--format", "json"],
-        cwd=REPO_ROOT, env=env, capture_output=True, text=True,
-    )
+    # hermetic: never read values from the repo's .env — docker compose
+    # auto-loads it, so point it at a temp env file instead.
+    env_file = tempfile.NamedTemporaryFile("w", suffix=".env", delete=False)
+    env_file.write("DB_PASSWORD=xxxxxx" + "x" * 14 + "\n")
+    env_file.write("JWT_SECRET=" + "a" * 40 + "\n")
+    env_file.write("API_PORT=8000\n")
+    if api_bind:
+        env_file.write(f"API_BIND={api_bind}\n")
+    env_file.close()
+    try:
+        r = subprocess.run(
+            ["docker", "compose", "--env-file", env_file.name,
+             "config", "--format", "json"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+    finally:
+        os.unlink(env_file.name)
     assert r.returncode == 0, r.stderr
     import json
     return json.loads(r.stdout)
