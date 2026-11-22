@@ -33,7 +33,6 @@ void main() {
       (tester) async {
     final db = AppDb.forTesting(NativeDatabase.memory());
     final state = AppState(db: db);
-    state.settings["due_dates"] = true;
     // Masque l'icône Icons.event de la secondary pour que l'icône du
     // sous-titre soit la seule occurrence.
     state.settings["visible_actions"] = false;
@@ -59,7 +58,6 @@ void main() {
       (tester) async {
     final db = AppDb.forTesting(NativeDatabase.memory());
     final state = AppState(db: db);
-    state.settings["due_dates"] = true;
     state.settings["visible_actions"] = false;
     final listId = await addList(db, "list2", "Tâches");
     await db.addItem("i2", listId, "Facture", 0, DateTime.now(),
