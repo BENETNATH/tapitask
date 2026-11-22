@@ -68,6 +68,7 @@ class FlyoutWindow {
   void DrawIconButton(const DRAWITEMSTRUCT* dis, const wchar_t* glyph,
                       COLORREF glyph_color);
   void DrawChip(const DRAWITEMSTRUCT* dis, const ListInfo& list, bool active);
+  void DrawListItem(const DRAWITEMSTRUCT* dis);
   void DoQuickAdd();
   void SendEvent(const std::string& action, const std::string& a = "",
                  const std::string& b = "");

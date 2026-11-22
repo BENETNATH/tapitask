@@ -1,7 +1,14 @@
+import "package:flutter/foundation.dart" show defaultTargetPlatform, TargetPlatform;
+import "package:http/http.dart" as http;
 import "package:material_ui/material_ui.dart";
 
+import "../data/android_updater.dart";
+import "../data/app_version.dart";
+import "../data/update_service.dart";
+import "../data/windows_updater.dart";
 import "../state/app_state.dart";
 import "../l10n/s.dart";
+import "update_dialog.dart";
 
 /// Réglages : chaque utilisateur active uniquement ce qu'il veut.
 /// Design compact : sections plates, une ligne par réglage, aides en info-bulle.
@@ -163,6 +170,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
       key: value,
     };
     await widget.state.saveSettings();
+  }
+
+  // ---- Mises à jour (spec §B) ----
+
+  Future<void> _showUpdates() async {
+    final s = widget.state;
+    final client = http.Client();
+    UpdateInfo info;
+    try {
+      info = await checkForUpdates(client: client, api: s.api);
+    } finally {
+      client.close();
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => UpdateDialog(
+        info: info,
+        // Le bouton n'existe que si une MAJ client est dispo.
+        onUpdate: info.clientAvailable
+            ? () async {
+                try {
+                  switch (defaultTargetPlatform) {
+                    case TargetPlatform.windows:
+                      await runSelfUpdate(info);
+                    case TargetPlatform.android:
+                      await installApk(info);
+                    default:
+                      break;
+                  }
+                } catch (e) {
+                  // Spec §B.5 : échec du téléchargement/dépatch → message
+                  // d'erreur (l'ancienne version reste intacte).
+                  if (!mounted) return;
+                  await _showInfo(S.updateError, '$e');
+                }
+              }
+            : null,
+      ),
+    );
   }
 
   // ---- dialogues ----
@@ -400,6 +447,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _intervalLabel(
                     (s.settings["poll_interval"] as num?)?.toInt() ?? 30),
                 _pickInterval),
+          ),
+
+          // ---- Mises à jour ----
+          _header(S.updates),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: _tapRow(S.updates, appVersion, _showUpdates),
           ),
 
           // ---- Compte ----

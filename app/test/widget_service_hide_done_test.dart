@@ -5,6 +5,7 @@ import "package:flutter_test/flutter_test.dart";
 import "package:shared_preferences/shared_preferences.dart";
 import "package:tapitask/data/api_client.dart";
 import "package:tapitask/data/database.dart";
+import "package:tapitask/l10n/s.dart";
 import "package:tapitask/platform/widget_service.dart";
 import "package:tapitask/state/app_state.dart";
 
@@ -93,6 +94,46 @@ void main() {
         reason: "réglage OFF : l'item coché est écrit avec préfixe ✓");
     expect(store["list_0_item_2_id"], "",
         reason: "réglage OFF : la ligne cochée est non-cliquable (pas d'id)");
+    await db.close();
+  });
+
+  test("R-C1 : badge d'échéance dans la clé _due, plus dans le label",
+      () async {
+    store.clear();
+    mockChannel();
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDb.forTesting(NativeDatabase.memory());
+    final state = AppState(db: db);
+    state.api = await ApiClient.load();
+    await db.upsertList(LocalListsCompanion(
+      id: const Value(listId),
+      title: const Value("Achats"),
+      ownerId: const Value(""),
+      updatedAt: Value(now),
+      dirty: const Value(false),
+      localOnly: const Value(true),
+    ));
+    final today = DateTime.now();
+    await db.addItem("d0000000-0000-0000-0000-000000000001", listId, "Facture",
+        0, now, dueDate: today.subtract(const Duration(days: 2)));
+    await db.addItem("d0000000-0000-0000-0000-000000000002", listId,
+        "Renouveler", 1, now, dueDate: today.add(const Duration(days: 1)));
+    await db.addItem("d0000000-0000-0000-0000-000000000003", listId, "Simple",
+        2, now);
+    await WidgetService.update(state, db, [await listOf(db)]);
+    // Le label ne contient plus ni puce ni badge.
+    expect(store["list_0_item_0"], "☐  Facture",
+        reason: "R-C1 : le label est écrit sans badge");
+    expect(store["list_0_item_0"], isNot(contains("•")));
+    expect(store["list_0_item_0"], isNot(contains("en retard")));
+    // Retard : le suffix exact, puce incluse une seule fois.
+    expect(store["list_0_item_0_due"], S.t("overdueSuffix").trim());
+    expect(store["list_0_item_0_due"], "•  en retard");
+    // Échéance future : sans puce.
+    expect(store["list_0_item_1_due"], "demain");
+    expect(store["list_0_item_1_due"], isNot(contains("•")));
+    // Pas d'échéance → clé _due vide.
+    expect(store["list_0_item_2_due"], "");
     await db.close();
   });
 

@@ -32,7 +32,8 @@ jobs:
 
       - name: Build Windows (x64, release)
         working-directory: app
-        run: flutter build windows --release
+        # GITHUB_REF_NAME = le tag du release (v0.3.0) → APP_VERSION sans le v.
+        run: flutter build windows --release --dart-define=APP_VERSION=${GITHUB_REF_NAME#v}
 
       - name: Package exe + data
         working-directory: app/build/windows/x64/runner/Release
@@ -68,7 +69,8 @@ jobs:
 
       - name: Build APK (release, signé)
         working-directory: app
-        run: flutter build apk --release
+        # GITHUB_REF_NAME = le tag du release (v0.3.0) → APP_VERSION sans le v.
+        run: flutter build apk --release --dart-define=APP_VERSION=${GITHUB_REF_NAME#v}
 
       - name: Renommer l'APK
         working-directory: app

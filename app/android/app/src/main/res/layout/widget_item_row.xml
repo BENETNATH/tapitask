@@ -1,12 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- S3 : ligne du widget (ListView RemoteViews), un seul TextView.
-     La couleur du texte est posée par l'adapter selon le thème. -->
-<TextView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/item_row_label"
+<!-- C : ligne du widget (ListView RemoteViews) en LinearLayout :
+     le label reprend la place du badge (plus de troncature) et le badge
+     d'échéance est un TextView séparé, en gras, visible en fin de ligne.
+     Les couleurs de texte sont posées par l'adapter selon le thème. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="horizontal"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:textSize="13sp"
-    android:textColor="#1B1B1B"
-    android:paddingVertical="4dp"
-    android:maxLines="1"
-    android:ellipsize="end" />
+    android:layout_height="wrap_content">
+    <TextView
+        android:id="@+id/item_row_label"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:textSize="13sp"
+        android:textColor="#1B1B1B"
+        android:paddingVertical="4dp"
+        android:maxLines="1"
+        android:ellipsize="end" />
+    <TextView
+        android:id="@+id/item_row_due"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="6dp"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:textColor="#1B1B1B"
+        android:paddingVertical="4dp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:visibility="gone" />
+</LinearLayout>

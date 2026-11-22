@@ -3,6 +3,9 @@
     <!-- Android 13+ : les notifications (alertes "à faire aujourd'hui")
          sont silencieusement supprimées sans cette permission. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Auto-mise à jour : l'utilisateur autorise une fois « installer des
+         apps inconnues » pour Tapitask (prompt système, pas le sien). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application
         android:label="Tapitask"
         android:name="${applicationName}"
@@ -44,6 +47,17 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/quickadd_widget_info" />
         </receiver>
+        <!-- Auto-mise à jour : FileProvider servant l'APK téléchargé au
+             intent d'installation (ACTION_VIEW, FLAG_GRANT_READ_URI_PERMISSION). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updater"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
         <!-- S3 : service RemoteViews des lignes du widget (ListView). -->
         <service
             android:name=".WidgetItemsRemoteViewsService"

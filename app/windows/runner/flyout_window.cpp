@@ -223,10 +223,13 @@ void FlyoutWindow::BuildControls() {
   title_ = CreateWindowW(L"STATIC", L"Tapitask",
                          WS_CHILD | WS_VISIBLE | SS_NOPREFIX, 0, 0, 120, 30,
                          window_, (HMENU)(INT_PTR)7, nullptr, nullptr);
+  // LVS_OWNERDRAWFIXED : les lignes sont dessinées à la main (DrawListItem)
+  // — le badge d'échéance est en gras sans puce ajoutée par le rendu
+  // standard (correction de la puce doublée).
   items_list_ = CreateWindowExW(
       0, WC_LISTVIEWW, L"",
       WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LVS_REPORT |
-          LVS_NOCOLUMNHEADER | LVS_SINGLESEL,
+          LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_OWNERDRAWFIXED,
       0, 0, 100, 100, window_, (HMENU)(INT_PTR)3, nullptr, nullptr);
   ListView_SetExtendedListViewStyle(items_list_,
                                     LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
@@ -419,9 +422,9 @@ void FlyoutWindow::RebuildItems() {
   ListView_DeleteAllItems(items_list_);
   int i = 0;
   for (const auto& item : items_) {
-    std::wstring label =
-        ToWide(item.due.empty() ? item.label
-                                : item.label + "  \u2022  " + item.due);
+    // Texte brut : le badge (gras, puce une seule fois) est dessiné par
+    // DrawListItem — plus de concaténation ici.
+    std::wstring label = ToWide(item.label);
     LVITEMW it = {};
     it.mask = LVIF_TEXT;
     it.iItem = i;
@@ -538,6 +541,64 @@ void FlyoutWindow::DrawChip(const DRAWITEMSTRUCT* dis, const ListInfo& list,
   text_rc.left += 6;
   DrawTextW(dc, label.c_str(), -1, &text_rc,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+  SelectObject(dc, old_font);
+}
+
+void FlyoutWindow::DrawListItem(const DRAWITEMSTRUCT* dis) {
+  int idx = (int)dis->itemID;
+  if (items_list_ == nullptr || idx < 0 || idx >= (int)items_.size()) return;
+  const auto& item = items_[idx];
+  HDC dc = dis->hDC;
+  RECT rc = dis->rcItem;
+  const bool selected = (dis->itemState & ODS_SELECTED) != 0;
+  if (selected) {
+    COLORREF accent = dark_ ? RGB(96, 205, 255) : RGB(0, 120, 212);
+    HBRUSH brush = CreateSolidBrush(accent);
+    FillRect(dc, &rc, brush);
+    DeleteObject(brush);
+  }
+  const COLORREF text = selected ? RGB(255, 255, 255) : c_text_;
+  // Case (check state), à la position d'avant — dessinée par l'owner car
+  // le contrôle ne dessine plus rien en mode OWNERDRAWFIXED.
+  const int box = 16;
+  const int box_top = rc.top + (rc.bottom - rc.top - box) / 2;
+  RECT brc = {rc.left + 2, box_top, rc.left + 2 + box, box_top + box};
+  DrawFrameControl(dc, &brc, DFC_BUTTON,
+                   DFCS_BUTTONCHECK |
+                       (ListView_GetCheckState(items_list_, idx) ? DFCS_CHECKED
+                                                                 : 0));
+  // Badge d'échéance à droite, en gras, dans le même run « •  <due> » —
+  // la puce est ajoutée une seule fois ici (celle du retard vient de l10n).
+  const std::wstring due = ToWide(item.due);
+  int due_w = 0;
+  std::wstring due_run;
+  if (!due.empty()) {
+    // Le retard arrive avec sa puce l10n (« •  en retard ») : on ne
+    // préfixe une puce que si due n'en contient pas (échéance future).
+    due_run = due.find(L"\u2022") == std::wstring::npos ? L"  \u2022  " + due
+                                                        : due;
+    HGDIOBJ old_font = SelectObject(dc, font_bold_);
+    SIZE sz = {};
+    GetTextExtentPoint32W(dc, due_run.c_str(), (int)due_run.size(), &sz);
+    SelectObject(dc, old_font);
+    due_w = sz.cx + 4;
+  }
+  SetBkMode(dc, TRANSPARENT);
+  SetTextColor(dc, text);
+  // Label : ellipsis-friendly comme avant (DT_PATH_ELLIPSIS), en font_.
+  RECT lrc = rc;
+  lrc.left = brc.right + 2;
+  if (due_w > 0) lrc.right = rc.right - due_w;
+  HGDIOBJ old_font = SelectObject(dc, font_);
+  DrawTextW(dc, ToWide(item.label).c_str(), -1, &lrc,
+            DT_SINGLELINE | DT_PATH_ELLIPSIS);
+  // Le run due peut être tronqué s'il dépasse la largeur restante.
+  if (due_w > 0) {
+    RECT drc = rc;
+    drc.left = rc.right - due_w;
+    SelectObject(dc, font_bold_);
+    DrawTextW(dc, due_run.c_str(), -1, &drc, DT_SINGLELINE | DT_END_ELLIPSIS);
+  }
   SelectObject(dc, old_font);
 }
 
@@ -682,6 +743,10 @@ LRESULT FlyoutWindow::MessageHandler(HWND hwnd, UINT message, WPARAM wparam,
         if (idx < lists_.size()) {
           DrawChip(dis, lists_[idx], lists_[idx].id == active_);
         }
+        return TRUE;
+      }
+      if (dis->CtlID == 3 && dis->hwndItem == items_list_) {  // items
+        DrawListItem(dis);
         return TRUE;
       }
       return TRUE;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -19,6 +20,22 @@ from .mcp_http import router as mcp_router
 from .routers import admin, apikeys, auth, lists, sharing, sync
 from .security import hash_password
 from .ws import router as ws_router
+
+def read_server_version(path: Path | None = None) -> str:
+    """Lecture de server/VERSION — "unknown" si absent/corrompu/vide
+    (l'endpoint /version ne doit jamais répondre 500)."""
+    p = path if path is not None else Path(__file__).resolve().parent.parent / "VERSION"
+    try:
+        v = p.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return "unknown"
+    return v or "unknown"
+
+
+# Une seule lecture à l'import : /version renvoie cette valeur, pas un
+# re-lecture du fichier à chaque request.
+SERVER_VERSION = read_server_version()
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
@@ -63,6 +80,13 @@ app.include_router(mcp_router)
 @app.get("/health", include_in_schema=False)
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/version", include_in_schema=False)
+async def version():
+    # Public (sans auth) : les clients en font l'appel au démarrage, avant
+    # même d'avoir un token, pour décider si le serveur doit être mis à jour.
+    return {"version": SERVER_VERSION}
 
 
 async def ensure_admin_user() -> bool:

@@ -159,6 +159,13 @@ class S {
     "byEmailHelp": "Invitations, partages de listes (envoyés par le serveur)",
     "syncSection": "Synchronisation",
     "syncDelay": "Délai de synchronisation",
+    "updates": "Mises à jour",
+    "updateAvailable": "disponible",
+    "updateButton": "Mettre à jour",
+    "serverLabel": "Serveur",
+    "serverUpdateRequired": "mise à jour serveur requise",
+    "openRelease": "Ouvrir le release",
+    "updateError": "Mise à jour échouée",
     "appearance": "Apparence",
     "theme": "Thème",
     "themeSystem": "Système",
@@ -345,6 +352,13 @@ class S {
     "byEmailHelp": "Invitations, list sharing (sent by the server)",
     "syncSection": "Synchronization",
     "syncDelay": "Sync interval",
+    "updates": "Updates",
+    "updateAvailable": "available",
+    "updateButton": "Update",
+    "serverLabel": "Server",
+    "serverUpdateRequired": "server update required",
+    "openRelease": "Open the release",
+    "updateError": "Update failed",
     "appearance": "Appearance",
     "theme": "Theme",
     "themeSystem": "System",
@@ -551,6 +565,13 @@ class S {
   static String get byEmailHelp => t("byEmailHelp");
   static String get syncSection => t("syncSection");
   static String get syncDelay => t("syncDelay");
+  static String get updates => t("updates");
+  static String get updateAvailable => t("updateAvailable");
+  static String get updateButton => t("updateButton");
+  static String get serverLabel => t("serverLabel");
+  static String get serverUpdateRequired => t("serverUpdateRequired");
+  static String get openRelease => t("openRelease");
+  static String get updateError => t("updateError");
   static String get appearance => t("appearance");
   static String get theme => t("theme");
   static String get themeSystem => t("themeSystem");

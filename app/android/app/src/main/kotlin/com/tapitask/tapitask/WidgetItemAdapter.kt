@@ -4,6 +4,7 @@ import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.view.View
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
 import es.antonborri.home_widget.HomeWidgetPlugin
@@ -37,7 +38,8 @@ class WidgetItemAdapter(
 
     private fun prefs() = HomeWidgetPlugin.getData(context)
 
-    private fun rows(): List<Pair<String, String>> {
+    /** Ligne = (label, id cliquable, badge d'échéance brut — "" si absent). */
+    private fun rows(): List<Triple<String, String, String>> {
         val d = prefs()
         val total = d.getInt("list_count_lists", 0)
         if (total == 0) return emptyList()
@@ -45,13 +47,14 @@ class WidgetItemAdapter(
         if (index >= total) index = 0
         val count = d.getInt("list_${index}_count", 0)
         val done = ListWidgetProvider.readDoneIds(d)
-        val rows = ArrayList<Pair<String, String>>()
+        val rows = ArrayList<Triple<String, String, String>>()
         for (i in 0 until count) {
             val label = d.getString("list_${index}_item_$i", "") ?: ""
             val id = d.getString("list_${index}_item_${i}_id", "") ?: ""
+            val due = d.getString("list_${index}_item_${i}_due", "") ?: ""
             if (label.isEmpty()) continue
             if (id.isNotEmpty() && id in done) continue
-            rows.add(label to id)
+            rows.add(Triple(label, id, due))
         }
         return rows
     }
@@ -78,9 +81,12 @@ class WidgetItemAdapter(
         val d = prefs()
         val views = RemoteViews(context.packageName, R.layout.widget_item_row)
         val dark = d.getString("theme", "light") == "dark"
-        views.setInt(
-            R.id.item_row_label, "setTextColor",
-            if (dark) Color.rgb(226, 226, 226) else Color.parseColor("#1B1B1B"))
+        val text =
+            if (dark) Color.rgb(226, 226, 226) else Color.parseColor("#1B1B1B")
+        views.setInt(R.id.item_row_label, "setTextColor", text)
+        // Badge d'échéance : couleur = couleur label (même action réflexion
+        // setTextColor API<31), GONE par défaut (pas de due = pas de texte).
+        views.setInt(R.id.item_row_due, "setTextColor", text)
         val rows = rows()
         if (rows.isEmpty()) {
             views.setTextViewText(
@@ -88,8 +94,14 @@ class WidgetItemAdapter(
                 "✓  " + d.getString("label_all_done", "Tout est coché"))
             views.setOnClickFillInIntent(R.id.item_row_label, null)
         } else {
-            val (label, id) = rows[position]
+            val (label, id, due) = rows[position]
             views.setTextViewText(R.id.item_row_label, label)
+            if (due.isEmpty()) {
+                views.setInt(R.id.item_row_due, "setVisibility", View.GONE)
+            } else {
+                views.setTextViewText(R.id.item_row_due, due)
+                views.setInt(R.id.item_row_due, "setVisibility", View.VISIBLE)
+            }
             // Ligne cochée : Dart n'a pas écrit d'id → non cliquable
             // (le widget reste unidirectionnel « cocher »).
             if (id.isNotEmpty()) {

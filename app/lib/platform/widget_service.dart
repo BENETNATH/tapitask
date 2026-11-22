@@ -48,17 +48,16 @@ class WidgetService {
         await HomeWidget.saveWidgetData("list_${li}_color", list.color ?? "");
         await HomeWidget.saveWidgetData("list_${li}_count", items.length);
         for (var i = 0; i < items.length; i++) {
-          // Due-date badge appended to the label (per-user setting), same as
-          // the Windows flyout — homogeneous ecosystem. RemoteViews ne fait
-          // pas de barré : préfixe ☐ = non-coché, ✓ = coché (S2).
-          final badge = state.dueSuffix(items[i]);
-          final label = badge == null || badge.isEmpty
-              ? items[i].label
-              : "${items[i].label}  •  $badge";
-          await HomeWidget.saveWidgetData("list_${li}_item_$i",
-              items[i].done ? "✓  $label" : "☐  $label");
+          // Préfixe ☐ = non-coché, ✓ = coché (S2). Le badge d'échéance vit
+          // dans sa propre clé _due (rendu gras par l'adapter Kotlin, §C) —
+          // plus de concaténation dans le label (puce doublée + troncature).
+          await HomeWidget.saveWidgetData(
+              "list_${li}_item_$i",
+              items[i].done ? "✓  ${items[i].label}" : "☐  ${items[i].label}");
           await HomeWidget.saveWidgetData("list_${li}_item_${i}_id",
               items[i].done ? "" : items[i].id);
+          await HomeWidget.saveWidgetData("list_${li}_item_${i}_due",
+              state.dueSuffix(items[i]) ?? "");
         }
       } else {
         await HomeWidget.saveWidgetData("list_${li}_count", 0);

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chemins servis par le FileProvider de mise à jour : le cache interne
+     (getTemporaryDirectory côté Dart) où l'APK est téléchargé. -->
+<paths>
+    <cache-path name="updater" path="." />
+</paths>

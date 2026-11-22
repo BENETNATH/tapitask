@@ -1,8 +1,12 @@
+import "dart:async";
+
+import "package:http/http.dart" as http;
 import "package:material_ui/material_ui.dart";
 import "package:cupertino_ui/cupertino_ui.dart";
 import "package:flutter_localizations/flutter_localizations.dart"
     hide GlobalMaterialLocalizations, GlobalCupertinoLocalizations;
 
+import "data/update_service.dart";
 import "platform/tray_controller_web.dart"
     if (dart.library.io) "platform/tray_controller.dart";
 import "state/app_state.dart";
@@ -31,6 +35,16 @@ final appRoutes = <String, WidgetBuilder>{
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   await appState.init();
+  // Spec §B : vérification des MAJ au démarrage — fond, sans UI bloquante
+  // (résultat consulté depuis la ligne « Mises à jour » des réglages).
+  unawaited(() async {
+    final client = http.Client();
+    try {
+      await checkForUpdates(client: client, api: appState.api);
+    } finally {
+      client.close();
+    }
+  }());
   trayController = TrayController(appState);
   await trayController!.init();
   // Window hooks used by the flyout bridge (guarantee: opening the flyout
