@@ -46,6 +46,13 @@ async def test_protected_route_still_401(client):
     assert r.status_code == 401
 
 
+def test_dockerfile_ships_version_file():
+    # L'image doit embarquer VERSION, sinon /version répond "unknown"
+    # (le Dockerfile ne copie que app/ — un COPY manquant est silencieux).
+    dockerfile = REPO_ROOT / "server" / "Dockerfile"
+    assert "COPY VERSION ." in dockerfile.read_text(encoding="utf-8")
+
+
 def test_version_read_missing_file(tmp_path):
     # R-B2 : fichier absent → "unknown" (pas d'exception, donc pas de 500).
     assert main.read_server_version(tmp_path / "nope" / "VERSION") == "unknown"
