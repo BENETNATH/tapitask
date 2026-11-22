@@ -35,7 +35,6 @@ class AppState extends ChangeNotifier {
 
   /// Per-user feature toggles (server-side, synced between devices).
   Map<String, dynamic> settings = {
-    "due_dates": false,
     "folders": false,
     "alerts": false,
     "templates": false,
@@ -60,7 +59,6 @@ class AppState extends ChangeNotifier {
   };
   final List<void Function()> _undoStack = [];
 
-  bool get featureDueDates => settings["due_dates"] == true;
   bool get featureFolders => settings["folders"] == true;
   bool get featureAlerts => settings["alerts"] == true;
   bool get featureTemplates => settings["templates"] == true;
@@ -89,6 +87,7 @@ class AppState extends ChangeNotifier {
   /// instant and only reads/writes the local database.
   Future<void> init({bool lightweight = false}) async {
     api = await ApiClient.load();
+    await _loadDefaultList();
     sync = SyncService(
         api: api, db: db, onChanged: notifyListeners, onSynced: _refreshWidget);
     if (lightweight) {
@@ -303,7 +302,7 @@ class AppState extends ChangeNotifier {
   /// Localized due-date badge for compact surfaces (Windows flyout, Android
   /// widget), shown only if the user enabled it (settings["compact_due"]).
   String? dueSuffix(dynamic item) {
-    if (settings["compact_due"] != true) return null;
+    if (!compactDueDates) return null;
     final due = item.dueDate;
     if (due == null) return null;
     final now = DateTime.now();
@@ -311,6 +310,49 @@ class AppState extends ChangeNotifier {
     final d = DateTime(due.year, due.month, due.day);
     if (d.isBefore(today)) return S.t("overdueSuffix").trim();
     return dueLabel(d, withTime: false);
+  }
+
+  // ---- Liste par défaut (propre à l'appareil, non synchronisée) ----
+
+  static const _defaultListPref = "default_list_id";
+
+  /// Liste présélectionnée pour l'ajout d'une tâche sur CET appareil
+  /// (dialogue « Nouvelle tâche », widget d'ajout rapide, volet Windows).
+  String? defaultListId;
+
+  Future<void> _loadDefaultList() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      defaultListId = prefs.getString(_defaultListPref);
+    } catch (_) {}
+  }
+
+  /// [id] null = aucune liste par défaut.
+  Future<void> setDefaultList(String? id) async {
+    defaultListId = id;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (id == null) {
+        await prefs.remove(_defaultListPref);
+      } else {
+        await prefs.setString(_defaultListPref, id);
+      }
+    } catch (_) {}
+  }
+
+  /// Liste cible d'un nouvel ajout parmi [lists] : la liste par défaut si
+  /// elle existe encore, sinon [fallback] (si présent dans [lists]), sinon
+  /// la 1re épinglée, sinon la 1re. Null si [lists] est vide.
+  String? addTargetAmong(List<dynamic> lists,
+      {String? fallback, List<dynamic> pinned = const []}) {
+    bool has(String? id) => id != null && lists.any((l) => l.id == id);
+    if (has(defaultListId)) return defaultListId;
+    if (has(fallback)) return fallback;
+    for (final p in pinned) {
+      if (has(p.id as String)) return p.id as String;
+    }
+    return lists.isEmpty ? null : lists.first.id as String;
   }
 
   // ---- Flyout pin (native Win32 popup) ----
@@ -445,14 +487,17 @@ class AppState extends ChangeNotifier {
   /// Quick add: one line = one item. Optional recurrence / parent (sub-task).
   /// Parser: "demain" / "aujourd'hui" / "après-demain" / "lundi".."dimanche"
   /// set a due date, "#nomdelaliste" also adds the item to that list.
+  /// [dueDate] : échéance choisie explicitement (puce de la zone d'ajout).
+  /// Elle s'applique à chaque ligne et désactive les mots-clés de date,
+  /// pour ne pas retirer « lundi »… d'un libellé qui n'en est pas un.
   Future<void> addQuickItems(String listId, String text,
-      {String? parentId, String recurrence = "none"}) async {
+      {String? parentId, String recurrence = "none", DateTime? dueDate}) async {
     final lists = await db.visibleLists();
     for (final raw in text.split("\n")) {
       final line = raw.trim();
       if (line.isEmpty) continue;
       await _addParsedLine(listId, line, lists,
-          parentId: parentId, recurrence: recurrence);
+          parentId: parentId, recurrence: recurrence, dueDate: dueDate);
     }
     // offline-first: items go through the outbox on the next sync,
     // never through a direct POST (it created server-side duplicates).
@@ -494,14 +539,17 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _addParsedLine(String listId, String line, List<dynamic> lists,
-      {String? parentId, String recurrence = "none"}) async {
+      {String? parentId, String recurrence = "none", DateTime? dueDate}) async {
     var label = line;
-    DateTime? dueDate;
+    final explicitDue = dueDate != null;
     String? extraListId;
 
     // 1) Mots-clés personnels (réglages synchronisés) — le plus long d'abord.
-    final custom = dueKeywords.entries.toList()
-      ..sort((a, b) => b.key.length.compareTo(a.key.length));
+    // Ignorés si une échéance a été choisie explicitement.
+    final custom = explicitDue
+        ? <MapEntry<String, String>>[]
+        : (dueKeywords.entries.toList()
+          ..sort((a, b) => b.key.length.compareTo(a.key.length)));
     for (final entry in custom) {
       final word = entry.key.toLowerCase();
       final idx = label.toLowerCase().indexOf(word);

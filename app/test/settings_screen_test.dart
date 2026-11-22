@@ -30,11 +30,11 @@ void main() {
     final infoIcons = find.byIcon(Icons.info_outline);
     expect(infoIcons, findsWidgets);
 
-    // 1er réglage avec info = Échéances.
+    // 1er réglage avec info = Alertes (les échéances n'ont plus de réglage).
     await tester.tap(infoIcons.first);
     await tester.pumpAndSettle();
 
-    expect(find.text(S.dueDatesHelp), findsOneWidget,
+    expect(find.text(S.alertsHelp), findsOneWidget,
         reason: "S1 : le tap simple sur l'icône d'info doit ouvrir le "
             "dialogue d'aide (avant fix : le tap ne fait rien)");
     await db.close();
