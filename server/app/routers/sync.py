@@ -8,9 +8,9 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..deps import Principal, accessible_list, get_principal, require_write
+from ..deps import Principal, accessible_list, require_write
 from ..events import record_change, notify_list
-from ..models import ChangeLog, Checklist, Item, ListMember, Role, utcnow
+from ..models import Checklist, Item, ListMember, Role, utcnow
 from ..schemas import SyncChange, SyncIn, SyncOut
 from .lists import _spawn_next
 
