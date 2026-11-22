@@ -2277,3 +2277,246 @@ async def test_sync_recurrence_spawn_uses_real_item_id(client, monkeypatch):
     upserts = [c for c in calls if c.get("kind") == "item.upsert"]
     assert str(spawned.id) in {c.get("id") for c in upserts}
     assert "None" not in {c.get("id") for c in upserts}
+
+
+async def _user_by_email(email: str):
+    from app.db import SessionLocal
+    from app.models import User
+    from sqlalchemy import select
+
+    async with SessionLocal() as session:
+        return (await session.execute(
+            select(User).where(User.email == email))).scalar_one_or_none()
+
+
+# ---- spec 2026-11-22 change-email (§§2-5) ----
+
+
+@pytest.mark.asyncio
+async def test_change_email_happy_path(client, monkeypatch):
+    """§2 : 202, pending_email + email_token set, email courant inchangé,
+    un email part vers la NOUVELLE adresse et son corps porte le code."""
+    import asyncio
+
+    from app import mailer
+    from app.config import settings
+
+    sent = []
+    monkeypatch.setattr(mailer, "_sync_send",
+                        lambda to, subj, body: sent.append((to, subj, body)))
+    # SMTP activé APRÈS l'inscription (avec SMTP on, register renvoie 202)
+    tokens = await register(client, "chmail@example.com")
+    monkeypatch.setattr(settings, "SMTP_ENABLED", True)
+    h = auth_headers(tokens)
+    r = await client.post("/auth/change-email",
+                          json={"new_email": "chmail-new@example.com",
+                                "password": "LongPassw0rd!x"}, headers=h)
+    assert r.status_code == 202, r.text
+
+    user = await _user_by_email("chmail@example.com")
+    assert user.pending_email == "chmail-new@example.com"
+    assert user.email_token is not None
+    assert user.email == "chmail@example.com"  # pas encore basculé
+
+    await asyncio.sleep(0.1)  # l'envoi SMTP est best-effort (create_task)
+    assert len(sent) == 1, sent
+    to, subj, body = sent[0]
+    assert to == "chmail-new@example.com"
+    assert subj == "Tapitask — changement d'email"
+    assert user.email_token in body
+
+
+@pytest.mark.asyncio
+async def test_change_email_error_responses(client, monkeypatch):
+    """§2 : 401 mauvais mot de passe, 400 même email / format invalide,
+    409 email pris, 503 SMTP non configuré — rien n'est enregistré."""
+    import asyncio
+
+    from app import mailer
+    from app.config import settings
+
+    sent = []
+    monkeypatch.setattr(mailer, "_sync_send",
+                        lambda to, subj, body: sent.append((to, subj, body)))
+
+    await register(client, "cmerr@example.com")
+    r = await client.post("/auth/login",
+                          json={"email": "cmerr@example.com", "password": "LongPassw0rd!x"})
+    h = auth_headers(r.json())
+
+    # mauvais mot de passe -> 401 uniforme (comme login)
+    r = await client.post("/auth/change-email",
+                          json={"new_email": "cmerr-new@example.com",
+                                "password": "wrongpass123"}, headers=h)
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Invalid credentials"
+
+    # même email (insensible à la casse) -> 400
+    r = await client.post("/auth/change-email",
+                          json={"new_email": "CMERR@example.com",
+                                "password": "LongPassw0rd!x"}, headers=h)
+    assert r.status_code == 400
+
+    # email déjà porté par un autre compte -> 409
+    await register(client, "cmerr-taken@example.com")
+    r = await client.post("/auth/change-email",
+                          json={"new_email": "cmerr-taken@example.com",
+                                "password": "LongPassw0rd!x"}, headers=h)
+    assert r.status_code == 409
+
+    # format invalide -> 400 (validation pydantic)
+    r = await client.post("/auth/change-email",
+                          json={"new_email": "pas-un-email",
+                                "password": "LongPassw0rd!x"}, headers=h)
+    assert r.status_code == 400
+
+    # SMTP non configuré -> 503
+    monkeypatch.setattr(settings, "SMTP_ENABLED", False)
+    r = await client.post("/auth/change-email",
+                          json={"new_email": "cmerr-new@example.com",
+                                "password": "LongPassw0rd!x"}, headers=h)
+    assert r.status_code == 503
+
+    await asyncio.sleep(0.1)
+    assert sent == []
+    user = await _user_by_email("cmerr@example.com")
+    assert user.pending_email is None
+
+
+@pytest.mark.asyncio
+async def test_change_email_requires_totp(client, monkeypatch):
+    """§2 : 2FA activé -> code manquant 401, code valide 202."""
+    import pyotp
+
+    from app.config import settings
+
+    tokens = await register(client, "cmtotp@example.com")
+    h = auth_headers(tokens)
+    monkeypatch.setattr(settings, "SMTP_ENABLED", True)
+    secret = (await client.post("/auth/totp/setup", headers=h)).json()["secret"]
+    await client.post("/auth/totp/enable",
+                      json={"code": pyotp.TOTP(secret).now()}, headers=h)
+
+    r = await client.post("/auth/change-email",
+                          json={"new_email": "cmtotp-new@example.com",
+                                "password": "LongPassw0rd!x"}, headers=h)
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Code 2FA requis ou invalide"
+
+    r = await client.post("/auth/change-email",
+                          json={"new_email": "cmtotp-new@example.com",
+                                "password": "LongPassw0rd!x",
+                                "totp_code": pyotp.TOTP(secret).now()}, headers=h)
+    assert r.status_code == 202, r.text
+    user = await _user_by_email("cmtotp@example.com")
+    assert user.pending_email == "cmtotp-new@example.com"
+
+
+@pytest.mark.asyncio
+async def test_verify_email_switches_pending_email(client, monkeypatch):
+    """§3 : token collé avec un changement en attente -> email basculé,
+    pending_email None, compte vérifié. Sans pending -> comportement
+    d'inscription inchangé."""
+    from app.config import settings
+
+    await register(client, "vea@example.com")
+    monkeypatch.setattr(settings, "SMTP_ENABLED", True)
+    r = await client.post("/auth/login",
+                          json={"email": "vea@example.com", "password": "LongPassw0rd!x"})
+    h = auth_headers(r.json())
+    r = await client.post("/auth/change-email",
+                          json={"new_email": "vea-new@example.com",
+                                "password": "LongPassw0rd!x"}, headers=h)
+    assert r.status_code == 202, r.text
+    token = (await _user_by_email("vea@example.com")).email_token
+
+    r = await client.post("/auth/verify-email", json={"token": token})
+    assert r.status_code == 204
+    assert await _user_by_email("vea@example.com") is None
+    user = await _user_by_email("vea-new@example.com")
+    assert user.pending_email is None
+    assert user.is_email_verified is True
+    assert user.email_token is None
+
+    # cas 2 : token sans pending (flux d'inscription, SMTP on -> 202 + token)
+    r = await client.post("/auth/register",
+                          json={"email": "veb@example.com", "password": "LongPassw0rd!x"})
+    assert r.status_code == 202, r.text
+    token = (await _user_by_email("veb@example.com")).email_token
+    r = await client.post("/auth/verify-email", json={"token": token})
+    assert r.status_code == 204
+    user = await _user_by_email("veb@example.com")
+    assert user.email == "veb@example.com"
+    assert user.pending_email is None
+    assert user.is_email_verified is True
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_with_pending_email(client, monkeypatch):
+    """§4 : compte vérifié + demande en attente -> le code part vers
+    l'email EN ATTENTE (pas le courant). Vérifié sans pending -> rien."""
+    import asyncio
+
+    from app import mailer
+    from app.config import settings
+
+    sent = []
+    monkeypatch.setattr(mailer, "_sync_send",
+                        lambda to, subj, body: sent.append((to, subj, body)))
+
+    await register(client, "rsa@example.com")
+    await register(client, "rsb@example.com")
+    monkeypatch.setattr(settings, "SMTP_ENABLED", True)
+    r = await client.post("/auth/login",
+                          json={"email": "rsa@example.com", "password": "LongPassw0rd!x"})
+    h = auth_headers(r.json())
+    r = await client.post("/auth/change-email",
+                          json={"new_email": "rsa-new@example.com",
+                                "password": "LongPassw0rd!x"}, headers=h)
+    assert r.status_code == 202, r.text
+    await asyncio.sleep(0.1)
+    sent.clear()
+
+    r = await client.post("/auth/resend-verification",
+                          json={"email": "rsa@example.com", "password": "LongPassw0rd!x"})
+    assert r.status_code == 204
+    await asyncio.sleep(0.1)
+    assert [to for to, _, _ in sent] == ["rsa-new@example.com"]
+
+    # compte vérifié sans pending : rien n'est renvoyé
+    sent.clear()
+    r = await client.post("/auth/resend-verification",
+                          json={"email": "rsb@example.com", "password": "LongPassw0rd!x"})
+    assert r.status_code == 204
+    await asyncio.sleep(0.1)
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_me_exposes_pending_email_and_totp(client, monkeypatch):
+    """§5 : /auth/me expose pending_email (None / valeur) et totp
+    (bool = secret set)."""
+    import pyotp
+
+    from app.config import settings
+
+    tokens = await register(client, "mea@example.com")
+    h = auth_headers(tokens)
+    monkeypatch.setattr(settings, "SMTP_ENABLED", True)
+
+    me = (await client.get("/auth/me", headers=h)).json()
+    assert me["pending_email"] is None
+    assert me["totp"] is False
+
+    r = await client.post("/auth/change-email",
+                          json={"new_email": "mea-new@example.com",
+                                "password": "LongPassw0rd!x"}, headers=h)
+    assert r.status_code == 202, r.text
+    me = (await client.get("/auth/me", headers=h)).json()
+    assert me["pending_email"] == "mea-new@example.com"
+
+    secret = (await client.post("/auth/totp/setup", headers=h)).json()["secret"]
+    await client.post("/auth/totp/enable",
+                      json={"code": pyotp.TOTP(secret).now()}, headers=h)
+    me = (await client.get("/auth/me", headers=h)).json()
+    assert me["totp"] is True

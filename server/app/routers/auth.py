@@ -17,6 +17,7 @@ from ..db import get_session
 from ..deps import Principal, RateLimiter, client_key, get_principal
 from ..models import RefreshToken, User, utcnow
 from ..schemas import (
+    ChangeEmailIn,
     UserSettingsIn,
     LoginIn,
     RefreshIn,
@@ -41,6 +42,19 @@ async def _send_verification_email(to: str, token: str) -> None:
         "Vérifiez votre adresse email avec ce code :\n\n"
         f"{token}\n\n"
         "Collez-le dans l'application (écran de connexion → « Vérifier mon email »).",
+    )
+
+
+async def _send_change_email(to: str, token: str) -> None:
+    from ..mailer import send_email
+
+    await send_email(
+        to,
+        "Tapitask — changement d'email",
+        f"{to} a demandé le changement de l'adresse email de votre compte Tapitask. "
+        "Si c'était vous, collez ce code dans l'application :\n\n"
+        f"{token}\n\n"
+        "Si ce n'était pas vous, ignorez ce message.",
     )
 from ..security import (
     create_access_token,
@@ -197,7 +211,8 @@ async def me(principal: Principal = Depends(get_principal), session: AsyncSessio
         settings = json.loads(user.settings) if user.settings else {}
     except Exception:
         settings = {}
-    return UserOut(id=user.id, email=user.email, is_admin=user.is_admin, settings=settings)
+    return UserOut(id=user.id, email=user.email, is_admin=user.is_admin, settings=settings,
+                   pending_email=user.pending_email, totp=user.totp_secret is not None)
 
 
 @router.patch("/me", response_model=UserOut)
@@ -213,7 +228,8 @@ async def update_settings(
     user.settings = json.dumps(data.settings)
     await session.commit()
     return UserOut(
-        id=user.id, email=user.email, is_admin=user.is_admin, settings=data.settings)
+        id=user.id, email=user.email, is_admin=user.is_admin, settings=data.settings,
+        pending_email=user.pending_email, totp=user.totp_secret is not None)
 
 
 @router.post("/verify-email", status_code=status.HTTP_204_NO_CONTENT)
@@ -222,6 +238,9 @@ async def verify_email(data: VerifyEmailIn, session: AsyncSession = Depends(get_
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Code de vérification invalide")
+    if user.pending_email is not None:
+        user.email = user.pending_email
+        user.pending_email = None
     user.is_email_verified = True
     user.email_token = None
     await session.commit()
@@ -237,11 +256,49 @@ async def resend_verification(
     await _login_limiter.check(f"resend:{client_key(request)}")
     result = await session.execute(select(User).where(User.email == data.email.lower()))
     user = result.scalar_one_or_none()
-    if user is None or user.is_email_verified:
+    # Un compte vérifié avec un changement d'email en attente doit pouvoir
+    # se renvoyer le code (vers l'email en attente).
+    if user is None or (user.is_email_verified and user.pending_email is None):
         return None
     user.email_token = new_email_token()
     await session.commit()
-    asyncio.create_task(_send_verification_email(user.email, user.email_token))
+    asyncio.create_task(
+        _send_verification_email(user.pending_email or user.email, user.email_token))
+    return None
+
+
+@router.post("/change-email", status_code=status.HTTP_202_ACCEPTED)
+async def change_email(
+    data: ChangeEmailIn,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(User).where(User.id == principal.user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
+    new_email = data.new_email.lower()
+    if user.totp_secret and not (
+        data.totp_code and verify_totp(user.totp_secret, data.totp_code)
+    ):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Code 2FA requis ou invalide")
+    if not verify_password(user.password_hash, data.password):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+    if new_email == user.email:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cet email est déjà le vôtre")
+    existing = (
+        await session.execute(select(User).where(User.email == new_email))
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Cet email est déjà utilisé")
+    if not settings.SMTP_ENABLED:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Vérification email indisponible (SMTP non configuré)")
+    user.pending_email = new_email
+    user.email_token = new_email_token()
+    await session.commit()
+    asyncio.create_task(_send_change_email(new_email, user.email_token))
     return None
 
 

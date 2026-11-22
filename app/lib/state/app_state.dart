@@ -26,6 +26,11 @@ class AppState extends ChangeNotifier {
   late final SyncService sync;
 
   bool isAdmin = false;
+  /// Profil serveur (GET /auth/me) : email du compte, changement en attente,
+  /// 2FA activée (le dialogue de changement d'email en dépend).
+  String? email;
+  String? pendingEmail;
+  bool totp = false;
   bool quickAddRequested = false;
   String? quickAddListId;
   StreamSubscription<Uri?>? _widgetClickSub;
@@ -171,6 +176,9 @@ class AppState extends ChangeNotifier {
       try {
         final me = await api.get("/auth/me");
         isAdmin = me["is_admin"] == true;
+        email = me["email"] as String?;
+        pendingEmail = me["pending_email"] as String?;
+        totp = me["totp"] == true;
         final remote = me["settings"];
         if (remote is Map<String, dynamic>) {
           settings = {...settings, ...remote};

@@ -182,6 +182,15 @@ class S {
     "active": "actif",
     "disabled": "désactivé",
     "resetPassword": "Réinitialiser le mot de passe",
+    // --- changement d'email ---
+    "changeEmail": "Changer d'email",
+    "newEmail": "Nouvel email",
+    "currentPassword": "Mot de passe actuel",
+    "emailChangePending": "Changement en attente — collez le code reçu",
+    "invalidCode": "Code invalide",
+    "passwordOrTotpInvalid": "Mot de passe ou code 2FA incorrect",
+    "emailAlreadyUsed": "Cet email est déjà utilisé",
+    "emailVerifyUnavailable": "Vérification email indisponible sur ce serveur",
     // --- récurrence / dates (libellés) ---
     "monday": "lundi",
     "sunday": "dimanche",
@@ -349,6 +358,14 @@ class S {
     "active": "active",
     "disabled": "disabled",
     "resetPassword": "Reset password",
+    "changeEmail": "Change email",
+    "newEmail": "New email",
+    "currentPassword": "Current password",
+    "emailChangePending": "Change pending — paste the code you received",
+    "invalidCode": "Invalid code",
+    "passwordOrTotpInvalid": "Wrong password or 2FA code",
+    "emailAlreadyUsed": "This email is already in use",
+    "emailVerifyUnavailable": "Email verification unavailable on this server",
     "monday": "Monday",
     "sunday": "Sunday",
     "addButton": "Add",
@@ -530,6 +547,14 @@ class S {
   static String get active => t("active");
   static String get disabled => t("disabled");
   static String get resetPassword => t("resetPassword");
+  static String get changeEmail => t("changeEmail");
+  static String get newEmail => t("newEmail");
+  static String get currentPassword => t("currentPassword");
+  static String get emailChangePending => t("emailChangePending");
+  static String get invalidCode => t("invalidCode");
+  static String get passwordOrTotpInvalid => t("passwordOrTotpInvalid");
+  static String get emailAlreadyUsed => t("emailAlreadyUsed");
+  static String get emailVerifyUnavailable => t("emailVerifyUnavailable");
 
   // --- messages paramétrés ---
   static String loginFailed(Object e) => locale == "en" ? "Failed: $e" : "Échec : $e";

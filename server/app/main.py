@@ -121,6 +121,7 @@ MIGRATIONS = [
     ("users", "is_active", "BOOLEAN NOT NULL DEFAULT 1", "BOOLEAN NOT NULL DEFAULT TRUE"),
     ("users", "is_email_verified", "BOOLEAN NOT NULL DEFAULT 1", "BOOLEAN NOT NULL DEFAULT TRUE"),
     ("users", "email_token", "VARCHAR(64)", "VARCHAR(64)"),
+    ("users", "pending_email", "VARCHAR(320)", "VARCHAR(320)"),
     ("users", "totp_secret", "VARCHAR(64)", "VARCHAR(64)"),
     ("api_keys", "list_scope", "VARCHAR(36)", "UUID"),
     ("items", "parent_id", "VARCHAR(36)", "UUID"),

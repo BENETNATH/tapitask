@@ -73,6 +73,21 @@ class ApiClient {
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
+  /// Demande de changement d'email (step-up mot de passe + 2FA éventuel).
+  Future<void> changeEmail(String newEmail, String password,
+      {String? totpCode}) async {
+    await post("/auth/change-email", {
+      "new_email": newEmail,
+      "password": password,
+      if (totpCode != null) "totp_code": totpCode,
+    });
+  }
+
+  /// Colle le code de vérification d'un changement d'email en attente.
+  Future<void> verifyEmail(String token) async {
+    await post("/auth/verify-email", {"token": token});
+  }
+
   Future<void> delete(String path) async {
     final r = await http.delete(Uri.parse("$baseUrl$path"),
         headers: {"Authorization": "Bearer $accessToken"});
@@ -112,7 +127,10 @@ class ApiClient {
       return _post(path, body, auth: auth);
     }
     _check(r);
-    return jsonDecode(r.body) as Map<String, dynamic>;
+    // 204 sans corps (ex. verify-email) : pas de JSON à décoder.
+    return r.body.isEmpty
+        ? <String, dynamic>{}
+        : jsonDecode(r.body) as Map<String, dynamic>;
   }
 
   Future<bool> _tryRefresh() async {

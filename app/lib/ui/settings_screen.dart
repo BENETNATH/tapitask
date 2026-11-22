@@ -3,6 +3,7 @@ import "package:http/http.dart" as http;
 import "package:material_ui/material_ui.dart";
 
 import "../data/android_updater.dart";
+import "../data/api_client.dart";
 import "../data/app_version.dart";
 import "../data/update_service.dart";
 import "../data/windows_updater.dart";
@@ -82,16 +83,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       );
 
-  Widget _tapRow(String title, String value, VoidCallback onTap) => SizedBox(
-        height: 44,
+  Widget _tapRow(String title, String value, VoidCallback onTap,
+          {String? subtitle}) =>
+      SizedBox(
+        height: subtitle == null ? 44 : 56,
         child: InkWell(
           onTap: onTap,
           child: Row(
             children: [
               Expanded(
-                  child: Text(title,
+                  child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
                       style: const TextStyle(fontSize: 14.5),
-                      maxLines: 1, overflow: TextOverflow.ellipsis)),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  if (subtitle != null)
+                    Text(subtitle,
+                        style: const TextStyle(fontSize: 12),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                ],
+              )),
               Text(value,
                   style: TextStyle(
                       fontSize: 13,
@@ -213,6 +226,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   // ---- dialogues ----
+
+  /// Changement d'email (spec 2026-11-22 §6) : collage du code de
+  /// confirmation si un changement est en attente, sinon nouvelle demande
+  /// (nouvel email + mot de passe + code 2FA si activée).
+  Future<void> _showEmailDialog() => showDialog<void>(
+        context: context,
+        builder: (context) =>
+            _EmailDialog(state: widget.state, pending: widget.state.pendingEmail != null),
+      );
 
   /// Aides des réglages : tapable sur Android (Tooltip seul = long-press).
   Future<void> _showInfo(String title, String text) => showDialog<void>(
@@ -466,10 +488,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       label: Text(S.login),
                     ),
                   )
-                : _tapRow(
-                    S.accountAndServer,
-                    s.api.baseUrl.isEmpty ? S.notConfigured : s.api.baseUrl,
-                    () => Navigator.pushNamed(context, "/login")),
+                : Column(
+                    children: [
+                      _tapRow(S.email, s.email ?? '…', _showEmailDialog,
+                          subtitle: s.pendingEmail != null
+                              ? S.emailChangePending
+                              : null),
+                      _divider(),
+                      _tapRow(
+                          S.accountAndServer,
+                          s.api.baseUrl.isEmpty
+                              ? S.notConfigured
+                              : s.api.baseUrl,
+                          () => Navigator.pushNamed(context, "/login")),
+                    ],
+                  ),
           ),
           const SizedBox(height: 48),
         ],
@@ -501,5 +534,121 @@ class _SettingsScreenState extends State<SettingsScreen> {
       default:
         return S.every30sShort;
     }
+  }
+}
+
+/// Dialogue changement d'email (spec 2026-11-22 §6) : [pending] = un
+/// changement est en attente -> seul le collage du code reste à faire.
+/// Erreurs affichées dans le dialogue (404 code invalide ; 401/409/503).
+class _EmailDialog extends StatefulWidget {
+  final AppState state;
+  final bool pending;
+  const _EmailDialog({required this.state, required this.pending});
+
+  @override
+  State<_EmailDialog> createState() => _EmailDialogState();
+}
+
+class _EmailDialogState extends State<_EmailDialog> {
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  final _totp = TextEditingController();
+  final _code = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _password.dispose();
+    _totp.dispose();
+    _code.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (widget.pending) {
+      final code = _code.text.trim();
+      if (code.isEmpty) return;
+      try {
+        await widget.state.api.verifyEmail(code);
+        await widget.state.reloadProfile();
+        if (mounted) Navigator.pop(context);
+      } on ApiException catch (e) {
+        _error = e.status == 404 ? S.invalidCode : S.loginFailed(e);
+      }
+    } else {
+      final email = _email.text.trim();
+      final code = _totp.text.trim();
+      if (email.isEmpty || _password.text.isEmpty) return;
+      try {
+        await widget.state.api.changeEmail(
+            email, _password.text,
+            totpCode: code.isEmpty ? null : code);
+        await widget.state.reloadProfile();
+        if (mounted) Navigator.pop(context);
+      } on ApiException catch (e) {
+        _error = switch (e.status) {
+          401 => S.passwordOrTotpInvalid,
+          409 => S.emailAlreadyUsed,
+          503 => S.emailVerifyUnavailable,
+          _ => S.loginFailed(e),
+        };
+      }
+    }
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.pending ? S.emailChangePending : S.changeEmail),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (widget.pending)
+            TextField(
+              controller: _code,
+              autofocus: true,
+              decoration: InputDecoration(labelText: S.codeFromEmail),
+            )
+          else ...[
+            TextField(
+              controller: _email,
+              autofocus: true,
+              keyboardType: TextInputType.emailAddress,
+              decoration: InputDecoration(labelText: S.newEmail),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _password,
+              obscureText: true,
+              decoration: InputDecoration(labelText: S.currentPassword),
+            ),
+            if (widget.state.totp) ...[
+              const SizedBox(height: 8),
+              TextField(
+                controller: _totp,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(labelText: S.totpCode),
+              ),
+            ],
+          ],
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(_error!,
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: Theme.of(context).colorScheme.error)),
+            ),
+        ],
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context), child: Text(S.cancel)),
+        FilledButton(onPressed: _submit, child: Text(S.ok)),
+      ],
+    );
   }
 }

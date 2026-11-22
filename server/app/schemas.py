@@ -28,6 +28,12 @@ class RegisterIn(BaseModel):
         return v
 
 
+class ChangeEmailIn(BaseModel):
+    new_email: EmailStr
+    password: str
+    totp_code: str | None = None
+
+
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
@@ -49,6 +55,8 @@ class UserOut(BaseModel):
     email: EmailStr
     is_admin: bool = False
     settings: dict = {}
+    pending_email: str | None = None
+    totp: bool = False
 
 
 class UserSettingsIn(BaseModel):
