@@ -22,8 +22,10 @@ jobs:
         with:
           fetch-depth: 0
       - name: Check commit messages
+        # head.sha et non HEAD : HEAD est le commit de merge synthétique de
+        # GitHub (refs/pull/N/merge), jamais conforme Conventional Commits.
         run: |
-          git log --format=%H%x00%B%x00 "${{ github.event.pull_request.base.sha }}..HEAD" \
+          git log --format=%H%x00%B%x00 "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" \
             | python3 scripts/check_commits.py -
 
   # Les gates du harness sont testés en continu (review gate, check commits,
