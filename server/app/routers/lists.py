@@ -215,6 +215,10 @@ async def patch_item(
         item.label = data.label
     if data.done is not None:
         item.done = data.done
+        if newly_done:
+            item.completed_at = utcnow()
+        elif not data.done:
+            item.completed_at = None
     if data.position is not None:
         item.position = data.position
     if data.notes is not None:
@@ -223,6 +227,7 @@ async def patch_item(
         item.assignee_id = data.assignee_id
     if data.due_date is not None:
         item.due_date = data.due_date
+        item.due_day = None
     if data.recurrence is not None:
         item.recurrence = data.recurrence
     if item.updated_at is None:
@@ -363,7 +368,7 @@ async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID,
     commit de fin de batch de l'appelant couvre la ligne ; `pending` collecte
     la notification au lieu de l'émettre (elle doit partir après ce commit).
     """
-    from datetime import timedelta
+    from datetime import datetime, timedelta, timezone
 
     existing = await session.execute(
         select(Item.id).where(Item.recurrence_source_id == item.id).limit(1))
@@ -371,7 +376,8 @@ async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID,
         return None
 
     now = utcnow()
-    due = item.due_date or now
+    due = (datetime.combine(item.due_day, datetime.min.time(), tzinfo=timezone.utc)
+           if item.due_day is not None else item.due_date or now)
     if item.recurrence == "daily":
         next_due = due + timedelta(days=1)
     elif item.recurrence == "weekly":
@@ -387,6 +393,7 @@ async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID,
         created_by=user_id,
         recurrence=item.recurrence,
         due_date=next_due,
+        due_day=next_due.date() if item.due_day is not None else None,
         recurrence_source_id=item.id,
     )
     session.add(next_item)

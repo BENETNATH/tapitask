@@ -56,6 +56,7 @@ class WidgetService {
               items[i].done ? "✓  ${items[i].label}" : "☐  ${items[i].label}");
           await HomeWidget.saveWidgetData("list_${li}_item_${i}_id",
               items[i].done ? "" : items[i].id);
+          await HomeWidget.saveWidgetData("list_${li}_item_${i}_open_id", items[i].id);
           await HomeWidget.saveWidgetData("list_${li}_item_${i}_due",
               state.dueSuffix(items[i]) ?? "");
         }
@@ -80,11 +81,20 @@ class WidgetService {
     return raw.split(",").where((id) => id.trim().isNotEmpty).toList();
   }
 
-  static Future<void> clearToggles() async {
+  static Future<DateTime?> pendingCompletionTime(String id) async {
+    final stamp = await HomeWidget.getWidgetData<String>("widget_completed_at_$id");
+    final millis = int.tryParse(stamp ?? "");
+    return millis == null ? null : DateTime.fromMillisecondsSinceEpoch(millis, isUtc: true);
+  }
+
+  static Future<void> clearToggles([List<String> ids = const []]) async {
     await HomeWidget.saveWidgetData("widget_toggled", "");
     // home_widget 0.10 no longer accepts List<String>: store a joined string
     // (the Kotlin provider reads/splits it the same way).
     await HomeWidget.saveWidgetData("widget_done_ids", "");
+    for (final id in ids) {
+      await HomeWidget.saveWidgetData<String>("widget_completed_at_$id", null);
+    }
   }
 
   /// Launch deep-link from the home-screen widget, if any (null otherwise).

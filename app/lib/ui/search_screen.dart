@@ -4,6 +4,7 @@ import "package:flutter/services.dart";
 import "../data/database.dart";
 import "../state/app_state.dart";
 import "../l10n/s.dart";
+import "task_details.dart";
 
 /// Recherche globale (Ctrl+F côté bureau) sur tous les items de toutes les listes.
 class SearchScreen extends StatefulWidget {
@@ -85,16 +86,13 @@ class _SearchScreenState extends State<SearchScreen> {
                     final item = _results![i];
                     final listName =
                         _listTitles[item.listId] ?? "";
-                    return CheckboxListTile(
-                      value: item.done,
-                      controlAffinity: ListTileControlAffinity.leading,
+                    return TaskTile(
+                      state: widget.state,
+                      item: item,
                       title: Text(item.label),
                       subtitle: Text(listName,
                           style: const TextStyle(fontSize: 12)),
-                      onChanged: (v) async {
-                        await widget.state.toggleItem(item.id, v ?? false);
-                        _search();
-                      },
+                      onToggled: _search,
                     );
                   },
                 ),

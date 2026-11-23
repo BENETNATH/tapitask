@@ -7,9 +7,11 @@ import "package:flutter/services.dart";
 import "../data/database.dart";
 import "../state/app_state.dart";
 import "due_format.dart";
+import "google_tasks_dialog.dart";
 import "list_dialogs.dart";
 import "due_picker.dart";
 import "share_screen.dart";
+import "task_details.dart";
 import "../l10n/s.dart";
 
 class ListScreen extends StatefulWidget {
@@ -35,7 +37,11 @@ class _ListScreenState extends State<ListScreen> {
 
   /// Échéance choisie pour le prochain ajout (puce « Échéance » de la zone
   /// d'ajout). Null = aucune (les mots-clés « demain »… restent actifs).
-  DateTime? _newDue;
+  DueChoice? _newDue;
+  bool? _showCompleted;
+  bool get _hideCompleted => _showCompleted == null
+      ? widget.state.settings["hide_done_app"] == true
+      : !_showCompleted!;
   String? _parentIdForNextAdd;
 
   /// Switch de liste en place (lot Q / Q2) : même État, `setState` —
@@ -201,6 +207,22 @@ class _ListScreenState extends State<ListScreen> {
           actions: [
             PopupMenuButton<String>(
               onSelected: (action) async {
+                if (action == "googleTasks") {
+                  await _sendOpenTasksToGoogle();
+                  return;
+                }
+                if (action == "googleImport") {
+                  final listId = _listId;
+                  await showGoogleTasksImportDialog(
+                      context,
+                      (source, tasks) =>
+                          state.importGoogleTasks(listId, source, tasks));
+                  return;
+                }
+                if (action == "completed") {
+                  setState(() => _showCompleted = _hideCompleted);
+                  return;
+                }
                 // clean / share : déplaçés des anciens IconButtons pour libérer
                 // la zone du titre (spec lot P, P2b) — logique déplacée, pas dupliquée.
                 if (action == "clean") {
@@ -246,6 +268,19 @@ class _ListScreenState extends State<ListScreen> {
               },
               itemBuilder: (context) => [
                 PopupMenuItem(
+                  value: "completed",
+                  child: Row(children: [
+                    Icon(_hideCompleted
+                        ? Icons.visibility
+                        : Icons.visibility_off),
+                    const SizedBox(width: 12),
+                    Flexible(
+                        child: Text(_hideCompleted
+                            ? S.showCompletedTasks
+                            : S.hideCompletedTasks)),
+                  ]),
+                ),
+                PopupMenuItem(
                   value: "default",
                   child: Row(children: [
                     Icon(widget.state.defaultListId == _listId
@@ -264,7 +299,7 @@ class _ListScreenState extends State<ListScreen> {
                   child: Row(children: [
                     Icon(Icons.delete_sweep_outlined),
                     const SizedBox(width: 12),
-                    Text(S.cleanDone),
+                    Flexible(child: Text(S.cleanDone)),
                   ]),
                 ),
                 PopupMenuItem(
@@ -275,6 +310,26 @@ class _ListScreenState extends State<ListScreen> {
                     Text(S.share),
                   ]),
                 ),
+                if (canSendToGoogleTasks)
+                  PopupMenuItem(
+                    value: "googleTasks",
+                    child: Row(children: [
+                      const Icon(Icons.outbox_outlined),
+                      const SizedBox(width: 12),
+                      Flexible(child: Text(S.sendOpenToGoogleTasks)),
+                    ]),
+                  ),
+                if (canSendToGoogleTasks &&
+                    _lists.any(
+                        (list) => list.id == _listId && list.role != "viewer"))
+                  PopupMenuItem(
+                    value: "googleImport",
+                    child: Row(children: [
+                      const Icon(Icons.download_outlined),
+                      const SizedBox(width: 12),
+                      Flexible(child: Text(S.importGoogleTasks)),
+                    ]),
+                  ),
                 PopupMenuItem(
                   value: "color",
                   child: Row(children: [
@@ -292,9 +347,11 @@ class _ListScreenState extends State<ListScreen> {
                           ? Icons.cloud_off_outlined
                           : Icons.cloud_done_outlined),
                       const SizedBox(width: 12),
-                      Text(snap.data?.localOnly == true
-                          ? "Activer la synchro"
-                          : "Local uniquement"),
+                      Flexible(
+                        child: Text(snap.data?.localOnly == true
+                            ? "Activer la synchro"
+                            : "Local uniquement"),
+                      ),
                     ]),
                   ),
                 ),
@@ -382,7 +439,9 @@ class _ListScreenState extends State<ListScreen> {
                                 label: Text(
                                   _newDue == null
                                       ? S.dueDate
-                                      : _dueLabel(_newDue!),
+                                      : dueLabel(_newDue!.date!,
+                                          withTime: true,
+                                          allDay: _newDue!.allDay),
                                   overflow: TextOverflow.ellipsis,
                                 ),
                                 tooltip: S.setDueDate,
@@ -445,158 +504,190 @@ class _ListScreenState extends State<ListScreen> {
   /// Corps de la liste, construit sur le cache `_items` : l'ancien
   /// StreamBuilder flashait l'état vide au 1er frame d'un État neuf (lot Q).
   Widget _itemsBody() {
-    final state = widget.state;
     final scheme = Theme.of(context).colorScheme;
-    final items = _items;
-    // W2 : le réglage de l'app est hide_done_app (hide_done pilote seul le
-    // volet/widget).
-    final hideDone = widget.state.settings["hide_done_app"] as bool? ?? true;
-    final top = items
-        .where((i) => i.parentId == null && (!hideDone || !i.done))
-        .toList();
-    if (top.isEmpty) {
+    final itemsById = {for (final item in _items) item.id: item};
+    final active = <LocalItem>[];
+    final completed = <LocalItem>[];
+    final children = <String, List<LocalItem>>{};
+    for (final item in _items) {
+      final parent = itemsById[item.parentId];
+      if (parent != null && parent.parentId == null && parent.done == item.done) {
+        children.putIfAbsent(parent.id, () => []).add(item);
+      } else if (item.done) {
+        if (!_hideCompleted) completed.add(item);
+      } else {
+        active.add(item);
+      }
+    }
+    if (active.isEmpty && completed.isEmpty) {
       return Center(
         child: Text(S.nothingToDoAdd, style: TextStyle(color: scheme.outline)),
       );
     }
-    return ReorderableListView.builder(
-      buildDefaultDragHandles: true,
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 24),
-      itemCount: top.length,
-      onReorderItem: (oldIndex, newIndex) async {
-        // onReorderItem fournit déjà le newIndex ajusté au retrait
-        // de l'élément déplacé (plus de décrément manuel).
-        final moved = top.removeAt(oldIndex);
-        top.insert(newIndex, moved);
-        // hide_done_app ON : liste visible ≠ ordre absolu — réécrire les
-        // positions absolues en ordre stable : les items masqués (cochés)
-        // gardent leur slot, les visibles se répartissent dans les slots
-        // restants, dans le nouvel ordre visible.
-        final all = items.where((i) => i.parentId == null).toList();
-        var k = 0;
-        for (var pos = 0; pos < all.length; pos++) {
-          await state.reorderItem(
-              hideDone && all[pos].done ? all[pos].id : top[k++].id, pos);
-        }
-      },
-      itemBuilder: (context, i) {
-        final item = top[i];
-        final children = items.where((c) => c.parentId == item.id).toList();
-        return Dismissible(
-          key: ValueKey(item.id),
-          direction: DismissDirection.endToStart,
-          background: Container(
-            color: scheme.errorContainer,
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: 20),
-            margin: const EdgeInsets.symmetric(vertical: 2),
-            child: Icon(Icons.delete_outline, color: scheme.onErrorContainer),
+    final desktop = switch (defaultTargetPlatform) {
+      TargetPlatform.windows ||
+      TargetPlatform.linux ||
+      TargetPlatform.macOS =>
+        true,
+      _ => false,
+    };
+    return CustomScrollView(
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+          sliver: SliverReorderableList(
+            itemCount: active.length,
+            itemBuilder: (context, index) {
+              final item = active[index];
+              final row = _itemRow(item, children[item.id] ?? [],
+                  dragIndex: desktop ? index : null);
+              return desktop
+                  ? KeyedSubtree(key: ValueKey(item.id), child: row)
+                  : ReorderableDelayedDragStartListener(
+                      key: ValueKey(item.id), index: index, child: row);
+            },
+            onReorderItem: (oldIndex, newIndex) async {
+              final reordered = [...active];
+              reordered.insert(newIndex, reordered.removeAt(oldIndex));
+              await widget.state.reorderOpenItems(reordered);
+            },
           ),
-          onDismissed: (_) async {
-            final messenger = ScaffoldMessenger.of(context);
-            final undo = await state.deleteItem(item.id);
-            if (!mounted) return;
-            {
-              messenger.showSnackBar(
-                SnackBar(
-                  content: Text("« ${item.label} » supprimé"),
-                  action: SnackBarAction(
-                    label: "ANNULER",
-                    onPressed: () => undo(),
-                  ),
-                  duration: const Duration(seconds: 5),
-                ),
-              );
-            }
-          },
-          child: Column(
-            key: ValueKey("col-${item.id}"),
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              GestureDetector(
-                onLongPress: () => _itemActions(item),
-                child: CheckboxListTile(
-                  dense: true,
-                  value: item.done,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  title: Text(
-                    item.label,
-                    style: TextStyle(
-                      decoration: item.done ? TextDecoration.lineThrough : null,
-                      color: item.done ? scheme.outline : null,
-                    ),
-                  ),
-                  subtitle: _itemSubtitle(item),
-                  secondary: state.visibleActions
-                      ? Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              tooltip: item.dueDate == null
-                                  ? S.setDueDate
-                                  : S.editDueDate,
-                              icon: Icon(
-                                item.dueDate == null
-                                    ? Icons.event_outlined
-                                    : Icons.event,
-                                size: 20,
-                                color: item.dueDate == null
-                                    ? scheme.outline
-                                    : scheme.primary,
-                              ),
-                              onPressed: () => _pickDueDate(item),
-                            ),
-                            IconButton(
-                              tooltip: S.itemActions,
-                              icon: Icon(Icons.more_vert,
-                                  size: 20, color: scheme.outline),
-                              onPressed: () => _itemActions(item),
-                            ),
-                          ],
-                        )
-                      : null,
-                  onChanged: (v) => state.toggleItem(item.id, v ?? false),
-                ),
-              ),
-              for (final child in children)
-                Padding(
-                  padding: const EdgeInsets.only(left: 32, bottom: 2),
-                  child: CheckboxListTile(
-                    dense: true,
-                    controlAffinity: ListTileControlAffinity.leading,
-                    value: child.done,
-                    title: Text(child.label,
-                        style: TextStyle(
-                            fontSize: 13,
-                            color: child.done ? scheme.outline : null)),
-                    onChanged: (v) => state.toggleItem(child.id, v ?? false),
-                  ),
-                ),
-            ],
+        ),
+        if (completed.isNotEmpty) ...[
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+              child: Text(S.completedTasks,
+                  style: Theme.of(context).textTheme.labelLarge),
+            ),
           ),
-        );
-      },
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            sliver: SliverList.builder(
+              itemCount: completed.length,
+              itemBuilder: (context, index) {
+                final item = completed[index];
+                return _itemRow(item, children[item.id] ?? []);
+              },
+            ),
+          ),
+        ],
+        const SliverToBoxAdapter(child: SizedBox(height: 24)),
+      ],
     );
   }
 
+  Widget _itemRow(LocalItem item, List<LocalItem> children, {int? dragIndex}) {
+    final state = widget.state;
+    final scheme = Theme.of(context).colorScheme;
+    final due = item.localDue;
+    return Dismissible(
+      key: ValueKey(item.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        color: scheme.errorContainer,
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        margin: const EdgeInsets.symmetric(vertical: 2),
+        child: Icon(Icons.delete_outline, color: scheme.onErrorContainer),
+      ),
+      onDismissed: (_) async {
+        final messenger = ScaffoldMessenger.of(context);
+        final undo = await state.deleteItem(item.id);
+        if (!mounted) return;
+        messenger.showSnackBar(SnackBar(
+          content: Text("« ${item.label} » supprimé"),
+          action: SnackBarAction(label: S.undo, onPressed: () => undo()),
+          duration: const Duration(seconds: 5),
+        ));
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TaskTile(
+            state: state,
+            item: item,
+            dense: true,
+            title: _itemTitle(item),
+            subtitle: _itemSubtitle(item),
+            onLongPress: () => _itemActions(item),
+            trailing: state.visibleActions || dragIndex != null
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (state.visibleActions) ...[
+                        IconButton(
+                          tooltip: due == null ? S.setDueDate : S.editDueDate,
+                          icon: Icon(
+                              due == null ? Icons.event_outlined : Icons.event,
+                              size: 20,
+                              color: due == null
+                                  ? scheme.outline
+                                  : scheme.primary),
+                          onPressed: () => _pickDueDate(item),
+                        ),
+                        IconButton(
+                          tooltip: S.itemActions,
+                          icon: Icon(Icons.more_vert,
+                              size: 20, color: scheme.outline),
+                          onPressed: () => _itemActions(item),
+                        ),
+                      ],
+                      if (dragIndex != null)
+                        ReorderableDragStartListener(
+                          index: dragIndex,
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 8),
+                            child: Icon(Icons.drag_handle),
+                          ),
+                        ),
+                    ],
+                  )
+                : null,
+          ),
+          for (final child in children)
+            Padding(
+              padding: const EdgeInsets.only(left: 32, bottom: 2),
+              child: TaskTile(
+                state: state,
+                item: child,
+                onLongPress: () => _itemActions(child),
+                dense: true,
+                title: _itemTitle(child, fontSize: 13),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _itemTitle(LocalItem item, {double? fontSize}) => Text(item.label,
+      style: TextStyle(
+        fontSize: fontSize,
+        color:
+            item.done ? Theme.of(context).colorScheme.onSurfaceVariant : null,
+        decoration: item.done ? TextDecoration.lineThrough : null,
+      ));
+
   Future<void> _itemActions(LocalItem item) async {
+    final due = item.localDue;
     final action = await showModalBottomSheet<String>(
       context: context,
       builder: (context) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          ListTile(
-            leading: const Icon(Icons.subdirectory_arrow_right),
-            title: Text(S.addSubtask),
-            onTap: () => Navigator.pop(context, "subtask"),
-          ),
+        child: ListView(shrinkWrap: true, children: [
+          if (item.parentId == null)
+            ListTile(
+              leading: const Icon(Icons.subdirectory_arrow_right),
+              title: Text(S.addSubtask),
+              onTap: () => Navigator.pop(context, "subtask"),
+            ),
           ListTile(
             leading: Icon(Icons.event,
-                color: item.dueDate != null
-                    ? Theme.of(context).colorScheme.primary
-                    : null),
-            title: Text(item.dueDate == null
+                color:
+                    due != null ? Theme.of(context).colorScheme.primary : null),
+            title: Text(due == null
                 ? S.setDueDate
-                : "${S.dueDate} : ${_dueLabel(item.dueDate!)}"),
+                : "${S.dueDate} · ${dueLabel(due, withTime: true, allDay: item.dueDay != null)}"),
             onTap: () => Navigator.pop(context, "due"),
           ),
           ListTile(
@@ -607,9 +698,16 @@ class _ListScreenState extends State<ListScreen> {
             title: Text(S.note),
             onTap: () => Navigator.pop(context, "notes"),
           ),
+          if (canSendToGoogleTasks)
+            ListTile(
+              leading: const Icon(Icons.outbox_outlined),
+              title: Text(S.sendToGoogleTasks),
+              onTap: () => Navigator.pop(context, "googleTasks"),
+            ),
         ]),
       ),
     );
+    if (!mounted) return;
     switch (action) {
       case "subtask":
         setState(() => _parentIdForNextAdd = item.id);
@@ -618,21 +716,38 @@ class _ListScreenState extends State<ListScreen> {
         await _pickDueDate(item);
         break;
       case "notes":
-        await _editNotes(item);
+        await showTaskDetails(context, widget.state, item);
+        break;
+      case "googleTasks":
+        await showGoogleTasksDialog(context, [item]);
         break;
     }
+  }
+
+  Future<void> _sendOpenTasksToGoogle() async {
+    final listId = _listId;
+    final tasks = await widget.state.db.uncheckedItemsOf(listId);
+    if (!mounted || _listId != listId) return;
+    if (tasks.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(S.nothingToDo)));
+      return;
+    }
+    await showGoogleTasksDialog(context, tasks);
   }
 
   /// Échéance ergonomique : raccourcis en un tap, puis sélecteur
   /// date/heure complet si besoin. Aussi accessible via l'icône
   /// calendrier sur chaque item (pas besoin d'un appui long).
   Future<void> _pickDueDate(LocalItem item) async {
-    final choice = await chooseDueDate(context, item.label, item.dueDate);
+    final choice = await chooseDueDate(context, item.label, item.localDue,
+        allDay: item.dueDay != null);
     if (choice == null || !mounted) return;
     if (choice.date == null) {
       await widget.state.setItemDetails(item.id, clearDue: true);
     } else {
-      await widget.state.setItemDetails(item.id, dueDate: choice.date);
+      await widget.state
+          .setItemDetails(item.id, dueDate: choice.date, dueDay: choice.day);
     }
   }
 
@@ -640,38 +755,11 @@ class _ListScreenState extends State<ListScreen> {
   Future<void> _pickNewDue() async {
     final title = _quickAdd.text.trim().split("\n").first;
     final choice = await chooseDueDate(
-        context, title.isEmpty ? S.dueDate : title, _newDue);
+        context, title.isEmpty ? S.dueDate : title, _newDue?.date,
+        allDay: _newDue?.allDay ?? true);
     if (choice == null || !mounted) return;
-    setState(() => _newDue = choice.date);
+    setState(() => _newDue = choice.date == null ? null : choice);
   }
-
-  Future<void> _editNotes(LocalItem item) async {
-    final controller = TextEditingController(text: item.notes ?? "");
-    final notes = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(S.note),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLines: 5,
-          onSubmitted: (v) => Navigator.pop(context, v),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context), child: Text(S.cancel)),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text),
-              child: Text(S.ok)),
-        ],
-      ),
-    );
-    if (notes != null) {
-      await widget.state.setItemDetails(item.id, notes: notes);
-    }
-  }
-
-  String _dueLabel(DateTime d) => dueLabel(d, withTime: true);
 
   Future<LocalList?> _list() => widget.state.db.getList(_listId);
 
@@ -679,19 +767,20 @@ class _ListScreenState extends State<ListScreen> {
       Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(icon, size: 12, color: color),
         const SizedBox(width: 3),
-        Text(text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 12, color: color)),
+        Flexible(
+            child: Text(text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, color: color))),
       ]);
 
   Widget? _itemSubtitle(LocalItem item) {
     final parts = <Widget>[];
-    if (item.dueDate != null) {
-      final overdue = item.dueDate!.isBefore(DateTime.now());
+    if (item.localDue case final due?) {
+      final overdue = item.overdueAt(DateTime.now());
       parts.add(_subtitlePart(
           overdue ? Icons.warning_amber_rounded : Icons.event,
-          _dueLabel(item.dueDate!),
+          dueLabel(due, withTime: true, allDay: item.dueDay != null),
           color: overdue ? Theme.of(context).colorScheme.error : null));
     }
     if (item.recurrence != "none") {
@@ -722,7 +811,8 @@ class _ListScreenState extends State<ListScreen> {
       text,
       parentId: _parentIdForNextAdd,
       recurrence: _recurrence,
-      dueDate: _newDue,
+      dueDate: _newDue?.date,
+      dueDay: _newDue?.day,
     );
     setState(() {
       _parentIdForNextAdd = null;

@@ -181,10 +181,12 @@ class SyncService {
                 "list_id": i.listId,
                 "label": i.label,
                 "done": i.done,
+                "completed_at": i.completedAt?.toUtc().toIso8601String(),
                 "position": i.position,
                 "parent_id": i.parentId,
                 "recurrence": i.recurrence,
                 "due_date": i.dueDate?.toUtc().toIso8601String(),
+                "due_day": i.dueDay,
                 "notes": i.notes,
                 "assignee_id": i.assigneeId,
                 "updated_at": i.updatedAt.toUtc().toIso8601String(),
@@ -247,10 +249,16 @@ class SyncService {
           parentId: Value(c["parent_id"]),
           label: Value(c["label"] ?? ""),
           done: Value(c["done"] ?? false),
+          completedAt: c["done"] != true
+              ? const Value(null)
+              : c.containsKey("completed_at")
+                  ? Value(DateTime.tryParse(c["completed_at"] as String? ?? ""))
+                  : const Value.absent(),
           position: Value(c["position"] ?? 0),
           recurrence: Value(c["recurrence"] ?? "none"),
           dueDate: Value(
               c["due_date"] != null ? DateTime.parse(c["due_date"]) : null),
+          dueDay: c.containsKey("due_day") ? Value(c["due_day"] as String?) : const Value.absent(),
           notes: Value(c["notes"] as String?),
           assigneeId: Value(c["assignee_id"] as String?),
           updatedAt: Value(DateTime.parse(c["updated_at"])),

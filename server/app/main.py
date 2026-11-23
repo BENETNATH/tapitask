@@ -127,6 +127,8 @@ MIGRATIONS = [
     ("items", "parent_id", "VARCHAR(36)", "UUID"),
     ("items", "recurrence", "VARCHAR(10) NOT NULL DEFAULT 'none'", "VARCHAR(10) NOT NULL DEFAULT 'none'"),
     ("items", "due_date", "TIMESTAMP", "TIMESTAMP"),
+    ("items", "due_day", "DATE", "DATE"),
+    ("items", "completed_at", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE"),
     ("lists", "color", "VARCHAR(16)", "VARCHAR(16)"),
     ("lists", "folder", "VARCHAR(100)", "VARCHAR(100)"),
     ("users", "settings", "TEXT", "TEXT"),

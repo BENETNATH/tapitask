@@ -27,9 +27,11 @@ class LocalItems extends Table {
   TextColumn get parentId => text().nullable()();
   TextColumn get label => text()();
   BoolColumn get done => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get completedAt => dateTime().nullable()();
   IntColumn get position => integer().withDefault(const Constant(0))();
   TextColumn get recurrence => text().withDefault(const Constant("none"))();
   DateTimeColumn get dueDate => dateTime().nullable()();
+  TextColumn get dueDay => text().nullable()();
   TextColumn get notes => text().nullable()();
   TextColumn get assigneeId => text().nullable()();
   DateTimeColumn get updatedAt => dateTime()();
@@ -47,7 +49,7 @@ class AppDb extends _$AppDb {
   AppDb.forTesting(super.e);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -67,6 +69,8 @@ class AppDb extends _$AppDb {
             await m.addColumn(localItems, localItems.notes);
             await m.addColumn(localItems, localItems.assigneeId);
           }
+          if (from < 5) await m.addColumn(localItems, localItems.dueDay);
+          if (from < 6) await m.addColumn(localItems, localItems.completedAt);
         },
       );
 
@@ -105,19 +109,39 @@ class AppDb extends _$AppDb {
 
   Stream<List<LocalItem>> watchDueItems() {
     final now = DateTime.now();
-    final endOfDay =
-        DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
+    final endOfDay = DateTime(now.year, now.month, now.day + 1);
     final q = select(localItems).join([
       innerJoin(localLists, localLists.id.equalsExp(localItems.listId)),
     ]);
     q.where(localItems.deleted.equals(false) &
         localItems.done.equals(false) &
-        localItems.dueDate.isSmallerOrEqualValue(endOfDay) &
+        _dueBefore(endOfDay) &
         localLists.localOnly.equals(false) &
         localLists.deleted.equals(false));
     q.orderBy([OrderingTerm.asc(localItems.dueDate)]);
     return q.watch().map(
         (rows) => rows.map((r) => r.readTable(localItems)).toList());
+  }
+
+  /// Calendar tasks from all visible lists, including local-only lists.
+  Stream<List<({LocalItem item, String listTitle})>> watchCalendarItems(
+      DateTime start, DateTime end) {
+    final q = select(localItems).join([
+      innerJoin(localLists, localLists.id.equalsExp(localItems.listId)),
+    ]);
+    final dueAfterStart = localItems.dueDay.isBiggerOrEqualValue(calendarDay(start)) |
+        (localItems.dueDay.isNull() & localItems.dueDate.isBiggerOrEqualValue(start));
+    final byDueDate = dueAfterStart & _dueBefore(end) &
+        (localItems.done.equals(false) | localItems.completedAt.isNull());
+    final completedInRange = localItems.done.equals(true) &
+        localItems.completedAt.isBiggerOrEqualValue(start) &
+        localItems.completedAt.isSmallerThanValue(end);
+    q.where(localItems.deleted.equals(false) & localLists.deleted.equals(false) &
+        (completedInRange | byDueDate));
+    return q.watch().map((rows) => [
+      for (final row in rows)
+        (item: row.readTable(localItems), listTitle: row.readTable(localLists).title),
+    ]);
   }
 
   Stream<List<LocalItem>> watchAllUncheckedItems() {
@@ -226,15 +250,19 @@ class AppDb extends _$AppDb {
   Future<void> addItem(String id, String listId, String label, int position,
       DateTime now,
       {String? parentId, String recurrence = "none", DateTime? dueDate,
-      String? notes, String? assigneeId}) async {
+      String? dueDay, String? notes, String? assigneeId, bool done = false,
+      DateTime? completedAt}) async {
     await into(localItems).insertOnConflictUpdate(LocalItemsCompanion(
       id: Value(id),
       listId: Value(listId),
       parentId: Value(parentId),
       label: Value(label),
+      done: Value(done),
+      completedAt: Value(done ? completedAt : null),
       position: Value(position),
       recurrence: Value(recurrence),
       dueDate: Value(dueDate),
+      dueDay: Value(dueDay),
       notes: Value(notes),
       assigneeId: Value(assigneeId),
       updatedAt: Value(now),
@@ -242,19 +270,26 @@ class AppDb extends _$AppDb {
     ));
   }
 
-  Future<void> setDone(String id, bool done, DateTime now) async {
-    await (update(localItems)..where((i) => i.id.equals(id))).write(
+  Future<void> setDone(String id, bool done, DateTime now,
+      {Value<DateTime?> completedAt = const Value.absent()}) async {
+    await (update(localItems)..where((i) => i.id.equals(id) & i.done.equals(!done)
+        & i.deleted.equals(false))).write(
       LocalItemsCompanion(
-          done: Value(done), updatedAt: Value(now), dirty: const Value(true)),
+        done: Value(done),
+        completedAt: Value(done ? (completedAt.present ? completedAt.value : now) : null),
+        updatedAt: Value(now),
+        dirty: const Value(true),
+      ),
     );
   }
 
   Future<void> setItemDetails(String id, DateTime now,
-      {String? notes, DateTime? dueDate, bool clearDue = false}) async {
+      {String? notes, DateTime? dueDate, String? dueDay, bool clearDue = false}) async {
     await (update(localItems)..where((i) => i.id.equals(id))).write(
       LocalItemsCompanion(
-        notes: Value(notes),
-        dueDate: clearDue ? const Value(null) : Value(dueDate),
+        notes: notes == null ? const Value.absent() : Value(notes),
+        dueDate: clearDue ? const Value(null) : dueDate == null ? const Value.absent() : Value(dueDate),
+        dueDay: clearDue ? const Value(null) : dueDate == null ? const Value.absent() : Value(dueDay),
         updatedAt: Value(now),
         dirty: const Value(true),
       ),
@@ -265,21 +300,28 @@ class AppDb extends _$AppDb {
   /// [endOfDay] is exclusive: defaults to the start of tomorrow.
   Future<List<LocalItem>> dueItems([DateTime? endOfDay]) async {
     final now = DateTime.now();
-    endOfDay ??= DateTime(now.year, now.month, now.day)
-        .add(const Duration(days: 1));
+    endOfDay ??= DateTime(now.year, now.month, now.day + 1);
     final q = select(localItems).join([
       innerJoin(localLists,
           localLists.id.equalsExp(localItems.listId)),
     ]);
     q.where(localItems.deleted.equals(false) &
         localItems.done.equals(false) &
-        localItems.dueDate.isSmallerOrEqualValue(endOfDay) &
+        _dueBefore(endOfDay) &
         localLists.localOnly.equals(false) &
         localLists.deleted.equals(false));
     q.orderBy([OrderingTerm.asc(localItems.dueDate)]);
     final rows = await q.get();
     return rows.map((r) => r.readTable(localItems)).toList();
   }
+
+  Expression<bool> _dueBefore(DateTime end) =>
+      localItems.dueDay.isSmallerThanValue(calendarDay(end)) |
+      (localItems.dueDay.isNull() & localItems.dueDate.isSmallerThanValue(end));
+
+  Future<LocalItem?> getItem(String id) =>
+      (select(localItems)..where((i) => i.id.equals(id) & i.deleted.equals(false)))
+          .getSingleOrNull();
 
   Future<void> reorder(String id, int position, DateTime now) async {
     await (update(localItems)..where((i) => i.id.equals(id))).write(
@@ -362,5 +404,18 @@ class AppDb extends _$AppDb {
         .get();
     if (rows.isEmpty) return 0;
     return rows.map((r) => r.position).reduce((a, b) => a > b ? a : b) + 1;
+  }
+}
+
+String calendarDay(DateTime day) =>
+    DateTime.utc(day.year, day.month, day.day).toIso8601String().split("T").first;
+
+extension LocalItemDue on LocalItem {
+  DateTime? get localDue => dueDay == null ? dueDate?.toLocal() : DateTime.parse(dueDay!);
+
+  bool overdueAt(DateTime now) {
+    final due = localDue;
+    if (done || due == null) return false;
+    return due.isBefore(dueDay == null ? now : DateTime(now.year, now.month, now.day));
   }
 }

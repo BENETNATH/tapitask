@@ -141,6 +141,26 @@ void main() {
     expect(due.map((i) => i.id), isNot(contains("d4")));
   });
 
+  test("all-day due dates use the calendar day and survive notes edits", () async {
+    final day = DateTime(2026, 11, 23, 18);
+    final tomorrow = DateTime(2026, 11, 24);
+    await db.upsertList(LocalListsCompanion.insert(id: "all-day", title: "List",
+        ownerId: "", updatedAt: day));
+    await db.addItem("all-day-task", "all-day", "Task", 0, day,
+        dueDay: "2026-11-23", dueDate: DateTime(2026, 11, 24, 5));
+    await db.addItem("tomorrow", "all-day", "Tomorrow", 1, day,
+        dueDay: "2026-11-24", dueDate: DateTime(2026, 11, 23, 23));
+    await db.setItemDetails("all-day-task", day, notes: "https://example.com");
+    final item = (await db.dueItems(tomorrow)).single;
+    expect(item.localDue, DateTime(2026, 11, 23));
+    expect(item.overdueAt(day), isFalse);
+    expect(item.overdueAt(tomorrow), isTrue);
+    await db.setItemDetails(item.id, day, clearDue: true);
+    final cleared = (await db.getItem(item.id))!;
+    expect(cleared.localDue, isNull);
+    expect(cleared.notes, "https://example.com");
+  });
+
   test("dossier et couleur sur les listes", () async {
     final now = DateTime.now().toUtc();
     await db.upsertList(LocalListsCompanion.insert(

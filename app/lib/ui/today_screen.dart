@@ -4,6 +4,7 @@ import "package:flutter/services.dart";
 import "../data/database.dart";
 import "../l10n/s.dart";
 import "../state/app_state.dart";
+import "task_details.dart";
 
 /// Vue « Aujourd'hui » : tous les items dus aujourd'hui ou en retard,
 /// toutes listes confondues (uniquement les listes synchronisées).
@@ -69,8 +70,7 @@ class _TodayScreenState extends State<TodayScreen> {
             itemCount: items.length,
             itemBuilder: (context, i) {
               final item = items[i];
-              final overdue =
-                  item.dueDate != null && item.dueDate!.isBefore(DateTime.now());
+              final overdue = item.overdueAt(DateTime.now());
               return Card(
                 elevation: 0,
                 margin: const EdgeInsets.symmetric(vertical: 3),
@@ -81,9 +81,9 @@ class _TodayScreenState extends State<TodayScreen> {
                           ? scheme.errorContainer
                           : scheme.outlineVariant),
                 ),
-                child: CheckboxListTile(
-                  value: item.done,
-                  controlAffinity: ListTileControlAffinity.leading,
+                child: TaskTile(
+                  state: widget.state,
+                  item: item,
                   title: Text(item.label),
                   subtitle: FutureBuilder<LocalList?>(
                     future: _listOf(item.listId),
@@ -95,8 +95,6 @@ class _TodayScreenState extends State<TodayScreen> {
                           color: overdue ? scheme.error : scheme.outline),
                     ),
                   ),
-                  onChanged: (v) =>
-                      widget.state.toggleItem(item.id, v ?? false),
                 ),
               );
             },

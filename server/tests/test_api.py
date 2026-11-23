@@ -226,6 +226,72 @@ async def test_sync_delta(client):
 
 
 @pytest.mark.asyncio
+async def test_sync_all_day_due_date_and_legacy_updates(client):
+    from datetime import datetime, timedelta, timezone
+
+    headers = auth_headers(await register(client, "all-day@example.com"))
+    response = await client.post("/lists", json={"title": "All day"}, headers=headers)
+    list_id = response.json()["id"]
+    stamp = datetime.now(timezone.utc)
+    event = {
+        "kind": "item.upsert", "id": str(uuid.uuid4()), "list_id": list_id,
+        "label": "A task", "due_day": "2026-11-23",
+        "due_date": "2026-11-22T23:00:00Z", "notes": "Details",
+        "updated_at": stamp.isoformat(),
+    }
+    response = await client.post("/sync", json={"events": [event]}, headers=headers)
+    assert response.status_code == 200, response.text
+    response = await client.post("/sync", json={}, headers=headers)
+    assert next(c for c in response.json()["changes"] if c["id"] == event["id"])["due_day"] == "2026-11-23"
+
+    legacy = {k: v for k, v in event.items() if k != "due_day"}
+    legacy.update(done=True, updated_at=(stamp + timedelta(seconds=1)).isoformat())
+    response = await client.post("/sync", json={"events": [legacy]}, headers=headers)
+    assert response.status_code == 200, response.text
+    response = await client.get(f"/lists/{list_id}/items", headers=headers)
+    assert response.json()[0]["due_day"] == "2026-11-23"
+    assert response.json()[0]["done"] is True
+
+    event.update(due_day=None, due_date=None, updated_at=(stamp + timedelta(seconds=2)).isoformat())
+    response = await client.post("/sync", json={"events": [event]}, headers=headers)
+    assert response.status_code == 200, response.text
+    response = await client.get(f"/lists/{list_id}/items", headers=headers)
+    assert response.json()[0]["due_day"] is None
+    assert response.json()[0]["due_date"] is None
+    assert response.json()[0]["notes"] == "Details"
+
+
+@pytest.mark.asyncio
+async def test_completion_timestamp_survives_edits_and_clears_on_reopen(client):
+    from datetime import datetime, timedelta, timezone
+
+    headers = auth_headers(await register(client, "completed-date@example.com"))
+    response = await client.post("/lists", json={"title": "Calendar"}, headers=headers)
+    stamp = datetime.now(timezone.utc).replace(microsecond=0)
+    completed = stamp - timedelta(days=1)
+    event = {
+        "kind": "item.upsert", "id": str(uuid.uuid4()), "list_id": response.json()["id"],
+        "label": "Finished task", "done": True, "completed_at": completed.isoformat(),
+        "updated_at": stamp.isoformat(),
+    }
+    response = await client.post("/sync", json={"events": [event]}, headers=headers)
+    assert response.status_code == 200, response.text
+
+    # The old app can edit a completed task without sending the new field.
+    event.pop("completed_at")
+    event.update(notes="An edit", updated_at=(stamp + timedelta(seconds=1)).isoformat())
+    response = await client.post("/sync", json={"events": [event]}, headers=headers)
+    recorded = next(c for c in response.json()["changes"] if c["id"] == event["id"])
+    assert datetime.fromisoformat(recorded["completed_at"]) == completed
+
+    event.update(done=False, updated_at=(stamp + timedelta(seconds=2)).isoformat())
+    response = await client.post("/sync", json={"events": [event]}, headers=headers)
+    reopened = next(c for c in response.json()["changes"] if c["id"] == event["id"])
+    assert reopened["done"] is False
+    assert reopened["completed_at"] is None
+
+
+@pytest.mark.asyncio
 async def test_no_auth_401(client):
     r = await client.get("/lists")
     assert r.status_code == 401

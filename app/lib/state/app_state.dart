@@ -7,10 +7,12 @@ import "package:flutter/scheduler.dart";
 import "package:flutter/services.dart";
 import "package:drift/drift.dart";
 import "package:shared_preferences/shared_preferences.dart";
+import "package:uuid/uuid.dart";
 
 import "../data/api_client.dart";
 import "../l10n/s.dart";
 import "../data/database.dart";
+import "../data/google_tasks_api.dart";
 import "../data/sync_service.dart";
 import "../ui/due_format.dart";
 
@@ -32,6 +34,7 @@ class AppState extends ChangeNotifier {
   String? pendingEmail;
   bool totp = false;
   bool quickAddRequested = false;
+  LocalItem? requestedTask;
   String? quickAddListId;
   StreamSubscription<Uri?>? _widgetClickSub;
   final MethodChannel _widgetChannel = MethodChannel("com.tapitask/tapitask/widget");
@@ -57,7 +60,7 @@ class AppState extends ChangeNotifier {
     // Volet/widget : masquer les items cochés. App : même feature, réglage
     // distinct (lot W — le réglage app ne pilote pas les surfaces compactes).
     "hide_done": true,
-    "hide_done_app": true,
+    "hide_done_app": false,
   };
   final List<void Function()> _undoStack = [];
 
@@ -151,6 +154,11 @@ class AppState extends ChangeNotifier {
     if (uri == null || uri.scheme != "tapitask") {
       return;
     }
+    if (uri.host == "task") {
+      final id = uri.queryParameters["item"];
+      if (id != null) await openTaskFromShortcut(id);
+      return;
+    }
     if (uri.path != "quickadd" && uri.host != "quickadd") {
       return;
     }
@@ -167,6 +175,15 @@ class AppState extends ChangeNotifier {
         .addPostFrameCallback((_) {
       notifyListeners();
     });
+  }
+
+  Future<void> openTaskFromShortcut(String id) async {
+    final task = await db.getItem(id);
+    if (task == null) return;
+    final list = await db.getList(task.listId);
+    if (list == null || list.deleted) return;
+    requestedTask = task;
+    notifyListeners();
   }
 
   /// (Re)load the user profile: admin flag + per-user feature settings.
@@ -212,11 +229,12 @@ class AppState extends ChangeNotifier {
       final now = DateTime.now().toUtc();
       for (final id in ids) {
         try {
-          await db.setDone(id, true, now);
+          final completedAt = await WidgetService.pendingCompletionTime(id);
+          await db.setDone(id, true, now, completedAt: Value(completedAt ?? now));
         } catch (_) {}
       }
       notifyListeners();
-      await WidgetService.clearToggles();
+      await WidgetService.clearToggles(ids);
       if (api.isConfigured && api.accessToken != null) {
         sync.syncSoon();
       }
@@ -301,9 +319,9 @@ class AppState extends ChangeNotifier {
 
   /// Localized due-date badge for compact surfaces (Windows flyout, Android
   /// widget), shown only if the user enabled it (settings["compact_due"]).
-  String? dueSuffix(dynamic item) {
+  String? dueSuffix(LocalItem item) {
     if (!compactDueDates) return null;
-    final due = item.dueDate;
+    final due = item.localDue;
     if (due == null) return null;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -418,14 +436,52 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> setItemDetails(String id,
-      {String? notes, DateTime? dueDate, bool clearDue = false}) async {
+      {String? notes, DateTime? dueDate, String? dueDay, bool clearDue = false}) async {
     await db.setItemDetails(id, DateTime.now().toUtc(),
-        notes: notes, dueDate: dueDate, clearDue: clearDue);
+        notes: notes, dueDate: dueDate, dueDay: dueDay, clearDue: clearDue);
     notifyListeners();
     if (api.isConfigured && api.accessToken != null) {
       sync.syncSoon();
     }
     await _refreshWidget();
+  }
+
+  Future<int> importGoogleTasks(String listId, String sourceId, List<GoogleTask> tasks) async {
+    final count = await db.transaction(() async {
+      final list = await db.getList(listId);
+      if (list == null || list.deleted || list.role == "viewer") {
+        throw StateError("Tapitask list is unavailable for import");
+      }
+      String idFor(String id) => const Uuid().v5(Namespace.url.value,
+          jsonEncode(["tapitask/google-tasks", listId, sourceId, id]));
+      final parents = {for (final task in tasks) task.id: task.parent};
+      var position = await db.nextPosition(listId);
+      var imported = 0;
+      final now = DateTime.now().toUtc();
+      for (final task in tasks) {
+        final id = idFor(task.id);
+        final exists = await (db.select(db.localItems)..where((i) => i.id.equals(id)))
+            .getSingleOrNull();
+        if (exists != null) continue;
+        final parent = task.parent;
+        await db.addItem(id, listId, task.title, position++, now,
+            parentId: parent != null && parents.containsKey(parent) && parents[parent] == null
+                ? idFor(parent) : null,
+            dueDate: task.dueDay == null ? null : DateTime.parse(task.dueDay!),
+            dueDay: task.dueDay,
+            notes: task.notes,
+            done: task.done,
+            completedAt: task.completedAt);
+        imported++;
+      }
+      return imported;
+    });
+    if (count > 0) {
+      if (api.isConfigured && api.accessToken != null) sync.syncSoon();
+      notifyListeners();
+      await _refreshWidget();
+    }
+    return count;
   }
 
   /// Duplicate a list (title, color, folder, items).
@@ -450,7 +506,8 @@ class AppState extends ChangeNotifier {
       await db.addItem(_uuid(), newId, item.label, position++, now,
           recurrence: item.recurrence,
           notes: item.notes,
-          dueDate: item.dueDate);
+          dueDate: item.dueDate,
+          dueDay: item.dueDay);
     }
     notifyListeners();
     if (!source.localOnly && api.isConfigured && api.accessToken != null) {
@@ -491,13 +548,14 @@ class AppState extends ChangeNotifier {
   /// Elle s'applique à chaque ligne et désactive les mots-clés de date,
   /// pour ne pas retirer « lundi »… d'un libellé qui n'en est pas un.
   Future<void> addQuickItems(String listId, String text,
-      {String? parentId, String recurrence = "none", DateTime? dueDate}) async {
+      {String? parentId, String recurrence = "none", DateTime? dueDate,
+      String? dueDay}) async {
     final lists = await db.visibleLists();
     for (final raw in text.split("\n")) {
       final line = raw.trim();
       if (line.isEmpty) continue;
       await _addParsedLine(listId, line, lists,
-          parentId: parentId, recurrence: recurrence, dueDate: dueDate);
+          parentId: parentId, recurrence: recurrence, dueDate: dueDate, dueDay: dueDay);
     }
     // offline-first: items go through the outbox on the next sync,
     // never through a direct POST (it created server-side duplicates).
@@ -513,11 +571,12 @@ class AppState extends ChangeNotifier {
   /// de la semaine ; "aujourd'hui" / "demain" / "après-demain" = built-ins.
   DateTime? _resolveDueValue(String value) {
     final now = DateTime.now();
+    DateTime day(int delta) => DateTime(now.year, now.month, now.day + delta);
     final v = value.trim().toLowerCase();
     final plus = RegExp(r"^(?:\+|j\+|j)(\d+)$").firstMatch(v);
     if (plus != null) {
       final n = int.parse(plus.group(1)!);
-      return n == 0 ? now : now.add(Duration(days: n));
+      return day(n);
     }
     const weekdays = {
       "lundi": 1, "mardi": 2, "mercredi": 3, "jeudi": 4,
@@ -526,20 +585,21 @@ class AppState extends ChangeNotifier {
     if (weekdays.containsKey(v)) {
       var delta = (weekdays[v]! - now.weekday + 7) % 7;
       if (delta == 0) delta = 7;
-      return now.add(Duration(days: delta));
+      return day(delta);
     }
-    if (v == "aujourd'hui" || v == "aujourdhui" || v == "today") return now;
+    if (v == "aujourd'hui" || v == "aujourdhui" || v == "today") return day(0);
     if (v == "demain" || v == "tomorrow") {
-      return now.add(const Duration(days: 1));
+      return day(1);
     }
     if (v == "après-demain" || v == "apres-demain") {
-      return now.add(const Duration(days: 2));
+      return day(2);
     }
     return null;
   }
 
   Future<void> _addParsedLine(String listId, String line, List<dynamic> lists,
-      {String? parentId, String recurrence = "none", DateTime? dueDate}) async {
+      {String? parentId, String recurrence = "none", DateTime? dueDate,
+      String? dueDay}) async {
     var label = line;
     final explicitDue = dueDate != null;
     String? extraListId;
@@ -584,16 +644,16 @@ class AppState extends ChangeNotifier {
         if (idx >= 0) {
           final now = DateTime.now();
           if (word == "aujourd'hui" || word == "aujourdhui") {
-            dueDate = now;
+            dueDate = DateTime(now.year, now.month, now.day);
           } else if (word == "demain") {
-            dueDate = now.add(const Duration(days: 1));
+            dueDate = DateTime(now.year, now.month, now.day + 1);
           } else if (word == "après-demain" || word == "apres-demain") {
-            dueDate = now.add(const Duration(days: 2));
+            dueDate = DateTime(now.year, now.month, now.day + 2);
           } else {
             final target = dateWords[word]!;
             var delta = (target - now.weekday + 7) % 7;
             if (delta == 0) delta = 7;
-            dueDate = now.add(Duration(days: delta));
+            dueDate = DateTime(now.year, now.month, now.day + delta);
           }
           label = (label.substring(0, idx) + label.substring(idx + word.length))
               .trim();
@@ -617,20 +677,27 @@ class AppState extends ChangeNotifier {
     }
 
     final targets = {listId, if (extraListId != null) extraListId};
+    if (!explicitDue && dueDate != null) dueDay = calendarDay(dueDate);
     final now = DateTime.now().toUtc();
     for (final target in targets) {
       final position = await db.nextPosition(target);
       await db.addItem(_uuid(), target, label, position, now,
           parentId: parentId,
           recurrence: recurrence,
-          dueDate: dueDate);
+          dueDate: dueDate, dueDay: dueDay);
     }
   }
 
   /// Toggle an item. If it is recurring, the server spawns the next
   /// occurrence on sync; locally we optimistically keep it simple.
   Future<void> toggleItem(String id, bool done) async {
-    await db.setDone(id, done, DateTime.now().toUtc());
+    final previous = await db.transaction(() async {
+      final item = await db.getItem(id);
+      if (item == null || item.done == done) return null;
+      await db.setDone(id, done, DateTime.now().toUtc());
+      return item;
+    });
+    if (previous == null) return;
     notifyListeners();
     if (api.isConfigured && api.accessToken != null) {
       sync.syncSoon();
@@ -639,7 +706,8 @@ class AppState extends ChangeNotifier {
     // Undoable: an accidental check (widget, flyout, inline home row) is
     // restorable via Ctrl+Z.
     pushUndo(() async {
-      await db.setDone(id, !done, DateTime.now().toUtc());
+      await db.setDone(id, previous.done, DateTime.now().toUtc(),
+          completedAt: Value(previous.completedAt));
       notifyListeners();
       if (api.isConfigured && api.accessToken != null) {
         sync.syncSoon();
@@ -669,8 +737,17 @@ class AppState extends ChangeNotifier {
     return restore;
   }
 
-  Future<void> reorderItem(String id, int position) async {
-    await db.reorder(id, position, DateTime.now().toUtc());
+  Future<void> reorderOpenItems(List<LocalItem> items) async {
+    final slots = items.map((item) => item.position).toList()..sort();
+    final now = DateTime.now().toUtc();
+    await db.transaction(() async {
+      for (var i = 0; i < items.length; i++) {
+        if (i > 0) slots[i] = max(slots[i], slots[i - 1] + 1);
+        if (items[i].position != slots[i]) {
+          await db.reorder(items[i].id, slots[i], now);
+        }
+      }
+    });
     notifyListeners();
     if (api.isConfigured && api.accessToken != null) {
       sync.syncSoon();

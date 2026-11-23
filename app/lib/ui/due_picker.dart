@@ -1,5 +1,6 @@
 import "package:material_ui/material_ui.dart";
 
+import "../data/database.dart";
 import "../l10n/s.dart";
 
 /// Sélecteur d'échéance partagé (calendrier d'un item, zone d'ajout d'une
@@ -8,14 +9,25 @@ import "../l10n/s.dart";
 /// Résultat du sélecteur d'échéance : [date] null = échéance retirée.
 class DueChoice {
   final DateTime? date;
-  const DueChoice(this.date);
+  final bool allDay;
+  const DueChoice(this.date, {this.allDay = true});
+
+  String? get day => allDay && date != null ? calendarDay(date!) : null;
 }
 
 /// Raccourcis en un tap puis sélecteur date/heure complet.
 /// Retourne null si annulé ; `DueChoice(null)` si l'échéance est retirée.
 Future<DueChoice?> chooseDueDate(
-    BuildContext context, String title, DateTime? current) async {
+    BuildContext context, String title, DateTime? current,
+    {bool allDay = true}) async {
   final now = DateTime.now();
+  final time =
+      current != null && !allDay ? TimeOfDay.fromDateTime(current) : null;
+  DueChoice onDay(DateTime day, TimeOfDay? time) => DueChoice(
+        DateTime(
+            day.year, day.month, day.day, time?.hour ?? 0, time?.minute ?? 0),
+        allDay: time == null,
+      );
   final choice = await showDialog<String>(
     context: context,
     builder: (context) => SimpleDialog(
@@ -58,6 +70,20 @@ Future<DueChoice?> chooseDueDate(
           SimpleDialogOption(
             child: ListTile(
               dense: true,
+              leading: const Icon(Icons.schedule),
+              title: Text(allDay ? S.addTime : S.editTime),
+            ),
+            onPressed: () => Navigator.pop(context, "time"),
+          ),
+        if (time != null)
+          SimpleDialogOption(
+            child: ListTile(dense: true, title: Text(S.allDay)),
+            onPressed: () => Navigator.pop(context, "allDay"),
+          ),
+        if (current != null)
+          SimpleDialogOption(
+            child: ListTile(
+              dense: true,
               leading: const Icon(Icons.event_busy),
               title: Text(S.removeDueDate),
             ),
@@ -69,32 +95,32 @@ Future<DueChoice?> chooseDueDate(
   if (choice == null || !context.mounted) return null;
   switch (choice) {
     case "today":
-      return DueChoice(DateTime(now.year, now.month, now.day, 18));
+      return onDay(now, time);
     case "tomorrow":
-      return DueChoice(DateTime(now.year, now.month, now.day + 1, 9));
+      return onDay(DateTime(now.year, now.month, now.day + 1), time);
     case "week":
-      final d = now.add(const Duration(days: 7));
-      return DueChoice(DateTime(d.year, d.month, d.day, 9));
+      return onDay(DateTime(now.year, now.month, now.day + 7), time);
     case "clear":
       return const DueChoice(null);
+    case "allDay":
+      return onDay(current!, null);
+    case "time":
+      final pickedTime = await showTimePicker(
+        context: context,
+        initialTime: time ?? TimeOfDay.fromDateTime(now),
+      );
+      return pickedTime == null ? null : onDay(current!, pickedTime);
   }
+  final initial = current ?? now;
+  final first = DateTime(now.year - 1, now.month, now.day);
+  final last = DateTime(now.year + 3, now.month, now.day);
+  if (!context.mounted) return null;
   final picked = await showDatePicker(
     context: context,
-    initialDate: current ?? now,
-    firstDate: now.subtract(const Duration(days: 365)),
-    lastDate: now.add(const Duration(days: 365 * 3)),
+    initialDate: initial,
+    firstDate: initial.isBefore(first) ? initial : first,
+    lastDate: initial.isAfter(last) ? initial : last,
     helpText: S.dueDate,
   );
-  if (picked == null || !context.mounted) return null;
-  final time = await showTimePicker(
-    context: context,
-    initialTime: TimeOfDay.fromDateTime(current ?? now),
-  );
-  return DueChoice(DateTime(
-    picked.year,
-    picked.month,
-    picked.day,
-    time?.hour ?? 0,
-    time?.minute ?? 0,
-  ));
+  return picked == null ? null : onDay(picked, time);
 }

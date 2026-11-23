@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -102,10 +102,12 @@ async def sync(
                     list_id=item.list_id,
                     label=item.label,
                     done=item.done,
+                    completed_at=item.completed_at,
                     position=item.position,
                     parent_id=item.parent_id,
                     recurrence=item.recurrence,
                     due_date=item.due_date,
+                    due_day=item.due_day,
                     notes=item.notes,
                     assignee_id=item.assignee_id,
                     updated_at=item.updated_at,
@@ -143,10 +145,12 @@ async def sync(
                     list_id=item.list_id,
                     label=item.label,
                     done=item.done,
+                    completed_at=item.completed_at,
                     position=item.position,
                     parent_id=item.parent_id,
                     recurrence=item.recurrence,
                     due_date=item.due_date,
+                    due_day=item.due_day,
                     notes=item.notes,
                     assignee_id=item.assignee_id,
                     updated_at=item.updated_at,
@@ -280,10 +284,25 @@ async def _apply_item_upsert(session: AsyncSession, event, principal, pending_no
     item.list_id = event.list_id
     item.label = event.label or item.label
     item.done = event.done if event.done is not None else item.done
+    if event.done is False:
+        item.completed_at = None
+    elif event.done is True and event.completed_at is not None:
+        completed = event.completed_at
+        if completed.tzinfo is not None:
+            completed = completed.astimezone(timezone.utc)
+        item.completed_at = _clamp_client_dt(completed).replace(tzinfo=timezone.utc)
+    elif newly_done and "completed_at" not in event.model_fields_set:
+        item.completed_at = stamp.replace(tzinfo=timezone.utc)
     item.position = event.position if event.position is not None else item.position
     item.parent_id = event.parent_id or item.parent_id
     item.recurrence = event.recurrence or item.recurrence
-    item.due_date = event.due_date or item.due_date
+    if "due_day" in event.model_fields_set:
+        item.due_day = event.due_day
+        item.due_date = event.due_date
+    elif event.due_date is not None:
+        if item.due_date is None or _naive(item.due_date) != _naive(event.due_date):
+            item.due_day = None
+        item.due_date = event.due_date
     item.notes = event.notes if event.notes is not None else item.notes
     item.assignee_id = event.assignee_id or item.assignee_id
     item.updated_at = stamp

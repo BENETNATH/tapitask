@@ -12,6 +12,7 @@ import java.io.File
 class MainActivity : FlutterActivity() {
     private val channelName = "com.tapitask/tapitask/widget"
     private val updaterChannelName = "com.tapitask/tapitask/updater"
+    private var googleTasksAuthorization: GoogleTasksAuthorization? = null
     private var pendingLaunchUri: String? = null
     private var wantIme = false
 
@@ -72,6 +73,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        googleTasksAuthorization = GoogleTasksAuthorization(this, flutterEngine.dartExecutor)
         MethodChannel(flutterEngine.dartExecutor, channelName)
             .setMethodCallHandler { call, result ->
                 if (call.method == "getLaunchUri") {
@@ -108,5 +110,16 @@ class MainActivity : FlutterActivity() {
                     }
                 } else result.notImplemented()
             }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        googleTasksAuthorization?.onActivityResult(requestCode, resultCode, data)
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        googleTasksAuthorization?.dispose()
+        googleTasksAuthorization = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 }

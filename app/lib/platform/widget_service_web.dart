@@ -11,7 +11,8 @@ class WidgetService {
 
   static Future<List<String>> pendingToggles() async => [];
 
-  static Future<void> clearToggles() async {}
+  static Future<DateTime?> pendingCompletionTime(String id) async => null;
+  static Future<void> clearToggles([List<String> ids = const []]) async {}
 
   static Future<Uri?> initiallyLaunched() async => null;
 

@@ -82,6 +82,41 @@ class S {
     "dueDate": "Échéance",
     "removeDueDate": "Retirer l'échéance",
     "itemActions": "Actions de l'item",
+    "sendToGoogleTasks": "Envoyer vers Google Tasks",
+    "sendOpenToGoogleTasks": "Envoyer les tâches à faire vers Google Tasks",
+    "googleTasksSend": "Envoyer",
+    "googleTasksLoading": "Chargement des listes Google Tasks…",
+    "googleTasksChooseList": "Choisir une liste Google Tasks",
+    "googleTasksTimeNote": "Heure dans Tapitask",
+    "importGoogleTasks": "Importer depuis Google Tasks",
+    "googleTasksImport": "Importer",
+    "googleTasksImportFailed": "Impossible d’importer les tâches Google Tasks.",
+    "showCompletedTasks": "Afficher les tâches terminées",
+    "completedTasks": "Tâches terminées",
+    "undo": "Annuler",
+    "calendar": "Calendrier",
+    "calendarView": "Vue du calendrier",
+    "calendarDay": "1 jour",
+    "calendarWeek": "Semaine",
+    "calendarMonth": "Mois",
+    "calendarPlanned": "Planifiées",
+    "calendarEmpty": "Aucune tâche dans cette période",
+    "calendarPrevious": "Période précédente",
+    "calendarNext": "Période suivante",
+    "calendarChooseDate": "Aller à une date",
+    "hideCompletedTasks": "Masquer les tâches terminées",
+    "addTime": "Ajouter une heure",
+    "editTime": "Modifier l’heure",
+    "allDay": "Toute la journée",
+    "taskCompleted": "Terminée",
+    "taskOpen": "À faire",
+    "taskNotesHint": "Ajouter du texte ou coller un lien",
+    "saveTaskDetails": "Enregistrer",
+    "linkFailed": "Impossible d’ouvrir ce lien.",
+    "googleTasksAccessCancelled": "L’accès à Google Tasks n’a pas été accordé.",
+    "googleTasksAccessFailed": "Impossible d’obtenir l’accès à Google Tasks.",
+    "googleTasksListFailed": "Impossible de charger les listes Google Tasks.",
+    "googleTasksNoLists": "Aucune liste Google Tasks disponible.",
     "note": "Note",
     "noRepeat": "Sans répétition",
     "addButton": "＋ Ajouter",
@@ -266,6 +301,41 @@ class S {
     "dueDate": "Due date",
     "removeDueDate": "Remove due date",
     "itemActions": "Item actions",
+    "sendToGoogleTasks": "Send to Google Tasks",
+    "sendOpenToGoogleTasks": "Send open tasks to Google Tasks",
+    "googleTasksSend": "Send",
+    "googleTasksLoading": "Loading Google Tasks lists…",
+    "googleTasksChooseList": "Choose a Google Tasks list",
+    "googleTasksTimeNote": "Time in Tapitask",
+    "importGoogleTasks": "Import from Google Tasks",
+    "googleTasksImport": "Import",
+    "googleTasksImportFailed": "Couldn’t import Google Tasks.",
+    "showCompletedTasks": "Show completed tasks",
+    "completedTasks": "Completed tasks",
+    "undo": "Undo",
+    "calendar": "Calendar",
+    "calendarView": "Calendar view",
+    "calendarDay": "1 day",
+    "calendarWeek": "Week",
+    "calendarMonth": "Month",
+    "calendarPlanned": "Planned",
+    "calendarEmpty": "No tasks in this period",
+    "calendarPrevious": "Previous period",
+    "calendarNext": "Next period",
+    "calendarChooseDate": "Jump to a date",
+    "hideCompletedTasks": "Hide completed tasks",
+    "addTime": "Add time",
+    "editTime": "Edit time",
+    "allDay": "All day",
+    "taskCompleted": "Completed",
+    "taskOpen": "Open",
+    "taskNotesHint": "Add text or paste a link",
+    "saveTaskDetails": "Save",
+    "linkFailed": "Couldn’t open this link.",
+    "googleTasksAccessCancelled": "Access to Google Tasks wasn’t granted.",
+    "googleTasksAccessFailed": "Couldn’t get access to Google Tasks.",
+    "googleTasksListFailed": "Couldn’t load your Google Tasks lists.",
+    "googleTasksNoLists": "No Google Tasks lists are available.",
     "note": "Note",
     "noRepeat": "No repeat",
     "daily": "Daily",
@@ -463,6 +533,41 @@ class S {
   static String get dueDate => t("dueDate");
   static String get removeDueDate => t("removeDueDate");
   static String get itemActions => t("itemActions");
+  static String get sendToGoogleTasks => t("sendToGoogleTasks");
+  static String get sendOpenToGoogleTasks => t("sendOpenToGoogleTasks");
+  static String get googleTasksSend => t("googleTasksSend");
+  static String get googleTasksLoading => t("googleTasksLoading");
+  static String get googleTasksChooseList => t("googleTasksChooseList");
+  static String get googleTasksTimeNote => t("googleTasksTimeNote");
+  static String get importGoogleTasks => t("importGoogleTasks");
+  static String get googleTasksImport => t("googleTasksImport");
+  static String get googleTasksImportFailed => t("googleTasksImportFailed");
+  static String get showCompletedTasks => t("showCompletedTasks");
+  static String get completedTasks => t("completedTasks");
+  static String get undo => t("undo");
+  static String get calendar => t("calendar");
+  static String get calendarView => t("calendarView");
+  static String get calendarDay => t("calendarDay");
+  static String get calendarWeek => t("calendarWeek");
+  static String get calendarMonth => t("calendarMonth");
+  static String get calendarPlanned => t("calendarPlanned");
+  static String get calendarEmpty => t("calendarEmpty");
+  static String get calendarPrevious => t("calendarPrevious");
+  static String get calendarNext => t("calendarNext");
+  static String get calendarChooseDate => t("calendarChooseDate");
+  static String get hideCompletedTasks => t("hideCompletedTasks");
+  static String get addTime => t("addTime");
+  static String get editTime => t("editTime");
+  static String get allDay => t("allDay");
+  static String get taskCompleted => t("taskCompleted");
+  static String get taskOpen => t("taskOpen");
+  static String get taskNotesHint => t("taskNotesHint");
+  static String get saveTaskDetails => t("saveTaskDetails");
+  static String get linkFailed => t("linkFailed");
+  static String get googleTasksAccessCancelled => t("googleTasksAccessCancelled");
+  static String get googleTasksAccessFailed => t("googleTasksAccessFailed");
+  static String get googleTasksListFailed => t("googleTasksListFailed");
+  static String get googleTasksNoLists => t("googleTasksNoLists");
   static String get note => t("note");
   static String get noRepeat => t("noRepeat");
   static String get daily => t("daily");
@@ -557,6 +662,22 @@ class S {
   static String get emailVerifyUnavailable => t("emailVerifyUnavailable");
 
   // --- messages paramétrés ---
+  static String calendarDays(int days) => locale == "en" ? "$days days" : "$days jours";
+  static String googleTasksImported(int count) => locale == "en"
+      ? "New tasks imported ($count)"
+      : "Nouvelles tâches importées ($count)";
+  static String googleTasksOpenCount(int count) => locale == "en"
+      ? "$count open tasks"
+      : "$count tâches à faire";
+  static String googleTasksCopied(int copied, int total) => locale == "en"
+      ? "$copied of $total copied"
+      : "$copied sur $total copiées";
+  static String googleTasksWriteFailed(String task) => locale == "en"
+      ? "Google Tasks rejected “$task”. The export stopped there."
+      : "Google Tasks a refusé « $task ». L’envoi s’est arrêté à cette tâche.";
+  static String googleTasksWriteUncertain(String task) => locale == "en"
+      ? "Couldn’t confirm whether “$task” was copied. Check Google Tasks before trying again."
+      : "Impossible de confirmer l’envoi de « $task ». Vérifiez Google Tasks avant de réessayer.";
   static String loginFailed(Object e) => locale == "en" ? "Failed: $e" : "Échec : $e";
   static String shareFolderOf(String folder) => "${t("shareFolder")} « $folder »";
 }

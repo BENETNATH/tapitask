@@ -4,6 +4,7 @@ import "../data/database.dart";
 import "../l10n/s.dart";
 import "../state/app_state.dart";
 import "due_format.dart";
+import "task_details.dart";
 
 /// Vue « À faire » : tous les items non cochés, toutes listes confondues
 /// (uniquement les listes synchronisées), groupés par liste.
@@ -63,8 +64,8 @@ class _TodoAllScreenState extends State<TodoAllScreen> {
             itemCount: items.length,
             itemBuilder: (context, i) {
               final item = items[i];
-              final overdue =
-                  item.dueDate != null && item.dueDate!.isBefore(DateTime.now());
+              final overdue = item.overdueAt(DateTime.now());
+              final due = item.localDue;
               return Card(
                 elevation: 0,
                 margin: const EdgeInsets.symmetric(vertical: 3),
@@ -75,23 +76,21 @@ class _TodoAllScreenState extends State<TodoAllScreen> {
                           ? scheme.errorContainer
                           : scheme.outlineVariant),
                 ),
-                child: CheckboxListTile(
-                  value: item.done,
-                  controlAffinity: ListTileControlAffinity.leading,
+                child: TaskTile(
+                  state: widget.state,
+                  item: item,
                   title: Text(item.label),
                   subtitle: FutureBuilder<LocalList?>(
                     future: _listOf(item.listId),
                     builder: (context, snap) => Text(
                       "${snap.data?.title ?? ""}"
-                      "${item.dueDate != null ? "  •  ${_fmtDue(item.dueDate!)}" : ""}"
+                      "${due != null ? "  •  ${dueLabel(due, withTime: false)}" : ""}"
                       "${overdue ? "  •  en retard" : ""}",
                       style: TextStyle(
                           fontSize: 12,
                           color: overdue ? scheme.error : scheme.outline),
                     ),
                   ),
-                  onChanged: (v) =>
-                      widget.state.toggleItem(item.id, v ?? false),
                 ),
               );
             },
@@ -100,8 +99,6 @@ class _TodoAllScreenState extends State<TodoAllScreen> {
       ),
     );
   }
-
-  String _fmtDue(DateTime d) => dueLabel(d.toLocal(), withTime: false);
 
   Future<LocalList?> _listOf(String id) => widget.state.db.getList(id);
 }

@@ -789,6 +789,16 @@ LRESULT FlyoutWindow::MessageHandler(HWND hwnd, UINT message, WPARAM wparam,
               }
             }
           }
+        } else if (nm->code == NM_CLICK) {
+          const auto* click = reinterpret_cast<NMITEMACTIVATE*>(lparam);
+          LVHITTESTINFO hit = {};
+          hit.pt = click->ptAction;
+          const int index = ListView_HitTest(items_list_, &hit);
+          if (index >= 0 && index < static_cast<int>(items_.size()) &&
+              (hit.flags & LVHT_ONITEMSTATEICON) == 0) {
+            Hide();
+            SendEvent("openTask", items_[index].id);
+          }
         } else if (nm->code == NM_RCLICK) {
           // Right-click -> Supprimer.
           POINT pt;
