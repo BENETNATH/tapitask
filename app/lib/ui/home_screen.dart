@@ -808,15 +808,26 @@ class _HomeScreenState extends State<HomeScreen> {
                           size: 17, color: scheme.outline),
                       const SizedBox(width: 10),
                       Expanded(
-                          child: Text(item.label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 13.5))),
-                      if (state.dueSuffix(item)
-                          case final badge? when badge.isNotEmpty)
-                        Text(badge,
-                            style: TextStyle(
-                                fontSize: 11.5, color: scheme.outline)),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(
+                                  child: Text(item.label,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style:
+                                          const TextStyle(fontSize: 13.5))),
+                              if (state.dueSuffix(item)
+                                  case final badge? when badge.isNotEmpty)
+                                ...[
+                                  const SizedBox(width: 8),
+                                  Text(badge,
+                                      style: TextStyle(
+                                          fontSize: 11.5,
+                                          color: scheme.outline)),
+                                ],
+                            ],
+                          )),
                     ],
                   ),
                 ),
