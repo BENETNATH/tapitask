@@ -19,6 +19,7 @@ import "package:tapitask/l10n/s.dart";
 import "package:tapitask/main.dart" show appShell;
 import "package:tapitask/state/app_state.dart";
 import "package:tapitask/ui/list_screen.dart";
+import "package:tapitask/ui/login_screen.dart";
 
 /// Storage qui lève (web http:// hors secure context, Android sans Keystore).
 class _ThrowingSecureStorage extends FlutterSecureStorage {
@@ -82,6 +83,53 @@ void main() {
     final api = await ApiClient.load();
     expect(api.accessToken, isNull);
     expect(api.refreshTokenValue, isNull);
+  });
+
+  testWidgets(
+      "C1.7 : verify-email sans baseUrl (installation fraîche) → message, pas de crash",
+      (tester) async {
+    // Installation fraîche : state.api sans baseUrl, champ URL serveur vide.
+    // En production, le POST avec baseUrl "" donne Uri.parse("/auth/verify-email")
+    // = URI relative (ni scheme ni host) → dart:io (HttpClient.openUrl) lève
+    // ArgumentError("No host specified in URI /auth/verify-email") — vérifié
+    // sur l'hôte. Le binding de test mocke HttpClient (tout → 400) et masquerait
+    // ce throw : le MockClient injecté reproduit donc le même throw dès que
+    // l'URI n'a pas de scheme.
+    // AVANT le fix, _verifyEmail n'avait qu'un catch « on ApiException » :
+    // l'ArgumentError n'était pas attrapé → erreur async non gérée = crash
+    // (ce test est ROUGE sur ce code). APRÈS le fix : _applyServerUrl() avant
+    // le POST + catch générique (e) → message d'erreur affiché via S.loginFailed(e).
+    S.setLocale("fr");
+    final state = AppState(db: AppDb.forTesting(NativeDatabase.memory()));
+    state.api = ApiClient(
+        "",
+        client: MockClient((request) async {
+      if (!request.url.hasScheme) {
+        throw ArgumentError("No host specified in URI ${request.url}");
+      }
+      return http.Response("", 200);
+    }));
+    await tester.pumpWidget(MaterialApp(home: LoginScreen(state: state)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text(S.verifyEmail));
+    await tester.pumpAndSettle();
+    expect(find.text(S.codeFromEmail), findsOneWidget);
+    await tester.enterText(
+        find.descendant(
+            of: find.byType(AlertDialog), matching: find.byType(TextField)),
+        "123456");
+    await tester.tap(find.text("Valider"));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull,
+        reason: "C1.7 : l'erreur ne doit pas crasher l'app");
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is Text && (w.data?.startsWith("Échec :") ?? false)),
+        findsOneWidget,
+        reason: "C1.7 : le catch générique affiche le message d'erreur");
+    await state.db.close();
   });
 
   // ---- C2.1 : secure storage en échec --------------------------------

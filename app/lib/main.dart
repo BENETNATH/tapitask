@@ -78,7 +78,7 @@ Future<void> main(List<String> args) async {
   await appState.init();
   // Spec §B + A2 : vérification des MAJ au démarrage — fond ; si une MAJ
   // est trouvée, le dialog est présenté par ChecklistsApp post-frame
-  // (desktop uniquement, comme le reste du flux update).
+  // (Windows + Android, comme le reste du flux update).
   unawaited(_checkUpdatesAtBoot());
   trayController = TrayController(appState);
   await trayController!.init();
@@ -90,13 +90,14 @@ Future<void> main(List<String> args) async {
 }
 
 /// A2 : check de boot — le résultat est stocké dans [appState] ; le dialog
-/// est présenté APRÈS la 1re frame (par ChecklistsApp), desktop uniquement.
+/// est présenté APRÈS la 1re frame (par ChecklistsApp), Windows + Android.
 Future<void> _checkUpdatesAtBoot() async {
   final client = http.Client();
   try {
     final info = await checkForUpdates(client: client, api: appState.api);
     if (info.clientAvailable &&
-        defaultTargetPlatform == TargetPlatform.windows) {
+        (defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.android)) {
       appState.setPendingBootUpdate(info);
     }
   } catch (_) {} finally {
