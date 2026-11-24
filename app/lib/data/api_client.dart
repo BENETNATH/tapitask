@@ -1,4 +1,5 @@
 import "dart:convert";
+import "package:flutter_secure_storage/flutter_secure_storage.dart";
 import "package:http/http.dart" as http;
 import "package:shared_preferences/shared_preferences.dart";
 
@@ -17,20 +18,37 @@ class ApiClient {
 
   ApiClient(this.baseUrl);
 
+  // Tokens en storage sécurisé (audit lot T) ; server_url reste en prefs.
+  static const _secure = FlutterSecureStorage();
+
+  static Future<String?> _loadToken(SharedPreferences prefs,
+      {required String key}) async {
+    final plain = prefs.getString(key);
+    if (plain != null) {
+      // Migration : valeur claire trouvée → secure storage, puis suppression.
+      await _secure.write(key: key, value: plain);
+      await prefs.remove(key);
+      return plain;
+    }
+    return _secure.read(key: key);
+  }
+
   static Future<ApiClient> load() async {
     final prefs = await SharedPreferences.getInstance();
     final url = prefs.getString("server_url") ?? "";
     final client = ApiClient(url);
-    client.accessToken = prefs.getString("access_token");
-    client.refreshTokenValue = prefs.getString("refresh_token");
+    client.accessToken =
+        await _loadToken(prefs, key: "access_token");
+    client.refreshTokenValue =
+        await _loadToken(prefs, key: "refresh_token");
     return client;
   }
 
   Future<void> persist() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString("server_url", baseUrl);
-    await prefs.setString("access_token", accessToken ?? "");
-    await prefs.setString("refresh_token", refreshTokenValue ?? "");
+    await _secure.write(key: "access_token", value: accessToken ?? "");
+    await _secure.write(key: "refresh_token", value: refreshTokenValue ?? "");
   }
 
   bool get isConfigured => baseUrl.isNotEmpty;

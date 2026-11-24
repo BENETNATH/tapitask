@@ -134,6 +134,26 @@ async def require_write(principal: Principal = Depends(get_principal)) -> Princi
     return principal
 
 
+# Limiteur par principal pour les canaux écriture lourds (POST /sync, bulk
+# items, MCP messages) (audit lot T) : un seul compte ne doit pas pouvoir
+# inonder l'éventail de changements. Clé stable = identity du principal.
+_principal_limiter = RateLimiter(settings.PRINCIPAL_RATE_LIMIT_PER_MINUTE)
+
+
+def principal_key(principal: Principal) -> str:
+    key = f"{principal.via}:{principal.user_id}"
+    if principal.list_scope is not None:
+        key += f":{principal.list_scope}"
+    return key
+
+
+async def rate_limit_principal(
+    principal: Principal = Depends(get_principal),
+) -> Principal:
+    await _principal_limiter.check(principal_key(principal))
+    return principal
+
+
 async def accessible_list(
     list_id: UUID,
     principal: Principal,

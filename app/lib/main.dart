@@ -9,6 +9,7 @@ import "package:flutter_localizations/flutter_localizations.dart"
 import "data/update_service.dart";
 import "platform/tray_controller_web.dart"
     if (dart.library.io) "platform/tray_controller.dart";
+import "l10n/s.dart";
 import "state/app_state.dart";
 import "ui/home_screen.dart";
 import "ui/list_screen.dart";
@@ -31,6 +32,37 @@ final appRoutes = <String, WidgetBuilder>{
   "/today": (_) => TodayScreen(state: appState),
   "/todo": (_) => TodoAllScreen(state: appState),
 };
+
+/// Bannière persistante (audit lot T) : visible sur tous les écrans tant que
+/// l'URL serveur est en http:// (connexion non chiffrée).
+Widget appShell({required String serverUrl, required Widget child}) {
+  if (!serverUrl.startsWith("http://")) return child;
+  return Column(children: [
+    const _InsecureServerBanner(),
+    Expanded(child: child),
+  ]);
+}
+
+class _InsecureServerBanner extends StatelessWidget {
+  const _InsecureServerBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.orange.shade800,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(children: [
+        const Icon(Icons.warning_amber_rounded, size: 18, color: Colors.white),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(S.insecureServer,
+              style: const TextStyle(color: Colors.white),
+              overflow: TextOverflow.ellipsis),
+        ),
+      ]),
+    );
+  }
+}
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -128,6 +160,10 @@ class _ChecklistsAppState extends State<ChecklistsApp>
         useMaterial3: true,
       ),
       themeMode: _themeMode,
+      // Bannière http:// persistante au-dessus de TOUS les écrans (lot T).
+      builder: (context, child) => appShell(
+          serverUrl: appState.api.baseUrl,
+          child: child ?? const SizedBox.shrink()),
       // home: au lieu de initialRoute — le fallback "/" du moteur résout
       // toujours, quelle que soit l'initial route envoyée (launcher "/",
       // widget "tapitask://home" / "tapitask://quickadd/<id>").

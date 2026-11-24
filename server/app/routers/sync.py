@@ -8,7 +8,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..deps import Principal, accessible_list, require_write
+from ..deps import Principal, accessible_list, rate_limit_principal, require_write
 from ..events import record_change, notify_list
 from ..models import Checklist, Item, ListMember, Role, utcnow
 from ..schemas import SyncChange, SyncIn, SyncOut
@@ -30,13 +30,17 @@ SYNC_CLOCK_TOLERANCE = timedelta(seconds=5)
 def _clamp_client_dt(dt: datetime) -> datetime:
     dt = _naive(dt)
     now = _naive(utcnow())
-    return now if dt > now + SYNC_CLOCK_TOLERANCE else dt
+    # Symétrique (audit lot T) : un horodatage très antérieur au serveur est
+    # aussi une horloge cassée — sans clamp, un item scellé dans le passé
+    # resterait invisible au delta des autres clients.
+    return now if dt > now + SYNC_CLOCK_TOLERANCE or dt < now - SYNC_CLOCK_TOLERANCE else dt
 
 
 @router.post("", response_model=SyncOut)
 async def sync(
     data: SyncIn,
     principal: Principal = Depends(require_write),
+    _rate_limited: Principal = Depends(rate_limit_principal),
     session: AsyncSession = Depends(get_session),
 ):
     """Delta sync: apply client events (last-write-wins), return server changes since `since`.
@@ -274,8 +278,14 @@ async def _apply_item_upsert(session: AsyncSession, event, principal, pending_no
         if item.list_id != event.list_id:
             await accessible_list(
                 item.list_id, principal, session, min_role=Role.editor)
-    if item.updated_at is not None and _naive(item.updated_at) >= stamp:
-        return
+        if item.updated_at is not None and (
+            _naive(item.updated_at) >= stamp
+            # Horloge client trop en arrière : événement périmé — le clamp
+            # symétrique (lot T) ne doit pas le faire gagner sur l'état
+            # existant (LWW, spec §3.5).
+            or _naive(event.updated_at) < _naive(utcnow()) - SYNC_CLOCK_TOLERANCE
+        ):
+            return
     newly_done = bool(event.done) and not bool(item.done)
     item.list_id = event.list_id
     item.label = event.label or item.label
@@ -304,7 +314,8 @@ async def _apply_item_delete(session: AsyncSession, event, principal, pending_no
     stamp = _clamp_client_dt(event.updated_at)
     result = await session.execute(select(Item).where(Item.id == event.id))
     item = result.scalar_one_or_none()
-    if item is None or _naive(item.updated_at) >= stamp:
+    if item is None or _naive(item.updated_at) >= stamp \
+            or _naive(event.updated_at) < _naive(utcnow()) - SYNC_CLOCK_TOLERANCE:
         return
     # The actor must have editor access to the list the item actually lives in
     # (not just the event's target list), otherwise a forged item.delete with a

@@ -13,6 +13,10 @@ class Settings:
     REFRESH_TOKEN_TTL: int = int(os.environ.get("REFRESH_TOKEN_TTL", str(60 * 60 * 24 * 30)))
     CORS_ORIGINS: list[str] = os.environ.get("CORS_ORIGINS", "http://localhost:8080").split(",")
     RATE_LIMIT_PER_MINUTE: int = int(os.environ.get("RATE_LIMIT_PER_MINUTE", "20"))
+    # Rate limit par principal sur les canaux écriture lourds (/sync, bulk
+    # items, MCP messages) (audit lot T).
+    PRINCIPAL_RATE_LIMIT_PER_MINUTE: int = int(
+        os.environ.get("PRINCIPAL_RATE_LIMIT_PER_MINUTE", "300"))
     ADMIN_EMAIL: str = os.environ.get("ADMIN_EMAIL", "")
     ADMIN_PASSWORD: str = os.environ.get("ADMIN_PASSWORD", "")
 
@@ -42,6 +46,9 @@ class Settings:
     # Hosts in this list bypass the SSRF block (loopback/private/metadata) so
     # self-hosted webhooks can point at private addresses when intended.
     WEBHOOK_ALLOWED_HOSTS: list[str] = os.environ.get("WEBHOOK_ALLOWED_HOSTS", "").split(",")
+    # Plafond de webhooks par liste (audit lot T) : borne le gather de
+    # fire_webhooks contre l'amplification DoS.
+    WEBHOOKS_MAX_PER_LIST: int = int(os.environ.get("WEBHOOKS_MAX_PER_LIST", "10"))
 
 
 settings = Settings()

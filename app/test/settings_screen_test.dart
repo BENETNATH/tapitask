@@ -1,6 +1,7 @@
 import "package:drift/native.dart";
 import "package:flutter_test/flutter_test.dart";
 import "package:material_ui/material_ui.dart";
+import "package:flutter_secure_storage/flutter_secure_storage.dart";
 import "package:shared_preferences/shared_preferences.dart";
 import "package:tapitask/data/api_client.dart";
 import "package:tapitask/data/database.dart";
@@ -15,6 +16,7 @@ void main() {
   testWidgets("S1 : tap sur l'icône d'info → dialogue d'aide du réglage",
       (tester) async {
     SharedPreferences.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({});
     final db = AppDb.forTesting(NativeDatabase.memory());
     final state = AppState(db: db);
     state.api = await ApiClient.load();
@@ -43,6 +45,7 @@ void main() {
   testWidgets("T1 : le switch « Actions visibles » écrit visible_actions",
       (tester) async {
     SharedPreferences.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({});
     final db = AppDb.forTesting(NativeDatabase.memory());
     final state = AppState(db: db);
     state.api = await ApiClient.load();

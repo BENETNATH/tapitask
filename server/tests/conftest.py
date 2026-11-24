@@ -21,5 +21,13 @@ async def setup_db():
         await conn.run_sync(Base.metadata.create_all)
     auth_router._register_limiter.hits.clear()
     auth_router._login_limiter.hits.clear()
+    auth_router._change_email_limiter.hits.clear()
     auth_router._failed_logins.clear()
     yield
+    # Chaque test a sa boucle asyncio (pytest-asyncio, scope function) mais
+    # StaticPool partage UNE connexion aiosqlite entre les tests : le lock de
+    # l'adaptateur SQLAlchemy se bind à la boucle du PREMIER test qui le
+    # contende, et un test ultérieur à accès concurrent lèverait
+    # "bound to a different event loop". Dispose force une connexion (et son
+    # lock) fraîche par test — la base in-memory est recréée par create_all.
+    await engine.dispose()

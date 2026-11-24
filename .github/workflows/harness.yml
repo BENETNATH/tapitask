@@ -59,7 +59,7 @@ jobs:
             echo "Pas de code frontend — scan ignoré."
             exit 0
           fi
-          npx -y modern-web-guidance@latest legacy-scan . --json > mwg-report.json || true
+          npx -y modern-web-guidance@1.0.2 legacy-scan . --json > mwg-report.json || true
           python3 - <<'EOF'
           import json
           try:

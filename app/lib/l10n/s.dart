@@ -69,6 +69,10 @@ class S {
     "emailVerified": "Email vérifié — tu peux te connecter ✔",
     "emailOptional": "facultatif",
     "notConfigured": "Non configuré",
+    "insecureServer": "Connexion non chiffrée — le serveur est en http://",
+    "insecureServerTitle": "Connexion non chiffrée",
+    "insecureServerBody":
+        "Le serveur utilise http:// : le mot de passe et les données voyagent en clair. Continuer quand même ?",
     // --- listes / items ---
     "nothingToDo": "Rien à faire",
     "nothingToDoAdd": "Rien à faire — ajoutez un item !",
@@ -254,6 +258,10 @@ class S {
     "emailVerified": "Email verified — you can sign in ✔",
     "emailOptional": "optional",
     "notConfigured": "Not configured",
+    "insecureServer": "Unencrypted connection — server is over http://",
+    "insecureServerTitle": "Unencrypted connection",
+    "insecureServerBody":
+        "The server uses http://: your password and data travel in cleartext. Continue anyway?",
     "nothingToDo": "Nothing to do",
     "nothingToDoAdd": "Nothing to do — add an item!",
     "nothingToday": "Nothing due today",
@@ -451,6 +459,9 @@ class S {
   static String get emailVerified => t("emailVerified");
   static String get emailOptional => t("emailOptional");
   static String get notConfigured => t("notConfigured");
+  static String get insecureServer => t("insecureServer");
+  static String get insecureServerTitle => t("insecureServerTitle");
+  static String get insecureServerBody => t("insecureServerBody");
   static String get nothingToDo => t("nothingToDo");
   static String get nothingToDoAdd => t("nothingToDoAdd");
   static String get nothingToday => t("nothingToday");

@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
-from .deps import Principal, accessible_list, get_principal
+from .deps import Principal, accessible_list, get_principal, rate_limit_principal
 from .models import Role
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
@@ -150,6 +150,7 @@ async def messages(
     payload: dict[str, Any],
     sessionId: str | None = None,  # noqa: N803 — name fixed by the MCP spec
     principal: Principal = Depends(get_principal),
+    _rate_limited: Principal = Depends(rate_limit_principal),
 ):
     """Handle one JSON-RPC message; the reply goes out on the session's SSE
     stream, tagged with the request's id.
@@ -234,8 +235,28 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
 
     async with SessionLocal() as session:
         if name == "list_lists":
-            # list_lists is already scoped to owned + shared lists; no per-list
-            # gate needed.
+            if principal.list_scope is not None:
+                # Une clé scopée ne voit QUE sa liste — mêmes sémantiques que
+                # accessible_list (deps.py) et /lists (audit lot T).
+                row = (await session.execute(
+                    select(Checklist).where(
+                        Checklist.id == principal.list_scope,
+                        Checklist.deleted.is_(False)))).scalar_one_or_none()
+                rows = []
+                if row is not None:
+                    if row.owner_id == principal.user_id:
+                        rows.append({"id": str(row.id), "title": row.title,
+                                     "role": "owner"})
+                    else:
+                        member = (await session.execute(
+                            select(ListMember).where(
+                                ListMember.list_id == row.id,
+                                ListMember.user_id == principal.user_id)
+                        )).scalar_one_or_none()
+                        if member is not None:
+                            rows.append({"id": str(row.id), "title": row.title,
+                                         "role": member.role.value})
+                return json.dumps(rows)
             owned = await session.execute(
                 select(Checklist).where(
                     Checklist.owner_id == principal.user_id, Checklist.deleted.is_(False))

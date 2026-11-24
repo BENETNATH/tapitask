@@ -7,8 +7,9 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..db import get_session
-from ..deps import Principal, accessible_list, get_principal, require_write
+from ..deps import Principal, accessible_list, get_principal, rate_limit_principal, require_write
 from ..models import Checklist, Item, ListMember, Role, new_id, utcnow
 from ..schemas import (
     ChecklistIn,
@@ -158,6 +159,7 @@ async def add_items_bulk(
     list_id: UUID,
     data: ItemsBulkIn,
     principal: Principal = Depends(require_write),
+    _rate_limited: Principal = Depends(rate_limit_principal),
     session: AsyncSession = Depends(get_session),
 ):
     """One item per line — designed for quick-add paste and agents."""
@@ -477,6 +479,12 @@ async def create_hook(
     allowed, _ = validate_webhook_url(data.url)
     if not allowed:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid webhook URL")
+    # Plafond par liste (audit lot T) : borne le gather de fire_webhooks.
+    count = (await session.execute(
+        select(func.count()).where(Webhook.list_id == list_id))).scalar_one()
+    if count >= settings.WEBHOOKS_MAX_PER_LIST:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "Plafond de webhooks atteint pour cette liste")
     hook = Webhook(list_id=list_id, user_id=principal.user_id,
                    url=data.url, secret=new_email_token())
     session.add(hook)

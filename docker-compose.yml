@@ -52,7 +52,8 @@ services:
       - ./app/build/web:/usr/share/nginx/html:ro
     networks: [internal]
     ports:
-      - "${WEB_PORT:-8080}:80"
+      # Web en clair : écoute loopback par défaut, comme l'API (audit lot T).
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80"
     profiles: ["web"]
 
   # TLS intégré (optionnel) : --profile caddy

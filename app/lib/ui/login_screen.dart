@@ -90,11 +90,39 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  /// Avertissement http:// (audit lot T) : login/register/invitation
+  /// n'avancent qu'après confirmation explicite.
+  Future<bool> _confirmInsecure() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(S.insecureServerTitle),
+        content: Text(S.insecureServerBody),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(S.cancel)),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(S.ok)),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
+  Future<bool> _applyServerUrl() async {
+    final url = _server.text.trim().replaceAll(RegExp(r"/$"), "");
+    if (url.startsWith("http://") && !await _confirmInsecure()) return false;
+    widget.state.api.baseUrl = url;
+    return true;
+  }
+
   Future<void> _acceptInvite() async {
     final code = await _promptInviteCode();
     if (code == null || code.trim().isEmpty) return;
     final api = widget.state.api;
-    api.baseUrl = _server.text.trim().replaceAll(RegExp(r"/$"), "");
+    if (!await _applyServerUrl()) return;
     try {
       if (api.accessToken == null || api.accessToken!.isEmpty) {
         await _submit(silent: true);
@@ -169,7 +197,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _submit({bool silent = false}) async {
     final api = widget.state.api;
-    api.baseUrl = _server.text.trim().replaceAll(RegExp(r"/$"), "");
+    if (!await _applyServerUrl()) return;
     try {
       if (_register) {
         await api.register(_email.text.trim(), _password.text);

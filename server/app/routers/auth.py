@@ -7,7 +7,7 @@ from datetime import timedelta
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,7 +58,6 @@ async def _send_change_email(to: str, token: str) -> None:
     )
 from ..security import (
     create_access_token,
-    is_expired,
     new_email_token,
     new_totp_secret,
     totp_uri,
@@ -74,6 +73,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 _login_limiter = RateLimiter(settings.RATE_LIMIT_PER_MINUTE)
 _register_limiter = RateLimiter(5)
+_change_email_limiter = RateLimiter(settings.RATE_LIMIT_PER_MINUTE)
 # Failed-login lockout: {key: (count, first_failure_monotonic)}.
 # Entries expire after 15 minutes so an account is never locked forever
 # and the dict cannot grow unbounded.
@@ -186,17 +186,21 @@ async def refresh(data: RefreshIn, session: AsyncSession = Depends(get_session))
     except Exception:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
     fingerprint = token_fingerprint(data.refresh_token)
-    result = await session.execute(
-        select(RefreshToken).where(RefreshToken.token_hash == fingerprint)
-    )
-    stored = result.scalar_one_or_none()
-    if stored is None or stored.revoked or is_expired(stored.expires_at):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
     user_result = await session.execute(select(User).where(User.id == UUID(payload["sub"])))
     user = user_result.scalar_one_or_none()
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
-    stored.revoked = True
+    # Prise de possession atomique (audit lot T) : UPDATE conditionnel, un seul
+    # /refresh concurrent gagne. rowcount == 0 → inconnu, déjà utilisé, expiré.
+    claimed = await session.execute(
+        update(RefreshToken)
+        .where(RefreshToken.token_hash == fingerprint,
+               RefreshToken.revoked.is_(False),
+               RefreshToken.expires_at > utcnow())
+        .values(revoked=True)
+    )
+    if claimed.rowcount == 0:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
     await session.commit()
     return await _issue_tokens(session, user)
 
@@ -269,21 +273,25 @@ async def resend_verification(
 
 @router.post("/change-email", status_code=status.HTTP_202_ACCEPTED)
 async def change_email(
+    request: Request,
     data: ChangeEmailIn,
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_session),
 ):
+    await _change_email_limiter.check(f"change-email:{client_key(request)}")
     result = await session.execute(select(User).where(User.id == principal.user_id))
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
     new_email = data.new_email.lower()
+    # Le mot de passe d'abord (audit lot T) : un mdp mauvais ne doit jamais
+    # vérifier le TOTP — sinon oracle de brute-force 2FA avec session volée.
+    if not verify_password(user.password_hash, data.password):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
     if user.totp_secret and not (
         data.totp_code and verify_totp(user.totp_secret, data.totp_code)
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Code 2FA requis ou invalide")
-    if not verify_password(user.password_hash, data.password):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
     if new_email == user.email:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cet email est déjà le vôtre")
     existing = (

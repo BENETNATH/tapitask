@@ -2,11 +2,19 @@ FROM python:3.15-slim
 
 WORKDIR /srv
 
+# Conteneur non-root (audit lot T) : l'app n'écrit rien sur le disque et
+# l'écoute 8000 (>1024) ne requiert aucun privilège.
+RUN useradd -m api
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Lecture seule : les fichiers copiés (root, 644/755) restent lisibles par
+# l'utilisateur non-root — pas besoin de chown.
 COPY app ./app
 COPY VERSION .
+
+USER api
 
 EXPOSE 8000
 
