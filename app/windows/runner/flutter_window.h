@@ -25,6 +25,12 @@ class FlutterWindow : public Win32Window {
   LRESULT MessageHandler(HWND window, UINT const message, WPARAM const wparam,
                          LPARAM const lparam) noexcept override;
 
+ public:
+  // C2.4 : posé par le Dart (TrayController, avant la 1re frame) — la
+  // fenêtre principale ne doit pas être réaffichée par la 1re frame si
+  // l'app démarre dans la tray.
+  void SetStartHidden(bool hidden) { start_hidden_ = hidden; }
+
  private:
   // The project to run.
   flutter::DartProject project_;
@@ -34,6 +40,10 @@ class FlutterWindow : public Win32Window {
 
   // Native tray flyout (volet rapide), created hidden at startup.
   std::unique_ptr<FlyoutWindow> flyout_;
+
+  // C2.4 : "Démarrer dans la barre des tâches" — Show() de la 1re frame
+  // conditionnelle sur ce flag (source de vérité : le réglage Dart).
+  bool start_hidden_ = false;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

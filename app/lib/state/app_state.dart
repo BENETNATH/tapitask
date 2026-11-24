@@ -12,6 +12,7 @@ import "../data/api_client.dart";
 import "../l10n/s.dart";
 import "../data/database.dart";
 import "../data/sync_service.dart";
+import "../data/update_service.dart";
 import "../ui/due_format.dart";
 
 import "../platform/alert_service.dart";
@@ -35,6 +36,16 @@ class AppState extends ChangeNotifier {
   String? quickAddListId;
   StreamSubscription<Uri?>? _widgetClickSub;
   final MethodChannel _widgetChannel = MethodChannel("com.tapitask/tapitask/widget");
+
+  /// A2 : MAJ trouvée par le check de boot (main.dart) — présentée par
+  /// ChecklistsApp en post-frameCallback, desktop uniquement.
+  UpdateInfo? pendingBootUpdate;
+
+  /// Seam : posé par main() (le check de boot est hors de la classe).
+  void setPendingBootUpdate(UpdateInfo info) {
+    pendingBootUpdate = info;
+    notifyListeners();
+  }
 
   /// Per-user feature toggles (server-side, synced between devices).
   Map<String, dynamic> settings = {
@@ -89,22 +100,21 @@ class AppState extends ChangeNotifier {
     await _loadDefaultList();
     sync = SyncService(
         api: api, db: db, onChanged: notifyListeners, onSynced: _refreshWidget);
+    // C1.6 : les réglages en cache sont TOUJOURS appliqués au démarrage
+    // (et non seulement en mode lightweight) : theme/lang/folders/…
+    // survivent à un démarrage hors-ligne.
+    await _loadCachedSettings();
     if (lightweight) {
       // The flyout reads the locally cached settings (written by the main
       // window on every profile reload / settings save) — no network needed.
-      await _loadCachedSettings();
       notifyListeners();
       return;
     }
+    // C1.6 : init ne bloque que sur la partie locale — la partie réseau
+    // (fullSync, profil, realtime, alertes) tourne en tâche de fond
+    // non fatale ; runApp n'attend plus un serveur muet.
+    unawaited(_initNetwork());
     await applyWidgetToggles();
-    await sync.init();
-    await reloadProfile();
-    await _refreshWidget();
-    if (featureAlerts && settings["notify_app"] != false) {
-      await AlertService.ensureInitialized();
-      final due = await db.dueItems();
-      await AlertService.notifyDueToday(due);
-    }
     // Sur web : pas de widget, rien à rejouer (defaultTargetPlatform est
     // android sur web, d'où le garde kIsWeb au-dessus du bloc widget).
     if (!kIsWeb) {
@@ -116,8 +126,12 @@ class AppState extends ChangeNotifier {
         // dans les Flutter récents : équivalent = handler de méthode pour le
         // push natif « widgetLaunch ».
         _widgetChannel.setMethodCallHandler(_onWidgetLaunch);
-        final cold =
-            await _widgetChannel.invokeMethod<String>("getLaunchUri");
+        // C1.6 : le canal d'widget est optionnel — son absence ne doit pas
+        // faire crasher le démarrage (URI de lancement perdue, pas l'app).
+        String? cold;
+        try {
+          cold = await _widgetChannel.invokeMethod<String>("getLaunchUri");
+        } catch (_) {}
         await _applyWidgetUri(cold == null ? null : Uri.parse(cold));
       } else {
         try {
@@ -130,6 +144,23 @@ class AppState extends ChangeNotifier {
       }
     }
     notifyListeners();
+  }
+
+  /// C1.6 : partie réseau du démarrage — fond, non fatale (erreurs
+  /// loguées, jamais de crash).
+  Future<void> _initNetwork() async {
+    try {
+      await sync.init();
+      await reloadProfile();
+      await _refreshWidget();
+      if (featureAlerts && settings["notify_app"] != false) {
+        await AlertService.ensureInitialized();
+        final due = await db.dueItems();
+        await AlertService.notifyDueToday(due);
+      }
+    } catch (e) {
+      debugPrint("tapitask: background init failed: $e");
+    }
   }
 
   /// Seam test : _applyWidgetUri est private (scopée à ce library).
@@ -199,6 +230,24 @@ class AppState extends ChangeNotifier {
   Future<void> refreshAfterLogin() async {
     await _refreshWidget();
     notifyListeners();
+  }
+
+  /// C2.8 : compte différent du dernier → les tables locales
+  /// (LocalLists/LocalItems) sont vidées et last_sync réinitialisé AVANT le
+  /// premier fullSync du nouveau compte (sinon : mélangement de données +
+  /// pull incrémental qui rate l'historique).
+  static const _accountEmailPref = "account_email";
+
+  Future<void> onAccountSwitch() async {
+    final emailNow = email;
+    if (emailNow == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final previous = prefs.getString(_accountEmailPref);
+    if (previous != null && previous != emailNow) {
+      await db.wipeLocalData();
+      await prefs.remove("last_sync");
+    }
+    await prefs.setString(_accountEmailPref, emailNow);
   }
 
   /// Items checked from the home-screen widget: apply them to the local DB
@@ -615,6 +664,10 @@ class AppState extends ChangeNotifier {
         label = label.replaceFirst(hashMatch.group(0)!, "").trim();
       }
     }
+
+    // C1.1a (A1) : plus de libellé après les mots-clés → pas d'item (ni
+    // local, ni outbox) ; le reste de la saisie est ignoré avec elle.
+    if (label.trim().isEmpty) return;
 
     final targets = {listId, if (extraListId != null) extraListId};
     final now = DateTime.now().toUtc();

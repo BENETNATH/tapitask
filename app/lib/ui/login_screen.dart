@@ -144,6 +144,10 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _verifyEmail() async {
     final code = await _promptCode(S.codeFromEmail);
     if (code == null || code.trim().isEmpty) return;
+    // C1.7 : l'URL saisie doit être appliquée AVANT le POST (comme _submit)
+    // — sinon le code part vers l'ancienne URL (ou une URL vide → crash
+    // ArgumentError, dorénavant attrapé ci-dessous).
+    if (!await _applyServerUrl()) return;
     try {
       await widget.state.api
           .post("/auth/verify-email", {"token": code.trim()});
@@ -153,6 +157,10 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } on ApiException catch (e) {
       setState(() => _error = "Vérification échouée : ${e.message}");
+    } catch (e) {
+      // C1.7 : non-Apex (ArgumentError, http.ClientException, …) → message,
+      // pas de crash.
+      setState(() => _error = S.loginFailed(e));
     }
   }
 
@@ -205,12 +213,26 @@ class _LoginScreenState extends State<LoginScreen> {
         await api.login(_email.text.trim(), _password.text,
             totpCode: _totp.text.trim().isEmpty ? null : _totp.text.trim());
       }
-      await api.persist();
+    } on EmailVerificationRequired {
+      // C1.7 (A1) : register 202 — on reste sur l'écran, pas de navigation,
+      // pas de fullSync, aucun token persisté.
+      setState(() => _error = S.emailVerificationSent);
+      return;
+    } catch (e) {
+      setState(() => _error = S.loginFailed(e));
+      return;
+    }
+    await api.persist();
+    try {
+      // Le profil d'abord (C2.8 : c'est lui qui donne l'email du compte
+      // pour détecter un changement de compte), puis purge éventuelle des
+      // données locales du précédent, PUIS le pull.
+      await widget.state.reloadProfile();
+      await widget.state.onAccountSwitch();
       // Fresh login: pull everything, start realtime, reload the profile
       // (admin flag + feature settings) instead of waiting for a restart.
       await widget.state.sync.fullSync();
       await widget.state.sync.listenRealtime();
-      await widget.state.reloadProfile();
       await widget.state.refreshAfterLogin();
       if (mounted && !silent) Navigator.pushReplacementNamed(context, "/home");
     } catch (e) {

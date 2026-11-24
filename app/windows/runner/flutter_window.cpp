@@ -62,9 +62,10 @@ bool FlutterWindow::OnCreate() {
         messenger, "tapitask/win32",
         &flutter::StandardMethodCodec::GetInstance());
     channel.SetMethodCallHandler(
-        [flyout](const flutter::MethodCall<flutter::EncodableValue>& call,
-                 std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
-                     result) {
+        [this, flyout](const flutter::MethodCall<flutter::EncodableValue>& call,
+                       std::unique_ptr<
+                           flutter::MethodResult<flutter::EncodableValue>>
+                           result) {
           const auto* args =
               std::get_if<flutter::EncodableMap>(call.arguments());
           auto str_arg = [&](const char* key) -> std::string {
@@ -84,6 +85,14 @@ bool FlutterWindow::OnCreate() {
             return false;
           };
 
+          if (call.method_name().compare("setStartHidden") == 0) {
+            // C2.4 : le réglage "start_hidden" (Dart) pilote la Show() de la
+            // 1re frame — le réglage est chargé avant runApp, l'appel est
+            // traité avant la 1re frame (handler posé ici, dans OnCreate).
+            SetStartHidden(bool_arg("hidden"));
+            result->Success();
+            return;
+          }
           if (call.method_name().compare("toggleFlyout") == 0) {
             bool pinned = bool_arg("pinned");
             if (flyout->visible()) {
@@ -104,7 +113,12 @@ bool FlutterWindow::OnCreate() {
   }
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
+    // C2.4 : Show() conditionnel — avec "Démarrer dans la barre des tâches",
+    // TrayController (Dart, source de vérité) a laissé la fenêtre cachée et
+    // un Show() inconditionnel la réaffichait à la 1re frame.
+    if (!start_hidden_) {
+      this->Show();
+    }
   });
 
   // Flutter can complete the first frame before the "show window" callback is

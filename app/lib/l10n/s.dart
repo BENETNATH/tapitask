@@ -67,6 +67,8 @@ class S {
     "codeFromEmail": "Code reçu par email",
     "verifyEmail": "Vérifier mon email",
     "emailVerified": "Email vérifié — tu peux te connecter ✔",
+    "emailVerificationSent":
+        "Un email de vérification a été envoyé — utilise « Vérifier mon email ».",
     "emailOptional": "facultatif",
     "notConfigured": "Non configuré",
     "insecureServer": "Connexion non chiffrée — le serveur est en http://",
@@ -256,6 +258,8 @@ class S {
     "codeFromEmail": "Code received by email",
     "verifyEmail": "Verify my email",
     "emailVerified": "Email verified — you can sign in ✔",
+    "emailVerificationSent":
+        "A verification email was sent — use \"Verify my email\".",
     "emailOptional": "optional",
     "notConfigured": "Not configured",
     "insecureServer": "Unencrypted connection — server is over http://",
@@ -457,6 +461,7 @@ class S {
   static String get codeFromEmail => t("codeFromEmail");
   static String get verifyEmail => t("verifyEmail");
   static String get emailVerified => t("emailVerified");
+  static String get emailVerificationSent => t("emailVerificationSent");
   static String get emailOptional => t("emailOptional");
   static String get notConfigured => t("notConfigured");
   static String get insecureServer => t("insecureServer");

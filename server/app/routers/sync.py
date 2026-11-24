@@ -5,13 +5,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_, select
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
 from ..deps import Principal, accessible_list, rate_limit_principal, require_write
 from ..events import record_change, notify_list
 from ..models import Checklist, Item, ListMember, Role, utcnow
-from ..schemas import SyncChange, SyncIn, SyncOut
+from ..schemas import SyncChange, SyncIn, SyncOut, validate_sync_event
 from .lists import _spawn_next
 
 router = APIRouter(prefix="/sync", tags=["sync"])
@@ -56,11 +57,17 @@ async def sync(
             # Un savepoint par événement : un événement refusé ne rollback
             # que lui-même, jamais les écritures des événements précédents.
             async with session.begin_nested():
+                validate_sync_event(event)
                 await _apply_event(session, event, principal, pending_notifies)
         except HTTPException:
             # Business rejection ONLY (403/404 from accessible_list: unknown
             # or deleted list, lost access). The event is reported so the
             # client drops it from its outbox.
+            rejected.append(event.id)
+        except (ValueError, DataError, IntegrityError):
+            # Event malformé (C1.1b) ou conflit unique en base : un tel
+            # event ne réussira JAMAIS → rejeté, pas de retry (un 500
+            # laisserait l'outbox du client bloqué en boucle).
             rejected.append(event.id)
         # Infrastructure errors (DB connection lost, timeout, deadlock…) are
         # NOT caught: the request fails with 500 and the client retries the
@@ -228,13 +235,15 @@ async def _apply_list_create(session: AsyncSession, event, principal, pending_no
         if existing.owner_id != principal.user_id:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Not the list owner")
         changed = False
+        # Title : jamais vidé (NOT NULL) — label absent garde l'ancien.
         if event.label and event.label != existing.title:
             existing.title = event.label
             changed = True
-        if event.color is not None and event.color != existing.color:
+        # null = vider : le client envoie l'état complet de la liste (C1.2).
+        if event.color != existing.color:
             existing.color = event.color
             changed = True
-        if event.folder is not None and event.folder != existing.folder:
+        if event.folder != existing.folder:
             existing.folder = event.folder
             changed = True
         if changed:
@@ -267,6 +276,11 @@ async def _apply_item_upsert(session: AsyncSession, event, principal, pending_no
     item = result.scalar_one_or_none()
     newly_done = False
     if item is None:
+        # A1 : label vide (None ou espaces) sur un item NOUVEAU → rejet
+        # (400 → rejected → outbox purgé) au lieu d'un IntegrityError 500
+        # (colonne NOT NULL) qui bloquerait l'outbox en boucle.
+        if event.label is None or not event.label.strip():
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty label")
         item = Item(id=event.id, list_id=event.list_id, created_at=stamp)
         session.add(item)
     else:
@@ -288,14 +302,18 @@ async def _apply_item_upsert(session: AsyncSession, event, principal, pending_no
             return
     newly_done = bool(event.done) and not bool(item.done)
     item.list_id = event.list_id
-    item.label = event.label or item.label
+    # Label : jamais vidé (NOT NULL) — un label absent/vide garde l'ancien.
+    if event.label is not None and event.label.strip():
+        item.label = event.label
     item.done = event.done if event.done is not None else item.done
     item.position = event.position if event.position is not None else item.position
-    item.parent_id = event.parent_id or item.parent_id
-    item.recurrence = event.recurrence or item.recurrence
-    item.due_date = event.due_date or item.due_date
-    item.notes = event.notes if event.notes is not None else item.notes
-    item.assignee_id = event.assignee_id or item.assignee_id
+    # null = retirer : le client envoie l'état complet de l'item
+    # (C1.2) — assignment explicite, plus de `event.X or item.X`.
+    item.parent_id = event.parent_id
+    item.recurrence = event.recurrence if event.recurrence is not None else "none"
+    item.due_date = event.due_date
+    item.notes = event.notes
+    item.assignee_id = event.assignee_id
     item.updated_at = stamp
     # Recurrence: checking a recurring item from the app goes through the
     # outbox (item.upsert done=true), so the next occurrence must be spawned

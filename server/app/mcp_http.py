@@ -23,6 +23,11 @@ from .models import Role
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
+
+class InvalidToolParam(ValueError):
+    """Argument d'outil rejeté AVANT exécution : erreur JSON-RPC -32602.
+    Distinct d'un ValueError simple (= résultat isError après exécution)."""
+
 TOOLS = [
     {
         "name": "list_lists",
@@ -201,6 +206,8 @@ async def messages(
             except KeyError as e:
                 message["error"] = {"code": -32602,
                                     "message": f"Invalid params: missing {e}"}
+            except InvalidToolParam as e:
+                message["error"] = {"code": -32602, "message": str(e)}
             except HTTPException as e:
                 message["result"] = _tool_result(
                     f"HTTP {e.status_code}: {e.detail}", is_error=True)
@@ -313,15 +320,39 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
             # principals (scoped API keys) must be refused.
             if principal.read_only:
                 raise HTTPException(status.HTTP_403_FORBIDDEN, "Read-only credentials")
-            await accessible_list(_uuid(args["list_id"]), principal, session, min_role=Role.editor)
-            from .routers.lists import _add_single
-            from .events import record_change, notify_list
+            list_id = _uuid(args["list_id"])
+            await accessible_list(list_id, principal, session, min_role=Role.editor)
+            from sqlalchemy import func
+            from .events import notify_list, record_change
             lines = [l.strip() for l in args["text"].splitlines() if l.strip()]
-            created = []
+            # C2.11 : mêmes règles que C1.1b (null bytes, label ≤ 2000) —
+            # validées AVANT tout écrit, le lot est tout ou rien.
             for line in lines[:500]:
-                item = await _add_single(session, _uuid(args["list_id"]), line, principal.user_id)
-                created.append(str(item.id))
-            return json.dumps({"created": created})
+                if "\x00" in line or len(line) > 2000:
+                    raise InvalidToolParam(
+                        f"invalid line: null byte or {len(line)} chars (> 2000)")
+            # C2.11 : un seul commit de fin + un seul notify_list par tool
+            # call (et non N commits + N notify par ligne).
+            max_pos = (await session.execute(
+                select(func.coalesce(func.max(Item.position), -1))
+                .where(Item.list_id == list_id))).scalar()
+            pos = max_pos if max_pos is not None else -1
+            items = []
+            for line in lines[:500]:
+                pos += 1
+                item = Item(list_id=list_id, label=line, position=pos,
+                            created_by=principal.user_id)
+                session.add(item)
+                items.append(item)
+            await session.flush()  # ids (default Python-side) avant le changelog
+            for item in items:
+                await record_change(session, list_id=list_id, item_id=item.id,
+                                    kind="item.upsert", commit=False)
+            await session.commit()
+            await notify_list(list_id, {"kind": "item.upsert",
+                                        "list_id": str(list_id),
+                                        "count": len(items)})
+            return json.dumps({"created": [str(i.id) for i in items]})
         if name == "check_item":
             result = await session.execute(
                 select(Item).where(

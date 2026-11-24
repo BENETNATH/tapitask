@@ -95,6 +95,10 @@ class FlyoutWindow {
   WNDPROC default_list_proc_ = nullptr;
   WNDPROC default_btn_proc_ = nullptr;
   int chips_rows_ = 1;
+  // C2.5 : les chips ne sont recréées que si la largeur (ou les listes)
+  // ont réellement changé — pas à chaque pixel de WM_SIZE.
+  int last_chip_width_ = -1;
+  size_t last_chip_sig_ = 0;
 
   std::vector<ListInfo> lists_;
   std::vector<ItemInfo> items_;

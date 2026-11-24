@@ -45,11 +45,22 @@ if (-not (Test-Path "$Root\app\windows") -or -not (Test-Path "$Root\app\android"
 $buildWin = (Ask "Builder l'executable Windows ? [O/n]") ; if (-not $buildWin) { $buildWin = "O" }
 $buildApk = (Ask "Builder l'APK Android ? [O/n]") ; if (-not $buildApk) { $buildApk = "O" }
 
+# --- Version (C2.12) : param APP_VERSION > tag git le plus proche > "dev" ---
+# --dart-define fixe la version affichee (sinon "dev", figee au build).
+$appVersion = if ($env:APP_VERSION) {
+    $env:APP_VERSION
+} else {
+    try { (git describe --tags 2>$null) } catch { "dev" }
+}
+if (-not $appVersion) { $appVersion = "dev" }
+Write-Host "Version : $appVersion"
+
 Push-Location "$Root\app"
 
 if ($buildApk -eq "O" -or $buildApk -eq "o") {
-    # Keystore de signature (une seule fois)
-    $keyProps = "android\key.properties"
+    # Keystore de signature (une seule fois) — C2.12 : le gradle lit
+    # android/app/key.properties (rootProject.file("app/key.properties"))
+    $keyProps = "android\app\key.properties"
     if (-not (Test-Path $keyProps)) {
         $makeKs = (Ask "Creer un keystore de signature pour l'APK ? (recommande) [O/n]")
         if (-not $makeKs) { $makeKs = "O" }
@@ -60,21 +71,21 @@ if ($buildApk -eq "O" -or $buildApk -eq "o") {
                     -keyalg RSA -keysize 2048 -validity 10000 -storepass $ksPass -keypass $ksPass `
                     -dname "CN=Tapitask, O=Tapitask" | Out-Null
                 "storeFile=$Root/tapitask.keystore`nstorePassword=$ksPass`nkeyPassword=$ksPass`nkeyAlias=tapitask" | Out-File $keyProps -Encoding ascii
-                Write-Host "[OK] Keystore cree (mot de passe dans android\key.properties - NE PAS COMMITER)" -ForegroundColor Green
+                Write-Host "[OK] Keystore cree (mot de passe dans android\app\key.properties - NE PAS COMMITER)" -ForegroundColor Green
             } else {
                 Write-Host "[!] keytool introuvable (installe un JDK) - APK signe en debug" -ForegroundColor Yellow
             }
         }
     }
     Write-Host "==> flutter build apk --release..."
-    flutter build apk --release
+    flutter build apk --release "--dart-define=APP_VERSION=$appVersion"
     Copy-Item "build\app\outputs\flutter-apk\app-release.apk" "$Dist\Tapitask.apk" -Force
     Write-Host "[OK] APK : dist\Tapitask.apk" -ForegroundColor Green
 }
 
 if ($buildWin -eq "O" -or $buildWin -eq "o") {
     Write-Host "==> flutter build windows --release..."
-    flutter build windows --release
+    flutter build windows --release "--dart-define=APP_VERSION=$appVersion"
     $releaseDir = "build\windows\x64\runner\Release"
     Compress-Archive -Path "$releaseDir\*" -DestinationPath "$Dist\Tapitask-windows.zip" -Force
     Write-Host "[OK] Windows : dist\Tapitask-windows.zip (contient tapitask.exe + DLLs)" -ForegroundColor Green

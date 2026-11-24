@@ -3,6 +3,7 @@ package com.tapitask.tapitask
 import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Color
 import android.view.View
 import android.widget.RemoteViews
@@ -32,11 +33,18 @@ class WidgetItemAdapter(
     private val context: Context
 ) : RemoteViewsService.RemoteViewsFactory {
 
-    private fun prefs() = HomeWidgetPlugin.getData(context)
+    private fun prefs(): SharedPreferences = HomeWidgetPlugin.getData(context)
+
+    // C2.6 : snapshot pris dans onDataSetChanged() — le système relit
+    // getCount()/getViewAt() après, et re-lire prefs à chaque appel pouvait
+    // mélanger deux états (n de lignes ≠ lignes servies).
+    private var snapshotRows: List<Triple<String, String, String>> = emptyList()
+    private var snapshotHasLists = false
+    private var snapshotDark = false
+    private var snapshotAllDone = ""
 
     /** Ligne = (label, id cliquable, badge d'échéance brut — "" si absent). */
-    private fun rows(): List<Triple<String, String, String>> {
-        val d = prefs()
+    private fun buildRows(d: SharedPreferences): List<Triple<String, String, String>> {
         val total = d.getInt("list_count_lists", 0)
         if (total == 0) return emptyList()
         var index = d.getInt("list_index", 0)
@@ -58,39 +66,44 @@ class WidgetItemAdapter(
     override fun onCreate() {}
 
     override fun onDataSetChanged() {
-        // Le système relit getCount()/getViewAt() après cet appel —
-        // les données sont lues à chaud dans rows(), rien à mettre en cache.
+        // C2.6 : snapshot unique (lignes + thème + label « tout coché ») —
+        // le système relit getCount()/getViewAt() après ; re-lire prefs
+        // séparément aurait pu mélanger deux états.
+        val d = prefs()
+        snapshotHasLists = d.getInt("list_count_lists", 0) > 0
+        snapshotRows = buildRows(d)
+        snapshotDark = d.getString("theme", "light") == "dark"
+        snapshotAllDone = d.getString("label_all_done", "Tout est coché")
     }
 
     override fun onDestroy() {}
 
     override fun getCount(): Int {
-        val d = prefs()
-        if (d.getInt("list_count_lists", 0) == 0) return 0
-        val rows = rows()
-        return if (rows.isEmpty()) 1 else rows.size // 1 = ligne « ✓ … »
+        if (!snapshotHasLists) return 0
+        return if (snapshotRows.isEmpty()) 1 else snapshotRows.size // 1 = ligne « ✓ … »
     }
 
     override fun getLoadingView(): RemoteViews? = null
 
     override fun getViewAt(position: Int): RemoteViews {
-        val d = prefs()
         val views = RemoteViews(context.packageName, R.layout.widget_item_row)
-        val dark = d.getString("theme", "light") == "dark"
         val text =
-            if (dark) Color.rgb(226, 226, 226) else Color.parseColor("#1B1B1B")
+            if (snapshotDark) Color.rgb(226, 226, 226) else Color.parseColor("#1B1B1B")
         views.setInt(R.id.item_row_label, "setTextColor", text)
         // Badge d'échéance : couleur = couleur label (même action réflexion
         // setTextColor API<31), GONE par défaut (pas de due = pas de texte).
         views.setInt(R.id.item_row_due, "setTextColor", text)
-        val rows = rows()
-        if (rows.isEmpty()) {
+        if (snapshotRows.isEmpty()) {
+            // Une seule ligne (getCount() = 1) : le « ✓ … » ne dépend pas du
+            // position — pas besoin de guard.
             views.setTextViewText(
                 R.id.item_row_label,
-                "✓  " + d.getString("label_all_done", "Tout est coché"))
+                "✓  " + snapshotAllDone)
             views.setOnClickFillInIntent(R.id.item_row_label, null)
-        } else {
-            val (label, id, due) = rows[position]
+        } else if (position in snapshotRows.indices) {
+            // C2.6 : guard — position hors snapshot (changement pendant le
+            // bind du launcher) → ligne vide plutôt qu'IndexOutOfBounds.
+            val (label, id, due) = snapshotRows[position]
             views.setTextViewText(R.id.item_row_label, label)
             if (due.isEmpty()) {
                 views.setInt(R.id.item_row_due, "setVisibility", View.GONE)

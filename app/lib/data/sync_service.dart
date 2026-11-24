@@ -127,10 +127,15 @@ class SyncService {
   /// POST /sync with chunked events; returns the accumulated rejected ids.
   Future<List<String>> _postEvents(List<Map<String, dynamic>> events) async {
     final rejected = <String>[];
+    // C2.9 : `since` dans le push — sans, le serveur calcule et renvoie
+    // toute la base, immédiatement jetée avant le _pull.
+    final since = await _lastSync();
     for (var i = 0; i < events.length; i += _chunkSize) {
       final chunk = events.sublist(
           i, (i + _chunkSize) > events.length ? events.length : i + _chunkSize);
-      final result = await api.post("/sync", {"events": chunk});
+      final body = <String, dynamic>{"events": chunk};
+      if (since != null) body["since"] = since;
+      final result = await api.post("/sync", body);
       final rej = result["rejected"];
       if (rej is List) {
         rejected.addAll(rej.map((e) => e.toString()));
@@ -275,6 +280,10 @@ class SyncService {
     try {
       final wsUrl = api.baseUrl.replaceFirst("http", "ws");
       _ws = WebSocketChannel.connect(Uri.parse("$wsUrl/ws"));
+      // Échec de connexion : [ready] complète en erreur — sans listener,
+      // c'est une erreur non gérée (le stream s'occupe déjà du cas
+      // connecté-puis-coupé via onError).
+      _ws!.ready.catchError((_) => _scheduleReconnect());
       // Auth by FIRST MESSAGE (the token never travels in the query string,
       // where reverse-proxy access logs would capture it).
       _ws!.sink.add(jsonEncode({"token": api.accessToken}));

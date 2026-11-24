@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +28,16 @@ from ..models import Webhook
 from ..security import new_email_token
 
 router = APIRouter(prefix="/lists", tags=["lists"])
+
+# Tâches webhooks en vol (C1.3) : sans référence forte, asyncio peut les
+# garbage-collecter avant leur exécution.
+_in_flight_webhooks: set[asyncio.Task] = set()
+
+
+def _fire_and_forget(coro) -> None:
+    t = asyncio.create_task(coro)
+    _in_flight_webhooks.add(t)
+    t.add_done_callback(_in_flight_webhooks.discard)
 
 
 @router.get("", response_model=list[ChecklistOut])
@@ -219,14 +230,19 @@ async def patch_item(
         item.done = data.done
     if data.position is not None:
         item.position = data.position
-    if data.notes is not None:
+    # null = vider (C1.2) : le champ n'est appliqué que s'il est présent
+    # dans le body — le défaut None de ItemPatch ne distingue pas « absent »
+    # de « null » autrement que par model_fields_set.
+    if "notes" in data.model_fields_set:
         item.notes = data.notes
-    if data.assignee_id is not None:
+    if "assignee_id" in data.model_fields_set:
         item.assignee_id = data.assignee_id
-    if data.due_date is not None:
+    if "due_date" in data.model_fields_set:
         item.due_date = data.due_date
-    if data.recurrence is not None:
-        item.recurrence = data.recurrence
+    if "recurrence" in data.model_fields_set:
+        item.recurrence = data.recurrence or "none"
+    if "parent_id" in data.model_fields_set:
+        item.parent_id = data.parent_id
     if item.updated_at is None:
         item.updated_at = utcnow()
     await session.commit()
@@ -236,11 +252,12 @@ async def patch_item(
         spawned = await _spawn_next(session, item, principal.user_id)
     await record_change(session, list_id=list_id, item_id=item.id, kind="item.upsert")
     await notify_list(list_id, {"kind": "item.upsert", "list_id": str(list_id), "id": str(item.id)})
-    await fire_webhooks(session, list_id, {
+    # C1.3 : fire-and-forget — une webhook lente ne retarde pas la réponse.
+    _fire_and_forget(fire_webhooks(list_id, {
         "event": "item.checked" if data.done is True else "item.updated",
         "list_id": str(list_id), "item_id": str(item.id), "label": item.label,
         "recurrence": item.recurrence,
-    })
+    }))
     result = ItemOut.model_validate(item)
     if spawned is not None:
         return [result, ItemOut.model_validate(spawned)]
@@ -295,9 +312,10 @@ async def rename_list(
 ):
     checklist, _ = await accessible_list(list_id, principal, session, min_role=Role.editor)
     checklist.title = data.title
-    if data.color is not None:
+    # null = vider (C1.2) : appliqué seulement si le champ est présent.
+    if "color" in data.model_fields_set:
         checklist.color = data.color
-    if data.folder is not None:
+    if "folder" in data.model_fields_set:
         checklist.folder = data.folder
     checklist.updated_at = utcnow()
     await session.commit()
@@ -391,8 +409,8 @@ async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID,
         due_date=next_due,
         recurrence_source_id=item.id,
     )
-    session.add(next_item)
     if commit:
+        session.add(next_item)
         try:
             await session.commit()
         except IntegrityError:
@@ -400,6 +418,39 @@ async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID,
             await session.rollback()
             await session.refresh(item)  # rollback expired it; reload (async-safe)
             return None
+    else:
+        # Chemin sync (commit=False, C1.1d) : INSERT Core DEDANS un savepoint.
+        # Pas de session.add : un objet ORM en attente au moment du
+        # begin_nested() déclenche le snapshot-flush de toute la session sur
+        # la transaction PARENT (SessionTransaction._take_snapshot) — un
+        # conflit unique là-bas tuerait le batch entier. Un INSERT Core
+        # échoue au plus dans le savepoint, annulé seul ; les écritures du
+        # batch restent en attente et saines.
+        try:
+            async with session.begin_nested():
+                await session.execute(insert(Item).values(
+                    id=next_item.id,
+                    list_id=next_item.list_id,
+                    parent_id=next_item.parent_id,
+                    label=next_item.label,
+                    notes=None,
+                    assignee_id=None,
+                    done=False,
+                    position=next_item.position,
+                    recurrence=next_item.recurrence,
+                    due_date=next_item.due_date,
+                    recurrence_source_id=next_item.recurrence_source_id,
+                    created_by=next_item.created_by,
+                    created_at=now,
+                    updated_at=now,
+                    deleted=False,
+                ))
+        except IntegrityError:
+            existing = await session.execute(
+                select(Item.id).where(Item.recurrence_source_id == item.id).limit(1))
+            if existing.scalar_one_or_none() is None:
+                raise  # autre contrainte unique : ce n'est pas cette race
+            return None  # l'occurrence existe déjà (l'exécution concurrente a gagné)
     await record_change(session, list_id=item.list_id, item_id=next_item.id, kind="item.upsert", commit=commit)
     if pending is not None:
         pending.append((item.list_id, {"kind": "item.upsert", "list_id": str(item.list_id), "id": str(next_item.id)}))
@@ -458,9 +509,9 @@ async def purge_done_items(
     if count:
         await record_change(session, list_id=list_id, kind="item.purge", actor_id=principal.user_id)
         await notify_list(list_id, {"kind": "items.purged", "list_id": str(list_id), "count": count})
-        await fire_webhooks(session, list_id, {
+        _fire_and_forget(fire_webhooks(list_id, {
             "event": "items.purged", "list_id": str(list_id), "count": count,
-        })
+        }))
     return None
 
 

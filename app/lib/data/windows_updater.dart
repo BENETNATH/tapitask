@@ -28,10 +28,12 @@ rem Copie du contenu de update-tmp vers le repertoire de l'app
 rem (sans backslash final avant la guillemet fermante : piège de quoting cmd).
 xcopy /E /Y /I "$tmpDir\\*" "$appDir"
 del "$appDir\\run_update.bat"
-del "%~f0"
-rmdir /S /Q "$tmpDir"
-rem Relance de l'app mise a jour, puis effacement du bat.
+rem `del %~f0` est STRICTEMENT la derniere ligne non vide : une ligne apres
+rem l'effacement du bat n'est jamais executee (cmd perd le fichier de
+rem commandes). Le dossier update-tmp subsiste : un rmdir apres del %~f0
+rem reproduirait le meme bug.
 start "" "$appDir\\tapitask.exe"
+del "%~f0"
 ''';
 }
 

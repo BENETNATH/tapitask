@@ -1,14 +1,19 @@
 import "dart:async";
 
+import "package:flutter/foundation.dart"
+    show defaultTargetPlatform, TargetPlatform;
 import "package:http/http.dart" as http;
 import "package:material_ui/material_ui.dart";
 import "package:cupertino_ui/cupertino_ui.dart";
 import "package:flutter_localizations/flutter_localizations.dart"
     hide GlobalMaterialLocalizations, GlobalCupertinoLocalizations;
 
+import "data/android_updater.dart";
 import "data/update_service.dart";
+import "data/windows_updater.dart";
 import "platform/tray_controller_web.dart"
     if (dart.library.io) "platform/tray_controller.dart";
+import "ui/update_dialog.dart";
 import "l10n/s.dart";
 import "state/app_state.dart";
 import "ui/home_screen.dart";
@@ -38,7 +43,11 @@ final appRoutes = <String, WidgetBuilder>{
 Widget appShell({required String serverUrl, required Widget child}) {
   if (!serverUrl.startsWith("http://")) return child;
   return Column(children: [
-    const _InsecureServerBanner(),
+    // C2.2 : Material + SafeArea(top) — la bannière ne passe plus sous la
+    // barre de statut Android.
+    const Material(
+        color: Colors.transparent,
+        child: SafeArea(top: true, child: _InsecureServerBanner())),
     Expanded(child: child),
   ]);
 }
@@ -67,16 +76,10 @@ class _InsecureServerBanner extends StatelessWidget {
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   await appState.init();
-  // Spec §B : vérification des MAJ au démarrage — fond, sans UI bloquante
-  // (résultat consulté depuis la ligne « Mises à jour » des réglages).
-  unawaited(() async {
-    final client = http.Client();
-    try {
-      await checkForUpdates(client: client, api: appState.api);
-    } finally {
-      client.close();
-    }
-  }());
+  // Spec §B + A2 : vérification des MAJ au démarrage — fond ; si une MAJ
+  // est trouvée, le dialog est présenté par ChecklistsApp post-frame
+  // (desktop uniquement, comme le reste du flux update).
+  unawaited(_checkUpdatesAtBoot());
   trayController = TrayController(appState);
   await trayController!.init();
   // Window hooks used by the flyout bridge (guarantee: opening the flyout
@@ -84,6 +87,21 @@ Future<void> main(List<String> args) async {
   appState.isMainWindowVisible = trayController!.isMainWindowVisible;
   appState.restoreMainWindow = trayController!.restoreMainWindow;
   runApp(const ChecklistsApp());
+}
+
+/// A2 : check de boot — le résultat est stocké dans [appState] ; le dialog
+/// est présenté APRÈS la 1re frame (par ChecklistsApp), desktop uniquement.
+Future<void> _checkUpdatesAtBoot() async {
+  final client = http.Client();
+  try {
+    final info = await checkForUpdates(client: client, api: appState.api);
+    if (info.clientAvailable &&
+        defaultTargetPlatform == TargetPlatform.windows) {
+      appState.setPendingBootUpdate(info);
+    }
+  } catch (_) {} finally {
+    client.close();
+  }
 }
 
 class ChecklistsApp extends StatefulWidget {
@@ -100,9 +118,43 @@ class _ChecklistsAppState extends State<ChecklistsApp>
     super.initState();
     appState.addListener(_onChanged);
     WidgetsBinding.instance.addObserver(this);
+    _maybeShowBootUpdate();
   }
 
-  void _onChanged() => setState(() {});
+  void _onChanged() {
+    setState(() {});
+    _maybeShowBootUpdate();
+  }
+
+  /// A2 : MAJ trouvée au boot → dialog post-frameCallback (jamais au milieu
+  /// d'une frame). Gère les deux ordres : check terminé avant ou après la
+  /// 1re frame.
+  void _maybeShowBootUpdate() {
+    final info = appState.pendingBootUpdate;
+    if (info == null) return;
+    appState.pendingBootUpdate = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => UpdateDialog(
+          info: info,
+          onUpdate: () async {
+            // Même flux que la ligne « Mises à jour » des réglages.
+            switch (defaultTargetPlatform) {
+              case TargetPlatform.windows:
+                await runSelfUpdate(info);
+              case TargetPlatform.android:
+                await installApk(info);
+              default:
+                break;
+            }
+          },
+        ),
+      );
+    });
+  }
 
   @override
   void dispose() {

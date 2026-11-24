@@ -7,7 +7,7 @@ from datetime import timedelta
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -243,6 +243,21 @@ async def verify_email(data: VerifyEmailIn, session: AsyncSession = Depends(get_
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Code de vérification invalide")
     if user.pending_email is not None:
+        # Collision (C1.1e) : l'email attendu est déjà pris par UN AUTRE
+        # compte (email actif OU en attente) → rien n'est appliqué, 409,
+        # l'état périmé est nettoyé (l'utilisateur relance change-email).
+        taken = (await session.execute(
+            select(User).where(
+                or_(User.email == user.pending_email,
+                    User.pending_email == user.pending_email),
+                User.id != user.id,
+            ))).first()
+        if taken is not None:
+            user.pending_email = None
+            await session.commit()
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Cet email est déjà utilisé par un autre compte")
         user.email = user.pending_email
         user.pending_email = None
     user.is_email_verified = True

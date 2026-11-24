@@ -180,10 +180,12 @@ def _webhook_host_allowed(url: str) -> tuple[bool, str | None]:
     return pinned is not None, pinned
 
 
-async def fire_webhooks(session, list_id, payload: dict[str, Any]) -> None:
+async def fire_webhooks(list_id, payload: dict[str, Any]) -> None:
     """POST the payload to every webhook of the list, signed with HMAC-SHA256.
     Fire-and-forget: failures are logged, never propagated. Disallowed
-    (SSRF-risk) hosts are skipped, not followed."""
+    (SSRF-risk) hosts are skipped, not followed.
+    Session propre (pas la session de la requête) : appelé depuis un
+    create_task qui tourne APRÈS la clôture de la session du request (C1.3)."""
     import asyncio
     import hashlib
     import hmac
@@ -191,23 +193,25 @@ async def fire_webhooks(session, list_id, payload: dict[str, Any]) -> None:
     import logging
 
     from .config import settings
+    from .db import SessionLocal
     from .models import Webhook
     from sqlalchemy import select
 
-    result = await session.execute(select(Webhook).where(Webhook.list_id == list_id))
-    hooks = list(result.scalars())
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Webhook).where(Webhook.list_id == list_id))
+        hooks = [(h.url, h.secret) for h in result.scalars()]
     if not hooks:
         return
 
-    async def _fire(hook: Webhook) -> None:
-        allowed, pinned_ip = _webhook_host_allowed(hook.url)
+    async def _fire(url: str, secret: str) -> None:
+        allowed, pinned_ip = _webhook_host_allowed(url)
         if not allowed:
             logging.getLogger("tapitask.webhooks").warning(
-                "skipping disallowed webhook host: %s", hook.url)
+                "skipping disallowed webhook host: %s", url)
             return
         body = json.dumps(payload).encode()
-        signature = hmac.new(hook.secret.encode(), body, hashlib.sha256).hexdigest()
-        url = hook.url
+        signature = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
         headers = {
             "Content-Type": "application/json",
             "X-Tapitask-Signature": f"sha256={signature}",
@@ -231,12 +235,18 @@ async def fire_webhooks(session, list_id, payload: dict[str, Any]) -> None:
 
             # follow_redirects stays at its default (False): re-resolving each
             # hop against the SSRF policy would be required to follow safely.
+            # Le netloc peut être l'IP épinglée (Host = hostname d'origine) :
+            # sans SNI explicite, le handshake présenterait l'IP et la
+            # vérification du certificat échouerait (audit C1.3).
+            sni = headers.get("Host")
             async with httpx.AsyncClient(timeout=settings.WEBHOOK_TIMEOUT) as client:
-                await client.post(url, content=body, headers=headers)
+                await client.post(
+                    url, content=body, headers=headers,
+                    extensions={"sni_hostname": sni} if sni else None)
         except Exception:
-            logging.getLogger("tapitask.webhooks").exception("webhook failed: %s", hook.url)
+            logging.getLogger("tapitask.webhooks").exception("webhook failed: %s", url)
 
-    await asyncio.gather(*(_fire(h) for h in hooks))
+    await asyncio.gather(*(_fire(*hook) for hook in hooks))
 
 
 async def notify_list(list_id: UUID, message: dict[str, Any]) -> None:

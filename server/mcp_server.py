@@ -16,6 +16,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+import uuid
 
 URL = os.environ.get("CHECKLISTS_URL", "http://localhost:8000")
 KEY = os.environ.get("CHECKLISTS_API_KEY", "")
@@ -58,7 +59,8 @@ def _api(method: str, path: str, body: dict | None = None) -> str:
         headers={"Authorization": f"Bearer {_load_key()}", "Content-Type": "application/json"},
         method=method,
     )
-    with urllib.request.urlopen(req) as resp:
+    # timeout : un API muet ne doit pas bloquer l'agent indéfiniment (C2.11).
+    with urllib.request.urlopen(req, timeout=10) as resp:
         return resp.read().decode()
 
 
@@ -108,18 +110,33 @@ TOOLS = [
 ]
 
 
+def _uuid_arg(args: dict, field: str) -> str:
+    """C2.11 : list_id/item_id sont interpolés dans les URLs — un non-UUID
+    doit être refusé en défaut d'arguments, pas envoyé en réseau."""
+    value = args[field]
+    try:
+        uuid.UUID(value)
+    except (ValueError, TypeError):
+        raise ValueError(f"invalid params: '{field}' is not a UUID")
+    return value
+
+
 def _handle(name: str, args: dict) -> str:
     if name == "list_lists":
         return _api("GET", "/lists")
     if name == "get_list":
         flag = "true" if args.get("unchecked_only") else "false"
-        return _api("GET", f"/lists/{args['list_id']}/items?unchecked_only={flag}")
+        list_id = _uuid_arg(args, "list_id")
+        return _api("GET", f"/lists/{list_id}/items?unchecked_only={flag}")
     if name == "add_items":
-        return _api("POST", f"/lists/{args['list_id']}/items/bulk", {"text": args["text"]})
+        list_id = _uuid_arg(args, "list_id")
+        return _api("POST", f"/lists/{list_id}/items/bulk", {"text": args["text"]})
     if name == "check_item":
+        list_id = _uuid_arg(args, "list_id")
+        item_id = _uuid_arg(args, "item_id")
         return _api(
             "PATCH",
-            f"/lists/{args['list_id']}/items/{args['item_id']}",
+            f"/lists/{list_id}/items/{item_id}",
             {"done": args.get("done", True)},
         )
     raise ValueError(f"Unknown tool: {name}")
@@ -210,6 +227,10 @@ def handle_line(line: str) -> dict | None:
     except KeyError as e:
         return None if is_notification else _error(
             req_id, -32602, f"Invalid params: missing {e}")
+    except ValueError as e:
+        # C2.11 : argument invalide (ex. UUID) = défaut d'arguments, pas une
+        # panne serveur.
+        return None if is_notification else _error(req_id, -32602, str(e))
     except Exception as e:
         return None if is_notification else _error(req_id, -32603, str(e))
     if is_notification:

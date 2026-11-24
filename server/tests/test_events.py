@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 import uuid
 
@@ -145,6 +146,12 @@ async def test_webhook_dns_rebinding_is_pinned(client, monkeypatch):
     r = await client.patch(
         f"/lists/{list_id}/items/{item['id']}", json={"done": True}, headers=h)
     assert r.status_code == 200
+
+    # C1.3 : la livraison est fire-and-forget — elle tourne après la réponse.
+    for _ in range(100):
+        if captured:
+            break
+        await asyncio.sleep(0.02)
 
     assert "1.2.3.4" in captured["url"], captured
     assert "127.0.0.1" not in captured["url"]

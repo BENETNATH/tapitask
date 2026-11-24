@@ -83,8 +83,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       );
 
-  Widget _tapRow(String title, String value, VoidCallback onTap,
-          {String? subtitle}) =>
+  Widget _tapRow(String title, String value, VoidCallback? onTap,
+          {String? subtitle, Widget? trailing}) =>
       SizedBox(
         height: subtitle == null ? 44 : 56,
         child: InkWell(
@@ -110,9 +110,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       fontSize: 13,
                       color: Theme.of(context).colorScheme.outline)),
               const SizedBox(width: 2),
-              Icon(Icons.chevron_right,
-                  size: 18,
-                  color: Theme.of(context).colorScheme.outline),
+              if (trailing != null)
+                trailing
+              else
+                Icon(Icons.chevron_right,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.outline),
             ],
           ),
         ),
@@ -187,8 +190,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ---- Mises à jour (spec §B) ----
 
+  // C1.5 : état « en cours » — la row est désactivée pendant le check, le
+  // bouton du dialog pendant le téléchargement (pas de clics multiples).
+  bool _checkingUpdates = false;
+  bool _updating = false;
+
   Future<void> _showUpdates() async {
     final s = widget.state;
+    if (_checkingUpdates) return;
+    setState(() => _checkingUpdates = true);
     final client = http.Client();
     UpdateInfo info;
     try {
@@ -197,13 +207,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       client.close();
     }
     if (!mounted) return;
+    setState(() => _checkingUpdates = false);
     await showDialog<void>(
       context: context,
       builder: (context) => UpdateDialog(
         info: info,
+        updating: _updating,
         // Le bouton n'existe que si une MAJ client est dispo.
         onUpdate: info.clientAvailable
             ? () async {
+                if (_updating) return;
+                setState(() => _updating = true);
                 try {
                   switch (defaultTargetPlatform) {
                     case TargetPlatform.windows:
@@ -218,6 +232,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   // d'erreur (l'ancienne version reste intacte).
                   if (!mounted) return;
                   await _showInfo(S.updateError, '$e');
+                } finally {
+                  if (mounted) setState(() => _updating = false);
                 }
               }
             : null,
@@ -471,14 +487,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _header(S.updates),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _tapRow(S.updates, appVersion, _showUpdates),
+            child: _tapRow(
+                S.updates, appVersion,
+                // C1.5 : row désactivée + spinner pendant le check.
+                _checkingUpdates ? null : _showUpdates,
+                trailing: _checkingUpdates
+                    ? const SizedBox(
+                        width: 16, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : null),
           ),
 
           // ---- Compte ----
           _header(S.account),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: s.api.accessToken == null
+            // C1.7 : « connecté » exige un token NON VIDE ("" persisté par
+            // l'ancienne version n'est pas une session).
+            child: (s.api.accessToken == null || s.api.accessToken!.isEmpty)
                 ? SizedBox(
                     height: 44,
                     child: ElevatedButton.icon(

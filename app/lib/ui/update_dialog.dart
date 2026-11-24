@@ -15,7 +15,11 @@ import "../platform/update_opener_web.dart"
 class UpdateDialog extends StatelessWidget {
   final UpdateInfo info;
   final VoidCallback? onUpdate;
-  const UpdateDialog({super.key, required this.info, this.onUpdate});
+  /// C1.5 : téléchargement en cours — le bouton est désactivé (pas de
+  /// clics multiples).
+  final bool updating;
+  const UpdateDialog(
+      {super.key, required this.info, this.onUpdate, this.updating = false});
 
   @override
   Widget build(BuildContext context) {
@@ -50,8 +54,14 @@ class UpdateDialog extends StatelessWidget {
             ),
           )
         else if (info.clientAvailable)
+          // C1.5 : bouton désactivé + spinner pendant le téléchargement.
           TextButton(
-              onPressed: onUpdate, child: Text(S.updateButton)),
+              onPressed: updating ? null : onUpdate,
+              child: updating
+                  ? const SizedBox(
+                      width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : Text(S.updateButton)),
         TextButton(
             onPressed: () => Navigator.pop(context), child: Text(S.close)),
       ],

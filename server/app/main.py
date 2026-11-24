@@ -126,7 +126,7 @@ MIGRATIONS = [
     ("api_keys", "list_scope", "VARCHAR(36)", "UUID"),
     ("items", "parent_id", "VARCHAR(36)", "UUID"),
     ("items", "recurrence", "VARCHAR(10) NOT NULL DEFAULT 'none'", "VARCHAR(10) NOT NULL DEFAULT 'none'"),
-    ("items", "due_date", "TIMESTAMP", "TIMESTAMP"),
+    ("items", "due_date", "TIMESTAMP", "TIMESTAMPTZ"),
     ("lists", "color", "VARCHAR(16)", "VARCHAR(16)"),
     ("lists", "folder", "VARCHAR(100)", "VARCHAR(100)"),
     ("users", "settings", "TEXT", "TEXT"),
@@ -138,6 +138,17 @@ MIGRATIONS = [
 
 def _is_postgres() -> bool:
     return engine.dialect.name == "postgresql"
+
+
+def _due_date_timestamptz_sql(data_type: str | None) -> str | None:
+    """C2.10 (A4) : les bases réellement migrées depuis v1 ont
+    items.due_date en `timestamp without time zone` (le DDL v1 était
+    TIMESTAMP). Décision pure : type courant (information_schema) → ALTER
+    one-shot, ou None (déjà correct / colonne absente)."""
+    if data_type == "timestamp without time zone":
+        return ("ALTER TABLE items ALTER COLUMN due_date TYPE TIMESTAMPTZ "
+                "USING due_date AT TIME ZONE 'UTC'")
+    return None
 
 
 async def _ensure_columns() -> None:
@@ -158,6 +169,20 @@ async def _ensure_columns() -> None:
                         f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
         except Exception:
             pass  # column already exists (sqlite has no IF NOT EXISTS)
+
+    if _is_postgres():
+        # One-shot C2.10 (A4) : ADD COLUMN IF NOT EXISTS ne change pas le
+        # type d'une colonne existante — les bases migrées v1 gardent un
+        # TIMESTAMP sans TZ. Idempotent par nature : l'ALTER change le type
+        # lu ci-dessous, donc un 2e run est un no-op (pas de registre).
+        async with engine.begin() as conn:
+            row = (await conn.execute(text(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_name = 'items' AND column_name = 'due_date'"
+            ))).first()
+            alter = _due_date_timestamptz_sql(row[0] if row else None)
+            if alter is not None:
+                await conn.execute(text(alter))
 
 
 async def _create_schema() -> None:

@@ -84,8 +84,8 @@ class ChecklistIn(BaseModel):
 
     @field_validator("title", "folder")
     @classmethod
-    def _check_null(cls, v: str) -> str:
-        return _no_null_bytes(v)
+    def _check_null(cls, v: str | None) -> str | None:
+        return v if v is None else _no_null_bytes(v)
 
 
 class ChecklistOut(BaseModel):
@@ -157,6 +157,10 @@ class ItemsBulkIn(BaseModel):
 
 
 class SyncEvent(BaseModel):
+    # Structure only: the field checks (null bytes, lengths, recurrence
+    # enum) are applied PER EVENT inside the sync loop via
+    # validate_sync_event — request-level validation would 400 the whole
+    # batch and poison the client's outbox forever (audit C1.1b).
     kind: str = Field(
         pattern="^(item.upsert|item.delete|list.rename|list.create|list.delete)$")
     id: UUID
@@ -172,6 +176,28 @@ class SyncEvent(BaseModel):
     recurrence: str | None = None
     due_date: datetime | None = None
     updated_at: datetime
+
+
+def validate_sync_event(event: SyncEvent) -> None:
+    """Mêmes contrôles que ItemIn/ChecklistIn sur un event de sync
+    (interdiction \x00, longueurs, enum recurrence). Lève ValueError :
+    l'appelant (sync) le bascule dans `rejected` — un event malformé ne
+    réussira jamais → rejet, pas de retry."""
+    for field, value, max_len in (
+            ("label", event.label, 2000),
+            ("notes", event.notes, None),
+            ("color", event.color, 16),
+            ("folder", event.folder, 100),
+    ):
+        if value is None:
+            continue
+        if "\x00" in value:
+            raise ValueError(f"{field}: null bytes are not allowed")
+        if max_len is not None and len(value) > max_len:
+            raise ValueError(f"{field}: at most {max_len} characters")
+    if event.recurrence is not None and event.recurrence not in (
+            "none", "daily", "weekly", "monthly"):
+        raise ValueError("recurrence: must be none, daily, weekly or monthly")
 
 
 class SyncIn(BaseModel):

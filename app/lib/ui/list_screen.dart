@@ -129,10 +129,10 @@ class _ListScreenState extends State<ListScreen> {
     final scheme = Theme.of(context).colorScheme;
     final index = _lists.indexWhere((l) => l.id == _listId);
     final list = index >= 0 ? _lists[index] : null;
+    // C2.3 : couleur invalide (ex. "#zz") → fallback, pas de crash
+    // (comme home_screen, via parseColor/int.tryParse).
     final titleStyle = TextStyle(
-        color: list?.color == null
-            ? scheme.onSurface
-            : Color(int.parse(list!.color!.replaceFirst("#", "0xFF"))),
+        color: parseColor(list?.color) ?? scheme.onSurface,
         fontWeight: FontWeight.w600);
     // Le sélecteur ◀ ▾ ▶ n'apparaît qu'à partir de 2 listes actives.
     if (_lists.length < 2) {
