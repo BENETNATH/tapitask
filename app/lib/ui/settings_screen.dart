@@ -190,10 +190,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ---- Mises à jour (spec §B) ----
 
-  // C1.5 : état « en cours » — la row est désactivée pendant le check, le
-  // bouton du dialog pendant le téléchargement (pas de clics multiples).
+  // C1.5 : la row est désactivée pendant le check. L'état du téléchargement
+  // est détenu par UpdateDialog lui-même (1.2 prod3 — source unique).
   bool _checkingUpdates = false;
-  bool _updating = false;
 
   Future<void> _showUpdates() async {
     final s = widget.state;
@@ -212,28 +211,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (context) => UpdateDialog(
         info: info,
-        updating: _updating,
         // Le bouton n'existe que si une MAJ client est dispo.
         onUpdate: info.clientAvailable
             ? () async {
-                if (_updating) return;
-                setState(() => _updating = true);
-                try {
-                  switch (defaultTargetPlatform) {
-                    case TargetPlatform.windows:
-                      await runSelfUpdate(info);
-                    case TargetPlatform.android:
-                      await installApk(info);
-                    default:
-                      break;
-                  }
-                } catch (e) {
-                  // Spec §B.5 : échec du téléchargement/dépatch → message
-                  // d'erreur (l'ancienne version reste intacte).
-                  if (!mounted) return;
-                  await _showInfo(S.updateError, '$e');
-                } finally {
-                  if (mounted) setState(() => _updating = false);
+                switch (defaultTargetPlatform) {
+                  case TargetPlatform.windows:
+                    await runSelfUpdate(info);
+                  case TargetPlatform.android:
+                    await installApk(info);
+                  default:
+                    break;
                 }
               }
             : null,
@@ -581,6 +568,9 @@ class _EmailDialogState extends State<_EmailDialog> {
   final _totp = TextEditingController();
   final _code = TextEditingController();
   String? _error;
+  // 3.2 (prod3) : action en cours — bouton désactivé, pas de relance
+  // pendant le timeout réseau.
+  bool _busy = false;
 
   @override
   void dispose() {
@@ -592,20 +582,29 @@ class _EmailDialogState extends State<_EmailDialog> {
   }
 
   Future<void> _submit() async {
+    if (_busy) return;
     if (widget.pending) {
       final code = _code.text.trim();
       if (code.isEmpty) return;
+      _busy = true;
       try {
         await widget.state.api.verifyEmail(code);
         await widget.state.reloadProfile();
         if (mounted) Navigator.pop(context);
       } on ApiException catch (e) {
         _error = e.status == 404 ? S.invalidCode : S.loginFailed(e);
+      } catch (e) {
+        // 3.2 (prod3) : hors-ligne / timeout — message visible au lieu
+        // d'une exception non gérée.
+        _error = S.loginFailed(e);
+      } finally {
+        _busy = false;
       }
     } else {
       final email = _email.text.trim();
       final code = _totp.text.trim();
       if (email.isEmpty || _password.text.isEmpty) return;
+      _busy = true;
       try {
         await widget.state.api.changeEmail(
             email, _password.text,
@@ -619,6 +618,10 @@ class _EmailDialogState extends State<_EmailDialog> {
           503 => S.emailVerifyUnavailable,
           _ => S.loginFailed(e),
         };
+      } catch (e) {
+        _error = S.loginFailed(e);
+      } finally {
+        _busy = false;
       }
     }
     if (mounted) setState(() {});
@@ -673,7 +676,8 @@ class _EmailDialogState extends State<_EmailDialog> {
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context), child: Text(S.cancel)),
-        FilledButton(onPressed: _submit, child: Text(S.ok)),
+        FilledButton(
+            onPressed: _busy ? null : _submit, child: Text(S.ok)),
       ],
     );
   }

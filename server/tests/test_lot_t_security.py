@@ -141,9 +141,11 @@ async def test_change_email_password_checked_before_totp(client, monkeypatch):
 
     tokens = await register(client, "t3-a@example.com")
     h = auth_headers(tokens)
-    secret = (await client.post("/auth/totp/setup", headers=h)).json()["secret"]
+    setup = (await client.post("/auth/totp/setup", headers=h)).json()
+    secret = setup["secret"]
     code = pyotp.TOTP(secret).now()
-    assert (await client.post("/auth/totp/enable", json={"code": code},
+    assert (await client.post("/auth/totp/enable",
+                              json={"code": code, "token": setup["token"]},
                               headers=h)).status_code == 204
     calls = []
     monkeypatch.setattr(auth_router, "verify_totp",

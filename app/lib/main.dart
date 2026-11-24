@@ -114,6 +114,11 @@ class ChecklistsApp extends StatefulWidget {
 
 class _ChecklistsAppState extends State<ChecklistsApp>
     with WidgetsBindingObserver {
+  // 1.1 (prod3) : le context de ce state est AU-DESSUS du MaterialApp →
+  // showDialog(context: context) crashe (pas de Navigator). Le key du
+  // Navigator de MaterialApp est la source des dialogues boot.
+  final _navigatorKey = GlobalKey<NavigatorState>();
+
   @override
   void initState() {
     super.initState();
@@ -136,8 +141,25 @@ class _ChecklistsAppState extends State<ChecklistsApp>
     appState.pendingBootUpdate = null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      showDialog<void>(
-        context: context,
+      final navContext = _navigatorKey.currentContext;
+      if (navContext == null) {
+        // Navigator pas encore monté (frame 0) : on re-planifie.
+        WidgetsBinding.instance.addPostFrameCallback((_) =>
+            _maybeShowBootUpdateWith(info));
+        return;
+      }
+      _showBootDialog(navContext, info);
+    });
+  }
+
+  void _maybeShowBootUpdateWith(UpdateInfo info) {
+    appState.pendingBootUpdate = info;
+    _maybeShowBootUpdate();
+  }
+
+  void _showBootDialog(BuildContext navContext, UpdateInfo info) {
+    showDialog<void>(
+      context: navContext,
         barrierDismissible: false,
         builder: (context) => UpdateDialog(
           info: info,
@@ -153,8 +175,7 @@ class _ChecklistsAppState extends State<ChecklistsApp>
             }
           },
         ),
-      );
-    });
+    );
   }
 
   @override
@@ -192,6 +213,7 @@ class _ChecklistsAppState extends State<ChecklistsApp>
   Widget build(BuildContext context) {
     final lang = appState.settings["lang"] as String? ?? "fr";
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       title: "Tapitask",
       debugShowCheckedModeBanner: false,
       // Material widgets (date/time pickers, dialogs) follow the synced

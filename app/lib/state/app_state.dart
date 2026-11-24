@@ -100,6 +100,8 @@ class AppState extends ChangeNotifier {
     await _loadDefaultList();
     sync = SyncService(
         api: api, db: db, onChanged: notifyListeners, onSynced: _refreshWidget);
+    // 1.4 (prod3) : session expirée (refresh 401) → état déconnecté.
+    api.onSessionExpired = handleSessionExpired;
     // C1.6 : les réglages en cache sont TOUJOURS appliqués au démarrage
     // (et non seulement en mode lightweight) : theme/lang/folders/…
     // survivent à un démarrage hors-ligne.
@@ -202,7 +204,12 @@ class AppState extends ChangeNotifier {
 
   /// (Re)load the user profile: admin flag + per-user feature settings.
   /// Called at startup and after every login.
-  Future<void> reloadProfile() async {
+  ///
+  /// 1.4 (prod3) : [required] = l'échec est FATAL pour l'appelant —
+  /// rethrow au lieu d'être avalé. Au login, un profil non chargé laisse
+  /// `email` sur le compte PRÉCÉDENT → onAccountSwitch() ne purgerait pas
+  /// → données du compte A poussées dans le sync du compte B.
+  Future<void> reloadProfile({bool required = false}) async {
     if (api.isConfigured && api.accessToken != null) {
       try {
         final me = await api.get("/auth/me");
@@ -216,13 +223,31 @@ class AppState extends ChangeNotifier {
         }
         S.setLocale(settings["lang"] as String?);
         await _cacheSettings();
-      } catch (_) {}
+      } catch (e) {
+        if (required) rethrow;
+        debugPrint("tapitask: reloadProfile failed: $e");
+      }
+    } else if (required) {
+      throw StateError(
+          "session non prête (serveur non configuré ou token absent)");
     }
     // Apply the synced parameters (polling delay).
     final poll = settings["poll_interval"];
     if (poll is int && poll != sync.pollSeconds) {
       sync.applyPollInterval(poll);
     }
+    notifyListeners();
+  }
+
+  /// 1.4 (prod3) : session définitivement expirée (refresh 401, branché par
+  /// [init] sur [ApiClient.onSessionExpired]) — retour à l'état déconnecté :
+  /// profil effacé + WebSocket fermé.
+  void handleSessionExpired() {
+    email = null;
+    pendingEmail = null;
+    isAdmin = false;
+    totp = false;
+    sync.stopRealtime();
     notifyListeners();
   }
 
@@ -303,9 +328,12 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     if (api.isConfigured && api.accessToken != null) {
       sync.syncSoon();
-      await _refreshWidget();
-      notifyListeners();
     }
+    // 2.2 (prod3) : le widget suit le renommage en LOCAL — avant le fix,
+    // _refreshWidget était DANS le if : hors-ligne, une liste épinglée
+    // renommée ne mettait pas le widget à jour.
+    await _refreshWidget();
+    notifyListeners();
   }
 
   Future<void> setListColor(String id, String? color) async {
@@ -418,9 +446,10 @@ class AppState extends ChangeNotifier {
 
   Future<void> saveSettings() async {
     S.setLocale(settings["lang"] as String?);
-    try {
-      await api.patch("/auth/me", {"settings": settings});
-    } catch (_) {}
+    // 1.3 (prod3) : d'abord local (cache + notification + widget), puis le
+    // PATCH serveur en fond — hors-ligne, plus de gel de 15 s et le
+    // réglage n'est pas perdu ; l'échec réseau est silencieux (le réglage
+    // est déjà local, il partira au prochain sync).
     await _cacheSettings();
     notifyListeners();
     // W1 : les surfaces compactes (widget, flyout) suivent IMMÉDIATEMENT
@@ -428,6 +457,8 @@ class AppState extends ChangeNotifier {
     // mutations d'items (bug W0 : le toggle hide_done n'avait aucun effet).
     await _refreshWidget();
     onSettingsChanged?.call();
+    unawaited(api.patch("/auth/me", {"settings": settings})
+        .catchError((Object _) => <String, dynamic>{}));
   }
 
   static const _cachedSettingsPref = "cached_settings";

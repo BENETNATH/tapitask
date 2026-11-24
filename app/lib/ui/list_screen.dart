@@ -99,6 +99,7 @@ class _ListScreenState extends State<ListScreen> {
     _itemsSub?.cancel();
     widget.state.removeListener(_onChanged);
     _addFocus.dispose();
+    _quickAdd.dispose(); // 3.2 (prod3) : jamais disposé.
     super.dispose();
   }
 
@@ -706,10 +707,11 @@ class _ListScreenState extends State<ListScreen> {
         crossAxisAlignment: CrossAxisAlignment.start, children: parts);
   }
 
+  // 3.5 (prod3) : clés i18n existantes (S.daily/weekly/monthly).
   String _recurrenceLabel(String r) => switch (r) {
-        "daily" => "quotidien",
-        "weekly" => "hebdomadaire",
-        "monthly" => "mensuel",
+        "daily" => S.daily,
+        "weekly" => S.weekly,
+        "monthly" => S.monthly,
         _ => "",
       };
 

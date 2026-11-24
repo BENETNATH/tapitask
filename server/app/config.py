@@ -3,6 +3,12 @@ from __future__ import annotations
 import os
 
 
+def _parse_csv(value: str | None) -> list[str]:
+    """MD-6 (prod3) : parsing CSV honnête — espaces stripés, vides écartés
+    ("" → [], pas [""])."""
+    return [h.strip() for h in (value or "").split(",") if h.strip()]
+
+
 class Settings:
     DATABASE_URL: str = os.environ.get(
         "DATABASE_URL",
@@ -37,7 +43,9 @@ class Settings:
     # peer is one of these is X-Forwarded-For trusted for rate-limit keys;
     # otherwise the rate-limit/lockout key falls back to the direct peer IP so
     # a client cannot rotate a forged XFF header to defeat brute-force limits.
-    TRUSTED_PROXIES: list[str] = os.environ.get("TRUSTED_PROXIES", "").split(",")
+    # MD-6 (prod3) : strip + vides écartés (avant le fix : "a, b" → ["a", " b"]
+    # jamais égal au peer ; "" → [""]).
+    TRUSTED_PROXIES: list[str] = _parse_csv(os.environ.get("TRUSTED_PROXIES", ""))
 
     # --- Webhooks ---
     WEBHOOK_TIMEOUT: int = int(os.environ.get("WEBHOOK_TIMEOUT", "5"))

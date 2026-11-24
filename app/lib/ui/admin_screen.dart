@@ -30,6 +30,9 @@ class _AdminScreenState extends State<AdminScreen> {
       setState(() => _users = users);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+    } catch (e) {
+      // 3.2 (prod3) : hors-ligne / timeout — message visible.
+      setState(() => _error = '$e');
     }
   }
 
@@ -75,6 +78,8 @@ class _AdminScreenState extends State<AdminScreen> {
                 await _load();
               } on ApiException catch (e) {
                 setState(() => _error = e.message);
+              } catch (e) {
+                setState(() => _error = '$e');
               }
             },
             child: Text(S.create),
@@ -103,6 +108,8 @@ class _AdminScreenState extends State<AdminScreen> {
                 if (context.mounted) Navigator.pop(context);
               } on ApiException catch (e) {
                 setState(() => _error = e.message);
+              } catch (e) {
+                setState(() => _error = '$e');
               }
             },
             child: Text(S.apply),
@@ -152,6 +159,8 @@ class _AdminScreenState extends State<AdminScreen> {
                         await _load();
                       } on ApiException catch (e) {
                         setState(() => _error = e.message);
+                      } catch (e) {
+                        setState(() => _error = '$e');
                       }
                     },
                     itemBuilder: (context) => [

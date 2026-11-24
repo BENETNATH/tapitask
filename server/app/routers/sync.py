@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -13,13 +13,28 @@ from ..deps import Principal, accessible_list, rate_limit_principal, require_wri
 from ..events import record_change, notify_list
 from ..models import Checklist, Item, ListMember, Role, utcnow
 from ..schemas import SyncChange, SyncIn, SyncOut, validate_sync_event
-from .lists import _spawn_next
+from .lists import _spawn_next, _validate_parent
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 
 
-def _naive(dt: datetime) -> datetime:
-    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+def _utc(dt: datetime) -> datetime:
+    """MD-1 (prod3) : normalisation UTC — un datetimes entrant AWARE est
+    converti en UTC avant stockage/comparaison (un +02:00 ne doit plus
+    décaler l'horodatage de 2 h) ; un NAÏF est supposé UTC (comme les
+    valeurs stockées issues de utcnow() en texte SQLite). Double backend :
+    SQLite garde le texte naïf-UTC, Postgres TIMESTAMPTZ accepte l'aware."""
+    return dt.astimezone(timezone.utc) if dt.tzinfo is not None else dt
+
+
+def _utc_naive(dt: datetime) -> datetime:
+    """Domaine de comparaison Python (contrat MD-1) : UTC puis tz retirée.
+    SQLite relit des datetimes NAÏFS (le format de stockage ne garde pas
+    l'offset) et Postgres des AWARE — seuls des naïfs-UTC des deux côtés
+    sont comparables (sinon TypeError). Usage : uniquement des
+    comparaisons en mémoire ; les écritures/binds SQL passent par _utc."""
+    dt = _utc(dt)
+    return dt.replace(tzinfo=None)
 
 
 # Un horodatage client plus de 5 s dans le futur est une horloge cassée,
@@ -29,8 +44,8 @@ SYNC_CLOCK_TOLERANCE = timedelta(seconds=5)
 
 
 def _clamp_client_dt(dt: datetime) -> datetime:
-    dt = _naive(dt)
-    now = _naive(utcnow())
+    dt = _utc_naive(dt)
+    now = _utc_naive(utcnow())
     # Symétrique (audit lot T) : un horodatage très antérieur au serveur est
     # aussi une horloge cassée — sans clamp, un item scellé dans le passé
     # resterait invisible au delta des autres clients.
@@ -82,7 +97,7 @@ async def sync(
     if data.since is not None:
         # Delta filter pushed into SQL (indexed updated_at comparison) —
         # no more loading every accessible list to filter in Python.
-        since = _naive(data.since)
+        since = _utc(data.since)
         result = await session.execute(
             select(Checklist)
             .where(Checklist.id.in_(accessible), Checklist.updated_at > since)
@@ -293,14 +308,19 @@ async def _apply_item_upsert(session: AsyncSession, event, principal, pending_no
             await accessible_list(
                 item.list_id, principal, session, min_role=Role.editor)
         if item.updated_at is not None and (
-            _naive(item.updated_at) >= stamp
+            _utc_naive(item.updated_at) >= _utc_naive(stamp)
             # Horloge client trop en arrière : événement périmé — le clamp
             # symétrique (lot T) ne doit pas le faire gagner sur l'état
             # existant (LWW, spec §3.5).
-            or _naive(event.updated_at) < _naive(utcnow()) - SYNC_CLOCK_TOLERANCE
+            or _utc_naive(event.updated_at) < _utc_naive(utcnow()) - SYNC_CLOCK_TOLERANCE
         ):
             return
     newly_done = bool(event.done) and not bool(item.done)
+    # 2.3 (prod3) : le parent est validé comme dans les routes REST
+    # (absent / autre liste / supprimé / soi-même / sous-tâche → 400 →
+    # l'événement passe dans `rejected`).
+    await _validate_parent(session, event.list_id, event.parent_id,
+                           exclude_item_id=event.id, missing_status=400)
     item.list_id = event.list_id
     # Label : jamais vidé (NOT NULL) — un label absent/vide garde l'ancien.
     if event.label is not None and event.label.strip():
@@ -332,8 +352,8 @@ async def _apply_item_delete(session: AsyncSession, event, principal, pending_no
     stamp = _clamp_client_dt(event.updated_at)
     result = await session.execute(select(Item).where(Item.id == event.id))
     item = result.scalar_one_or_none()
-    if item is None or _naive(item.updated_at) >= stamp \
-            or _naive(event.updated_at) < _naive(utcnow()) - SYNC_CLOCK_TOLERANCE:
+    if item is None or _utc_naive(item.updated_at) >= _utc_naive(stamp) \
+            or _utc_naive(event.updated_at) < _utc_naive(utcnow()) - SYNC_CLOCK_TOLERANCE:
         return
     # The actor must have editor access to the list the item actually lives in
     # (not just the event's target list), otherwise a forged item.delete with a

@@ -133,6 +133,8 @@ MIGRATIONS = [
     ("items", "notes", "TEXT", "TEXT"),
     ("items", "assignee_id", "VARCHAR(36)", "UUID"),
     ("items", "recurrence_source_id", "VARCHAR(36)", "UUID"),
+    # MD-3 (prod3) : émission du code de vérification email (expiration 24 h).
+    ("users", "email_token_created_at", "TIMESTAMP", "TIMESTAMPTZ"),
 ]
 
 

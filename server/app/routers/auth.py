@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -58,6 +58,7 @@ async def _send_change_email(to: str, token: str) -> None:
     )
 from ..security import (
     create_access_token,
+    create_totp_setup_token,
     new_email_token,
     new_totp_secret,
     totp_uri,
@@ -74,6 +75,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 _login_limiter = RateLimiter(settings.RATE_LIMIT_PER_MINUTE)
 _register_limiter = RateLimiter(5)
 _change_email_limiter = RateLimiter(settings.RATE_LIMIT_PER_MINUTE)
+# MD-3 (prod3) : /verify-email est borné (5/min par clé client).
+_verify_email_limiter = RateLimiter(5)
 # Failed-login lockout: {key: (count, first_failure_monotonic)}.
 # Entries expire after 15 minutes so an account is never locked forever
 # and the dict cannot grow unbounded.
@@ -125,6 +128,7 @@ async def register(
         # grants nothing — the caller does not own this account.
         if settings.SMTP_ENABLED:
             existing.email_token = new_email_token()
+            existing.email_token_created_at = utcnow()
             await session.commit()
             asyncio.create_task(_send_verification_email(existing.email, existing.email_token))
             raise HTTPException(status.HTTP_202_ACCEPTED, _REGISTER_UNIFORM_MESSAGE)
@@ -134,6 +138,7 @@ async def register(
     if settings.SMTP_ENABLED:
         user.is_email_verified = False
         user.email_token = new_email_token()
+        user.email_token_created_at = utcnow()
     session.add(user)
     try:
         await session.commit()
@@ -161,20 +166,29 @@ async def login(
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed attempts, try later")
     result = await session.execute(select(User).where(User.email == data.email.lower()))
     user = result.scalar_one_or_none()
-    if user is not None and not user.is_active:
+    # 1.6 (prod3) : verify_password D'ABORD, pour tout compte connu —
+    # un mdp faux (et un compte inconnu) donne le MÊME 401 uniforme et
+    # compte dans le lockout. Avant le fix, l'ordre is_active → 428 →
+    # TOTP → mdp permettait l'énumération d'état de compte et un
+    # contournement du lockout (les échecs TOTAUX ne passaient pas par
+    # _register_failed_login).
+    if user is None or not verify_password(user.password_hash, data.password):
+        _register_failed_login(key)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+    if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Account disabled")
-    if user is not None and settings.SMTP_ENABLED and not user.is_email_verified:
+    if settings.SMTP_ENABLED and not user.is_email_verified:
         raise HTTPException(
             status.HTTP_428_PRECONDITION_REQUIRED,
             "Email non vérifié — utilisez « Vérifier mon email » avec le code reçu.",
         )
-    if user is not None and user.totp_secret and not (
+    if user.totp_secret and not (
         data.totp_code and verify_totp(user.totp_secret, data.totp_code)
     ):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Code 2FA requis ou invalide")
-    if user is None or not verify_password(user.password_hash, data.password):
+        # L'échec TOTP est compté dans le lockout (avant le fix, il ne
+        # l'était pas — contournement du lockout par TOTP).
         _register_failed_login(key)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Code 2FA requis ou invalide")
     _failed_logins.pop(key, None)
     return await _issue_tokens(session, user)
 
@@ -237,11 +251,32 @@ async def update_settings(
 
 
 @router.post("/verify-email", status_code=status.HTTP_204_NO_CONTENT)
-async def verify_email(data: VerifyEmailIn, session: AsyncSession = Depends(get_session)):
+async def verify_email(
+    request: Request,
+    data: VerifyEmailIn,
+    session: AsyncSession = Depends(get_session),
+):
+    await _verify_email_limiter.check(f"verify:{client_key(request)}")
     result = await session.execute(select(User).where(User.email_token == data.token))
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Code de vérification invalide")
+    # MD-3 (prod3) : le code expire 24 h après émission. Un NULL
+    # email_token_created_at (comptes créés avant la migration / tests)
+    # reste valable — le token est court et aléatoire, l'expiration
+    # n'ajoute que de la robustesse.
+    if user.email_token_created_at is not None:
+        # Relecture SQLite = naïf-UTC (le format de stockage ne garde pas
+        # l'offset) : supposé UTC, comme partout (contrat MD-1).
+        created = user.email_token_created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - created
+        if age > timedelta(hours=24):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Code expiré — utilisez « Renvoyer le code de vérification ».",
+            )
     if user.pending_email is not None:
         # Collision (C1.1e) : l'email attendu est déjà pris par UN AUTRE
         # compte (email actif OU en attente) → rien n'est appliqué, 409,
@@ -280,6 +315,7 @@ async def resend_verification(
     if user is None or (user.is_email_verified and user.pending_email is None):
         return None
     user.email_token = new_email_token()
+    user.email_token_created_at = utcnow()
     await session.commit()
     asyncio.create_task(
         _send_verification_email(user.pending_email or user.email, user.email_token))
@@ -320,6 +356,7 @@ async def change_email(
             "Vérification email indisponible (SMTP non configuré)")
     user.pending_email = new_email
     user.email_token = new_email_token()
+    user.email_token_created_at = utcnow()
     await session.commit()
     asyncio.create_task(_send_change_email(new_email, user.email_token))
     return None
@@ -335,10 +372,13 @@ async def totp_setup(
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
-    secret = user.totp_secret or new_totp_secret()
-    user.totp_secret = secret
-    await session.commit()
-    return TotpSetupOut(secret=secret, uri=totp_uri(secret, user.email))
+    # MD-2 (prod3) : le secret n'est PLUS persisté au setup — sans enable,
+    # le compte ne reste pas verrouillé par un secret jamais activé.
+    # Le secret voyage dans un token court signé (~10 min) ; il n'est
+    # persisté que par /totp/enable.
+    secret = new_totp_secret()
+    token = create_totp_setup_token(principal.user_id, secret)
+    return TotpSetupOut(secret=secret, uri=totp_uri(secret, user.email), token=token)
 
 
 @router.post("/totp/enable", status_code=status.HTTP_204_NO_CONTENT)
@@ -349,15 +389,35 @@ async def totp_enable(
 ):
     result = await session.execute(select(User).where(User.id == principal.user_id))
     user = result.scalar_one_or_none()
-    if user is None or not user.totp_secret:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "TOTP non initialisé (appelez /totp/setup)")
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
     if data.disable:
+        # MD-2 (prod3) : disable exige un code TOTP VALIDE contre le secret
+        # courant (pas le mdp — l'a l'authenticator à la main pour
+        # désactiver).
+        if not user.totp_secret or not (
+            data.code and verify_totp(user.totp_secret, data.code)
+        ):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Code invalide")
         user.totp_secret = None
         await session.commit()
         await hub.notify_users([user.id], {"kind": "totp.disabled"})
         return None
-    if not verify_totp(user.totp_secret, data.code):
+    # enable : token de setup valide (expiré ~10 min, émis pour CE user) +
+    # code TOTP valide contre le secret du token → persister le secret.
+    try:
+        payload = decode_token(data.token or "", "totp_setup")
+    except Exception:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Token de setup invalide ou expiré")
+    if payload.get("sub") != str(principal.user_id) or not payload.get("secret"):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Token de setup invalide ou expiré")
+    secret = payload["secret"]
+    if not (data.code and verify_totp(secret, data.code)):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Code invalide")
+    user.totp_secret = secret
+    await session.commit()
     await hub.notify_users([user.id], {"kind": "totp.enabled"})
     return None
 

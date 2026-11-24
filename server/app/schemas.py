@@ -70,11 +70,15 @@ class VerifyEmailIn(BaseModel):
 class TotpSetupOut(BaseModel):
     secret: str
     uri: str
+    # MD-2 (prod3) : token court signé (~10 min) portant le secret en attente.
+    token: str
 
 
 class TotpEnableIn(BaseModel):
     code: str
     disable: bool = False
+    # MD-2 (prod3) : requis pour activer (pas pour désactiver).
+    token: str | None = None
 
 
 class ChecklistIn(BaseModel):

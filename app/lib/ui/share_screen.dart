@@ -37,6 +37,10 @@ class _ShareScreenState extends State<ShareScreen> {
       setState(() => _members = members);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+    } catch (e) {
+      // 3.2 (prod3) : hors-ligne / timeout / JSON corrompu — un message
+      // visible au lieu d'une exception non gérée.
+      setState(() => _error = '$e');
     }
   }
 
@@ -50,6 +54,8 @@ class _ShareScreenState extends State<ShareScreen> {
       setState(() => _inviteCode = result["invite_id"]);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+    } catch (e) {
+      setState(() => _error = '$e');
     } finally {
       setState(() => _busy = false);
     }
@@ -67,6 +73,8 @@ class _ShareScreenState extends State<ShareScreen> {
       await _loadMembers();
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+    } catch (e) {
+      setState(() => _error = '$e');
     } finally {
       setState(() => _busy = false);
     }
@@ -79,6 +87,8 @@ class _ShareScreenState extends State<ShareScreen> {
       await _loadMembers();
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+    } catch (e) {
+      setState(() => _error = '$e');
     }
   }
 
@@ -89,7 +99,16 @@ class _ShareScreenState extends State<ShareScreen> {
       await _loadMembers();
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+    } catch (e) {
+      setState(() => _error = '$e');
     }
+  }
+
+  @override
+  // 3.2 (prod3) : contrôleur jamais disposé.
+  void dispose() {
+    _email.dispose();
+    super.dispose();
   }
 
   @override

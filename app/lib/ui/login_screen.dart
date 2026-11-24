@@ -67,8 +67,8 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             const SizedBox(height: 16),
             FilledButton(
-              onPressed: _submit,
-              child: Text(_register ? S.createAccount : "Se connecter"),
+              onPressed: () async => _submit(),
+              child: Text(_register ? S.createAccount : S.login),
             ),
             TextButton(
               onPressed: () => setState(() => _register = !_register),
@@ -125,7 +125,10 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!await _applyServerUrl()) return;
     try {
       if (api.accessToken == null || api.accessToken!.isEmpty) {
-        await _submit(silent: true);
+        // 1.4 (prod3) : sans session le POST part sans token → s'arrêter si
+        // le submit échoue (l'erreur est déjà affichée par _submit).
+        final ok = await _submit(silent: true);
+        if (!ok) return;
       }
       await api.post("/lists/invites/${code.trim()}/accept", {});
       await widget.state.sync.fullSync();
@@ -203,9 +206,13 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Future<void> _submit({bool silent = false}) async {
+  /// 1.4 (prod3) : renvoie `true` si la session est ouverte et le profil
+  /// chargé. `reloadProfile(required: true)` : un profil non chargé laisse
+  /// `email` sur le compte PRÉCÉDENT → pas de purge → fuite des données A
+  /// dans le sync B. Échec → erreur affichée, ni purge ni fullSync.
+  Future<bool> _submit({bool silent = false}) async {
     final api = widget.state.api;
-    if (!await _applyServerUrl()) return;
+    if (!await _applyServerUrl()) return false;
     try {
       if (_register) {
         await api.register(_email.text.trim(), _password.text);
@@ -217,17 +224,17 @@ class _LoginScreenState extends State<LoginScreen> {
       // C1.7 (A1) : register 202 — on reste sur l'écran, pas de navigation,
       // pas de fullSync, aucun token persisté.
       setState(() => _error = S.emailVerificationSent);
-      return;
+      return false;
     } catch (e) {
       setState(() => _error = S.loginFailed(e));
-      return;
+      return false;
     }
     await api.persist();
     try {
       // Le profil d'abord (C2.8 : c'est lui qui donne l'email du compte
       // pour détecter un changement de compte), puis purge éventuelle des
       // données locales du précédent, PUIS le pull.
-      await widget.state.reloadProfile();
+      await widget.state.reloadProfile(required: true);
       await widget.state.onAccountSwitch();
       // Fresh login: pull everything, start realtime, reload the profile
       // (admin flag + feature settings) instead of waiting for a restart.
@@ -237,6 +244,18 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted && !silent) Navigator.pushReplacementNamed(context, "/home");
     } catch (e) {
       setState(() => _error = S.loginFailed(e));
+      return false;
     }
+    return true;
+  }
+
+  @override
+  // 3.2 (prod3) : contrôleurs jamais disposés.
+  void dispose() {
+    _email.dispose();
+    _password.dispose();
+    _totp.dispose();
+    _server.dispose();
+    super.dispose();
   }
 }

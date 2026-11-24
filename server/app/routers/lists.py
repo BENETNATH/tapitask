@@ -34,6 +34,32 @@ router = APIRouter(prefix="/lists", tags=["lists"])
 _in_flight_webhooks: set[asyncio.Task] = set()
 
 
+async def _validate_parent(session: AsyncSession, list_id: UUID,
+                           parent_id: UUID | None,
+                           exclude_item_id: UUID | None = None,
+                           missing_status: int = status.HTTP_404_NOT_FOUND) -> None:
+    """2.3 (prod3) : validation du parent PARTAGÉE (add_item, patch_item,
+    upsert sync). Le parent doit exister dans la MÊME liste, ne pas être
+    supprimé, ne pas être l'item lui-même (cycle) et ne pas être déjà une
+    sous-tâche (max 1 niveau).
+
+    [missing_status] : add_item garde son 404 historique (« comportement
+    inchangé », verrouillé par test_subtasks_two_levels_max) ; patch_item et
+    le chemin sync renvoient 400 (contrat « sinon 400 » de la spec)."""
+    if parent_id is None:
+        return
+    result = await session.execute(select(Item).where(Item.id == parent_id))
+    parent = result.scalar_one_or_none()
+    if parent is None or parent.list_id != list_id or parent.deleted:
+        raise HTTPException(missing_status, "Parent item not found")
+    if exclude_item_id is not None and parent_id == exclude_item_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "An item cannot be its own parent")
+    if parent.parent_id is not None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Sub-tasks are limited to one level")
+
+
 def _fire_and_forget(coro) -> None:
     t = asyncio.create_task(coro)
     _in_flight_webhooks.add(t)
@@ -152,12 +178,7 @@ async def add_item(
 ):
     await accessible_list(list_id, principal, session, min_role=Role.editor)
     # Sub-tasks: max 2 levels (a sub-task cannot have a sub-task).
-    if data.parent_id is not None:
-        parent = await session.get(Item, data.parent_id)
-        if parent is None or parent.list_id != list_id or parent.deleted:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Parent item not found")
-        if parent.parent_id is not None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Sub-tasks are limited to one level")
+    await _validate_parent(session, list_id, data.parent_id)
     item = await _add_single(session, list_id, data.label, principal.user_id,
                              parent_id=data.parent_id, recurrence=data.recurrence,
                              due_date=data.due_date, notes=data.notes,
@@ -216,9 +237,9 @@ async def patch_item(
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
     if data.updated_at is not None:
-        from .sync import _clamp_client_dt, _naive  # import local : sync.py importe déjà lists (L15)
+        from .sync import _clamp_client_dt, _utc_naive  # import local : sync.py importe déjà lists (L15)
         client_ts = _clamp_client_dt(data.updated_at)
-        if client_ts > _naive(item.updated_at):
+        if _utc_naive(client_ts) > _utc_naive(item.updated_at):
             item.updated_at = client_ts
     # Recurrence fires on the not-done -> done transition only: re-sending
     # done=true for an already completed item (client retry, agent calling
@@ -242,6 +263,10 @@ async def patch_item(
     if "recurrence" in data.model_fields_set:
         item.recurrence = data.recurrence or "none"
     if "parent_id" in data.model_fields_set:
+        # 2.3 (prod3) : le parent est validé comme partout ailleurs
+        # (autre liste / supprimé / soi-même / sous-tâche → 400).
+        await _validate_parent(session, list_id, data.parent_id,
+                               exclude_item_id=item_id, missing_status=400)
         item.parent_id = data.parent_id
     if item.updated_at is None:
         item.updated_at = utcnow()
@@ -310,7 +335,7 @@ async def rename_list(
     principal: Principal = Depends(require_write),
     session: AsyncSession = Depends(get_session),
 ):
-    checklist, _ = await accessible_list(list_id, principal, session, min_role=Role.editor)
+    checklist, member = await accessible_list(list_id, principal, session, min_role=Role.editor)
     checklist.title = data.title
     # null = vider (C1.2) : appliqué seulement si le champ est présent.
     if "color" in data.model_fields_set:
@@ -321,13 +346,17 @@ async def rename_list(
     await session.commit()
     await record_change(session, list_id=list_id, checklist_id=checklist.id, kind="list.rename")
     await notify_list(list_id, {"kind": "list.rename", "list_id": str(list_id), "title": data.title})
+    # 2.3 (prod3) : le rôle réel (owner pour le propriétaire, pas "member"
+    # en dur) et le folder (omis avant le fix).
+    role = "owner" if checklist.owner_id == principal.user_id else member.role.value
     return ChecklistOut(
         id=checklist.id,
         owner_id=checklist.owner_id,
         title=checklist.title,
         updated_at=checklist.updated_at,
-        role="member",
+        role=role,
         color=checklist.color,
+        folder=checklist.folder,
     )
 
 
@@ -470,10 +499,15 @@ async def list_summary(
     checklist = (await session.execute(
         select(Checklist).where(Checklist.id == list_id))).scalar_one()
     items = await unchecked_of(session, list_id)
+    # 2.3 (prod3) : total = TOUS les items non supprimés de la liste
+    # (avant le fix, total était == unchecked).
+    total = (await session.execute(
+        select(func.count()).where(Item.list_id == list_id, Item.deleted.is_(False))
+    )).scalar_one()
     return SummaryOut(
         list_id=list_id,
         title=checklist.title,
-        total=len(items),
+        total=total,
         unchecked=len(items),
         unchecked_labels=[i.label for i in items],
     )

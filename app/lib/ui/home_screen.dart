@@ -43,9 +43,14 @@ class _HomeScreenState extends State<HomeScreen> {
     ],
   };
 
+  late final Stream<List<LocalList>> _listsStream;
+
   @override
   void initState() {
     super.initState();
+    // 3.1 (prod3) : le flux watch() est créé une seule fois — recréé à
+    // chaque build, il faisait flasher l'état vide.
+    _listsStream = widget.state.db.watchVisibleLists();
     widget.state.addListener(_onChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeQuickAdd());
   }
@@ -59,6 +64,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     widget.state.removeListener(_onChanged);
+    _newList.dispose(); // 3.2 (prod3) : jamais disposé.
     super.dispose();
   }
 
@@ -380,7 +386,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         body: StreamBuilder<List<LocalList>>(
-          stream: state.db.watchVisibleLists(),
+          stream: _listsStream,
           initialData: const [],
           builder: (context, snapshot) {
             final lists = snapshot.data ?? [];

@@ -78,13 +78,18 @@ Future<UpdateInfo> checkForUpdates({
   required http.Client client,
   required ApiClient api,
   String? clientVersion,
+  // 2.5 (prod3) : timeout — sans, un réseau mort fait tourner le check
+  // indéfiniment (le boot attendait).
+  Duration checkTimeout = const Duration(seconds: 30),
 }) async {
   final current = clientVersion ?? appVersion;
 
   String? serverVersion;
   if (api.isConfigured) {
     try {
-      final r = await client.get(Uri.parse("${api.baseUrl}/version"));
+      final r = await client
+          .get(Uri.parse("${api.baseUrl}/version"))
+          .timeout(checkTimeout);
       if (r.statusCode == 200) {
         final v = (jsonDecode(r.body) as Map<String, dynamic>)["version"];
         if (v is String && v.trim().isNotEmpty) {
@@ -103,7 +108,7 @@ Future<UpdateInfo> checkForUpdates({
       );
 
   try {
-    final r = await client.get(Uri.parse(kLatestReleaseUrl));
+    final r = await client.get(Uri.parse(kLatestReleaseUrl)).timeout(checkTimeout);
     if (r.statusCode != 200) return neutral();
     final data = jsonDecode(r.body) as Map<String, dynamic>;
     var latest = (data["tag_name"] as String? ?? "").trim();
@@ -118,9 +123,12 @@ Future<UpdateInfo> checkForUpdates({
         if (a is! Map) continue;
         final name = a["name"] as String? ?? "";
         final url = a["browser_download_url"] as String? ?? "";
-        if (name.endsWith("-windows-x64.zip")) {
+        // 2.5 (prod3) : seuls les assets https sont retenus — le
+        // téléchargement (updaters) refuse tout autre schéma.
+        if (name.endsWith("-windows-x64.zip") && url.startsWith("https://")) {
           windowsUrl = url;
-        } else if (name.endsWith("-android.apk")) {
+        } else if (name.endsWith("-android.apk") &&
+            url.startsWith("https://")) {
           apkUrl = url;
         }
       }

@@ -18,9 +18,26 @@ Future<void> installApk(UpdateInfo info) async {
   if (apkUrl == null) {
     throw StateError("pas d'asset APK pour la MAJ");
   }
+  // 2.5 (prod3) : https uniquement — un http:// laisserait l'APK signer sur
+  // le fil.
+  if (!apkUrl.startsWith("https://")) {
+    throw StateError("URL de téléchargement non https : $apkUrl");
+  }
   final cache = await getTemporaryDirectory();
   final apk = File(p.join(cache.path, "tapitask-update.apk"));
-  final bytes = await http.readBytes(Uri.parse(apkUrl));
-  await apk.writeAsBytes(bytes);
+  // 2.5 : STREAM vers le fichier (plus de readBytes plein-charge en RAM) +
+  // timeout sur la phase de connexion.
+  final client = http.Client();
+  try {
+    final streamed = await client
+        .send(http.Request("GET", Uri.parse(apkUrl)))
+        .timeout(const Duration(seconds: 30));
+    if (streamed.statusCode != 200) {
+      throw StateError("téléchargement échoué : HTTP ${streamed.statusCode}");
+    }
+    await streamed.stream.pipe(apk.openWrite());
+  } finally {
+    client.close();
+  }
   await _updaterChannel.invokeMethod("installApk", {"path": apk.path});
 }

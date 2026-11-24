@@ -166,12 +166,20 @@ class SyncService {
     }
     if (listEvents.isNotEmpty) {
       await _postEvents(listEvents);
-      // All pushed lists leave the outbox: the server either applied them or
-      // reported them in `rejected` (deleted server-side, access lost) — in
-      // both cases retrying would block the outbox forever. A rejected list
-      // keeps existing locally; it simply stays local until re-shared.
+      // Les listes poussées quittent l'outbox : le serveur les a soit
+      // appliquées soit rapportées dans `rejected` (supprimée côté serveur,
+      // accès perdu) — dans les deux cas réessayer bloquerait l'outbox à
+      // jamais. Une liste rejetée reste locale, simplement locale.
+      // 2.2 (prod3) : ne nettoyer que si la liste n'a pas été modifiée
+      // PENDANT le POST (updatedAt courant <= updatedAt capturé) — sinon
+      // le renommage cocherait propre sans jamais être poussé.
       for (final list in dirtyLists) {
-        await db.clearListDirty(list.id);
+        final now = await (db.select(db.localLists)
+                ..where((l) => l.id.equals(list.id)))
+            .getSingleOrNull();
+        if (now == null || !now.updatedAt.isAfter(list.updatedAt)) {
+          await db.clearListDirty(list.id);
+        }
       }
     }
     // 2. Dirty items (never those of local-only lists)
@@ -200,13 +208,24 @@ class SyncService {
       // Rejected items leave the outbox (the server will never accept them).
       final rejectedIds =
           dirty.where((i) => rejected.contains(i.id)).map((i) => i.id).toList();
-      final acceptedIds =
-          dirty.where((i) => !rejected.contains(i.id)).map((i) => i.id).toList();
       if (rejectedIds.isNotEmpty) {
         await db.clearDirty(rejectedIds);
       }
-      if (acceptedIds.isNotEmpty) {
-        await db.clearDirty(acceptedIds);
+      // 2.2 (prod3) : une mutation locale PENDANT le POST /sync fait monter
+      // updatedAt → l'item ne doit PAS être marqué propre (le push n'a pas
+      // vu cette version). On ne nettoie que si updatedAt courant <=
+      // updatedAt capturé au départ (query par id).
+      final stillPushed = <String>[];
+      for (final item in dirty.where((i) => !rejected.contains(i.id))) {
+        final now = await (db.select(db.localItems)
+                ..where((i) => i.id.equals(item.id)))
+            .getSingleOrNull();
+        if (now == null || !now.updatedAt.isAfter(item.updatedAt)) {
+          stillPushed.add(item.id);
+        }
+      }
+      if (stillPushed.isNotEmpty) {
+        await db.clearDirty(stillPushed);
       }
     }
   }
@@ -264,19 +283,43 @@ class SyncService {
         ));
       }
     }
-    // Delta cursor: the newest change we actually applied, or the server
-    // clock on a first sync (even an empty one) so later syncs are deltas.
+    // 1.5 (prod3) : ancrer le curseur delta sur l'horloge SERVEUR, pas sur
+    // `newest`. Avec la tolérance d'horloge serveur (+5 s), un item poussé
+    // à server_now+4 s ferait sauter définitivement les items créés entre
+    // server_now et server_now+4 s. Le pull est idempotent (LWW) → reculer
+    // de 5 s est sans risque. `newest` ne sert que si `server_time` est
+    // absent de la réponse (fallback).
     final serverTime = DateTime.tryParse(result["server_time"] ?? "");
-    if (newest != null) {
-      await _saveLastSync(newest);
-    } else if (since == null && serverTime != null) {
+    if (serverTime != null) {
       await _saveLastSync(serverTime.subtract(const Duration(seconds: 5)));
+    } else if (newest != null) {
+      await _saveLastSync(newest);
     }
     onChanged?.call();
   }
 
+  /// 1.4 (prod3) : fermer le WebSocket sans reconnexion (session expirée) —
+  /// le canal est ré-ouvert au prochain listenRealtime() (post-login).
+  Future<void> stopRealtime() async {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    await _wsSub?.cancel();
+    _wsSub = null;
+    _ws?.sink.close();
+    _ws = null;
+  }
+
   Future<void> listenRealtime() async {
     if (_disposed || !api.isConfigured || api.accessToken == null) return;
+    // 1.4 (prod3) : fermer l'ancien canal AVANT d'en ouvrir un nouveau —
+    // sinon _ws/_wsSub sont écrasés (socket orpheline) et les reconnects
+    // s'empilent (doublons de _reconnectTimer).
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    await _wsSub?.cancel();
+    _wsSub = null;
+    _ws?.sink.close();
+    _ws = null;
     try {
       final wsUrl = api.baseUrl.replaceFirst("http", "ws");
       _ws = WebSocketChannel.connect(Uri.parse("$wsUrl/ws"));
@@ -290,7 +333,14 @@ class SyncService {
       _wsFailures = 0;
       _wsSub = _ws!.stream.listen(
         (message) async {
-          final data = jsonDecode(message as String) as Map<String, dynamic>;
+          Map<String, dynamic> data;
+          try {
+            // 1.4 (prod3) : un message corrompu ne doit pas tuer le
+            // listener (le WS resterait sourd).
+            data = jsonDecode(message as String) as Map<String, dynamic>;
+          } catch (_) {
+            return;
+          }
           if (data["kind"] == "ping") return;
           // Debounced: a burst of pushes (or our own echo) triggers
           // ONE pull instead of one per message.

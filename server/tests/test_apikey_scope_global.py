@@ -61,6 +61,9 @@ async def test_read_write_key_passes_mutation_routes(client):
     r = await client.post("/auth/totp/setup", headers=kh)
     assert r.status_code == 200, r.text
     secret = r.json()["secret"]
+    token = r.json()["token"]
     assert (await client.post(
-        "/auth/totp/enable", json={"code": pyotp.TOTP(secret).now()}, headers=kh)).status_code == 204
+        "/auth/totp/enable",
+        json={"code": pyotp.TOTP(secret).now(), "token": token},
+        headers=kh)).status_code == 204
     assert (await client.post("/lists", json={"title": "X"}, headers=kh)).status_code == 201

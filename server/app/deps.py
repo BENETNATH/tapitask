@@ -50,13 +50,30 @@ class RateLimiter:
 
     async def check(self, key: str) -> None:
         if self.redis:
-            bucket = f"rl:{key}:{int(time.time() // self.window)}"
-            count = await self.redis.incr(bucket)
-            if count == 1:
-                await self.redis.expire(bucket, self.window)
-            if count > self.max_requests:
-                raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests")
-            return
+            try:
+                bucket = f"rl:{key}:{int(time.time() // self.window)}"
+                count = await self.redis.incr(bucket)
+                if count == 1:
+                    await self.redis.expire(bucket, self.window)
+                if count > self.max_requests:
+                    raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests")
+                return
+            except HTTPException:
+                raise
+            except Exception:
+                # 3.3 (prod3) : Redis tombé → log + fallback mémoire pour
+                # l'appel courant (MD-6) — jamais de 500 sur toute l'API.
+                import logging
+
+                logging.getLogger("tapitask").exception(
+                    "rate-limit: Redis indisponible (%s) — fallback mémoire", key)
+        # 3.3 (prod3) : fuite lente — les deque vides (fenêtre écoulée) ne
+        # sont jamais retirés du dict (1 clé par IP/cible, indéfiniment).
+        # Purge amortie : un passage de dict à chaque check seulement au-
+        # delà de 10 000 entrées.
+        if len(self.hits) > 10_000:
+            for k in [k for k, q in self.hits.items() if not q]:
+                self.hits.pop(k)
         now = time.monotonic()
         q = self.hits[key]
         while q and now - q[0] > self.window:

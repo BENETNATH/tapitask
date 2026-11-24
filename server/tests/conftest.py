@@ -13,6 +13,7 @@ import pytest
 
 from app.db import Base, engine
 from app.routers import auth as auth_router
+from app.routers import sharing as sharing_router
 
 
 @pytest.fixture(autouse=True)
@@ -22,7 +23,13 @@ async def setup_db():
     auth_router._register_limiter.hits.clear()
     auth_router._login_limiter.hits.clear()
     auth_router._change_email_limiter.hits.clear()
+    auth_router._verify_email_limiter.hits.clear()
     auth_router._failed_logins.clear()
+    # 3.4 (prod3) : les tâches mail fire-and-forget de la boucle du test
+    # précédent (pytest-asyncio : une boucle par test) ne s'exécuteront
+    # jamais — les purger, sinon un drain asyncio.gather les attendrait
+    # pour toujours.
+    sharing_router._in_flight_emails.clear()
     yield
     # Chaque test a sa boucle asyncio (pytest-asyncio, scope function) mais
     # StaticPool partage UNE connexion aiosqlite entre les tests : le lock de

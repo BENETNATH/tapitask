@@ -620,8 +620,9 @@ async def test_totp_flow(client):
     r = await client.post("/auth/totp/setup", headers=h)
     assert r.status_code == 200
     secret = r.json()["secret"]
+    token = r.json()["token"]
     code = pyotp.TOTP(secret).now()
-    r = await client.post("/auth/totp/enable", json={"code": code}, headers=h)
+    r = await client.post("/auth/totp/enable", json={"code": code, "token": token}, headers=h)
     assert r.status_code == 204
     # login without code -> 401
     r = await client.post("/auth/login", json={"email": "totp@example.com", "password": "LongPassw0rd!x"})
@@ -630,8 +631,12 @@ async def test_totp_flow(client):
     r = await client.post("/auth/login", json={
         "email": "totp@example.com", "password": "LongPassw0rd!x", "totp_code": pyotp.TOTP(secret).now()})
     assert r.status_code == 200
-    # disable
+    # MD-2 : disable exige un code TOTP VALIDE (le "000000" d'avant le fix
+    # ne passait plus)
     r = await client.post("/auth/totp/enable", json={"code": "000000", "disable": True}, headers=h)
+    assert r.status_code == 400
+    r = await client.post("/auth/totp/enable",
+                          json={"code": pyotp.TOTP(secret).now(), "disable": True}, headers=h)
     assert r.status_code == 204
     r = await client.post("/auth/login", json={"email": "totp@example.com", "password": "LongPassw0rd!x"})
     assert r.status_code == 200
@@ -1503,11 +1508,24 @@ async def test_first_sync_returns_lists(client):
 async def test_email_preference_and_mailer(client, monkeypatch):
     """Emails respect the recipient's notify_email preference; the mailer
     itself is best-effort (never blocks the request)."""
+    import asyncio
+
     from app import mailer
+    from app.routers import sharing
 
     sent = []
     monkeypatch.setattr(mailer, "_sync_send", lambda to, subj, body: sent.append((to, subj)))
     monkeypatch.setattr(mailer, "SMTP_TLS", None, raising=False)
+
+    async def _drain_emails() -> None:
+        # 3.4 (prod3) : l'email part en fire-and-forget — observer `sent`
+        # après la réponse exige d'attendre les tâches en vol. Le `sleep(0)`
+        # APRÈS le gather est indispensable : une tâche déjà terminée fait
+        # revenir gather sans yield, et le done-callback (discard, planifié en
+        # call_soon) n'aurait jamais l'occasion de s'exécuter → boucle infinie.
+        while sharing._in_flight_emails:
+            await asyncio.gather(*list(sharing._in_flight_emails))
+            await asyncio.sleep(0)
 
     # recipient with email notifications disabled -> no email on share
     t2 = await register(client, "quiet@example.com")
@@ -1523,12 +1541,14 @@ async def test_email_preference_and_mailer(client, monkeypatch):
                           json={"email": "quiet@example.com", "role": "viewer"},
                           headers=h1)
     assert r.status_code == 201
+    await _drain_emails()
     assert sent == []
 
     # invite with an email address -> email attempted
     r = await client.post(f"/lists/{list_id}/invites",
                           json={"hours": 24, "email": "friend@example.com"}, headers=h1)
     assert r.status_code == 201
+    await _drain_emails()
     assert any(to == "friend@example.com" for to, _ in sent)
 
     # default preference (no settings) -> email enabled
@@ -1537,6 +1557,7 @@ async def test_email_preference_and_mailer(client, monkeypatch):
                           json={"email": "default@example.com", "role": "viewer"},
                           headers=h1)
     assert r.status_code == 201
+    await _drain_emails()
     assert any(to == "default@example.com" for to, _ in sent)
 
 
@@ -2393,9 +2414,11 @@ async def test_change_email_requires_totp(client, monkeypatch):
     tokens = await register(client, "cmtotp@example.com")
     h = auth_headers(tokens)
     monkeypatch.setattr(settings, "SMTP_ENABLED", True)
-    secret = (await client.post("/auth/totp/setup", headers=h)).json()["secret"]
+    setup = (await client.post("/auth/totp/setup", headers=h)).json()
+    secret = setup["secret"]
     await client.post("/auth/totp/enable",
-                      json={"code": pyotp.TOTP(secret).now()}, headers=h)
+                      json={"code": pyotp.TOTP(secret).now(), "token": setup["token"]},
+                      headers=h)
 
     r = await client.post("/auth/change-email",
                           json={"new_email": "cmtotp-new@example.com",
@@ -2515,8 +2538,10 @@ async def test_me_exposes_pending_email_and_totp(client, monkeypatch):
     me = (await client.get("/auth/me", headers=h)).json()
     assert me["pending_email"] == "mea-new@example.com"
 
-    secret = (await client.post("/auth/totp/setup", headers=h)).json()["secret"]
+    setup = (await client.post("/auth/totp/setup", headers=h)).json()
+    secret = setup["secret"]
     await client.post("/auth/totp/enable",
-                      json={"code": pyotp.TOTP(secret).now()}, headers=h)
+                      json={"code": pyotp.TOTP(secret).now(), "token": setup["token"]},
+                      headers=h)
     me = (await client.get("/auth/me", headers=h)).json()
     assert me["totp"] is True

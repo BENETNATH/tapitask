@@ -73,7 +73,7 @@ class WidgetItemAdapter(
         snapshotHasLists = d.getInt("list_count_lists", 0) > 0
         snapshotRows = buildRows(d)
         snapshotDark = d.getString("theme", "light") == "dark"
-        snapshotAllDone = d.getString("label_all_done", "Tout est coché")
+        snapshotAllDone = d.getString("label_all_done", "Tout est coché") ?: "Tout est coché"
     }
 
     override fun onDestroy() {}
@@ -100,6 +100,9 @@ class WidgetItemAdapter(
                 R.id.item_row_label,
                 "✓  " + snapshotAllDone)
             views.setOnClickFillInIntent(R.id.item_row_label, null)
+            // 2.1 (prod3) : une ligne recyclée peut montrer l'ancien badge
+            // d'échéance — toujours masqué dans l'état « tout coché ».
+            views.setInt(R.id.item_row_due, "setVisibility", View.GONE)
         } else if (position in snapshotRows.indices) {
             // C2.6 : guard — position hors snapshot (changement pendant le
             // bind du launcher) → ligne vide plutôt qu'IndexOutOfBounds.
@@ -120,6 +123,11 @@ class WidgetItemAdapter(
                         action = ListWidgetProvider.ACTION_TOGGLE
                         putExtra(ListWidgetProvider.EXTRA_ITEM_ID, id)
                     })
+            } else {
+                // 2.1 (prod3) / MD-4 : une ligne recyclée hérite du clic de
+                // l'item précédent si on ne pose rien — un Intent() vide
+                // (sans action) réinitialise le fill-in.
+                views.setOnClickFillInIntent(R.id.item_row_label, Intent())
             }
         }
         return views

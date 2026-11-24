@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from uuid import UUID
 
@@ -16,6 +17,28 @@ from ..security import is_expired
 from ..schemas import InviteAcceptIn, InviteIn, InviteOut, MemberIn, MemberRoleIn
 
 router = APIRouter(prefix="/lists", tags=["sharing"])
+
+# 3.4 (prod3) : tâches mail en vol — sans référence forte, asyncio peut les
+# garbage-collecter avant exécution (même motif que _in_flight_webhooks, C1.3).
+_in_flight_emails: set[asyncio.Task] = set()
+
+
+def _spawn_email(to: str, subject: str, body: str) -> None:
+    """Fire-and-forget (contrat 3.4) : le partage ne doit pas bloquer la
+    requête sur un relais SMTP lent (10-20 s). `send_email` est best-effort
+    (_sync_send avale ses exceptions) ; on loggue si malgré tout ça lève."""
+    async def _run() -> None:
+        try:
+            await send_email(to, subject, body)
+        except Exception:
+            import logging
+
+            logging.getLogger("tapitask.mail").exception(
+                "email de partage a échoué vers %s", to)
+
+    task = asyncio.create_task(_run())
+    _in_flight_emails.add(task)
+    task.add_done_callback(_in_flight_emails.discard)
 
 
 async def _upsert_member(session: AsyncSession, list_id: UUID, user_id: UUID, role: Role) -> None:
@@ -53,9 +76,10 @@ async def create_invite(
     )
     session.add(invite)
     await session.commit()
-    # Best-effort email so the invitee receives the code out of band.
+    # Best-effort email so the invitee receives the code out of band —
+    # fire-and-forget (3.4) : la requête répond sans attendre le relais SMTP.
     if data.email:
-        await send_email(
+        _spawn_email(
             data.email,
             "Tapitask — code d'invitation",
             f"Vous êtes invité(e) à rejoindre la liste « {checklist.title} » sur Tapitask.\n\n"
@@ -109,7 +133,7 @@ async def add_member(
     await session.commit()
     await hub.notify_users([user.id], {"kind": "list.shared", "list_id": str(list_id)})
     if user_wants_email(user.settings):
-        await send_email(
+        _spawn_email(
             user.email,
             f"Tapitask — « {checklist.title} » partagée avec vous",
             f"Bonjour,\n\n"

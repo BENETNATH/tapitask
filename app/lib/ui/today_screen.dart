@@ -16,9 +16,14 @@ class TodayScreen extends StatefulWidget {
 }
 
 class _TodayScreenState extends State<TodayScreen> {
+  late final Stream<List<LocalItem>> _dueStream;
+
   @override
   void initState() {
     super.initState();
+    // 3.1 (prod3) : le flux watch() est créé une seule fois — recréé à
+    // chaque build, il faisait flasher l'état vide.
+    _dueStream = widget.state.db.watchDueItems();
     widget.state.addListener(_onChanged);
   }
 
@@ -41,12 +46,12 @@ class _TodayScreenState extends State<TodayScreen> {
       },
       child: Scaffold(
       appBar: AppBar(
-        title: Text("Aujourd'hui",
+        title: Text(S.today,
             style: TextStyle(
                 color: scheme.onSurface, fontWeight: FontWeight.w600)),
       ),
       body: StreamBuilder<List<LocalItem>>(
-        stream: widget.state.db.watchDueItems(),
+        stream: _dueStream,
         initialData: const [],
         builder: (context, snapshot) {
           final items = snapshot.data ?? const [];

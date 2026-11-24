@@ -39,6 +39,8 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_email_verified: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     email_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # MD-3 (prod3) : émission du code — expiration 24 h côté /verify-email.
+    email_token_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     pending_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     settings: Mapped[str | None] = mapped_column(Text, nullable=True)

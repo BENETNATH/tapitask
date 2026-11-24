@@ -48,11 +48,14 @@ def validate_webhook_url(url: str, resolver=None) -> tuple[bool, str | None]:
     host = (parsed.hostname or "").lower()
     if not host:
         return False, None
+    # 2.4 (prod3) : le schéma http(s) d'ABORD — l'opt-in
+    # WEBHOOK_ALLOWED_HOSTS ne doit pas autoriser un schéma étranger
+    # (file://, gopher://…).
+    if parsed.scheme not in ("http", "https"):
+        return False, None
     allow = {h.strip().lower() for h in settings.WEBHOOK_ALLOWED_HOSTS if h.strip()}
     if host in allow or any(host.endswith("." + a) for a in allow):
         return True, None
-    if parsed.scheme not in ("http", "https"):
-        return False, None
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
@@ -239,7 +242,11 @@ async def fire_webhooks(list_id, payload: dict[str, Any]) -> None:
             # sans SNI explicite, le handshake présenterait l'IP et la
             # vérification du certificat échouerait (audit C1.3).
             sni = headers.get("Host")
-            async with httpx.AsyncClient(timeout=settings.WEBHOOK_TIMEOUT) as client:
+            # 2.4 (prod3) : trust_env=False — sinon HTTP_PROXY/HTTPS_PROXY de
+            # l'hôte détourne le POST (contournement de l'IP épinglée + du
+            # check SSRF).
+            async with httpx.AsyncClient(timeout=settings.WEBHOOK_TIMEOUT,
+                                         trust_env=False) as client:
                 await client.post(
                     url, content=body, headers=headers,
                     extensions={"sni_hostname": sni} if sni else None)

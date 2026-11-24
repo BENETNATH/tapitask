@@ -126,15 +126,18 @@ class ApiClient {
       _post(path, body, auth: true);
 
   Future<Map<String, dynamic>> patch(
-      String path, Map<String, dynamic> body) async {
+      String path, Map<String, dynamic> body,
+      {bool retried = false}) async {
     final r = await _http.patch(Uri.parse("$baseUrl$path"),
         headers: {
           "Authorization": "Bearer $accessToken",
           "Content-Type": "application/json"
         },
         body: jsonEncode(body)).timeout(timeout);
-    if (r.statusCode == 401 && await _tryRefresh()) {
-      return patch(path, body);
+    // 3.7 (prod3) : un 401 persistant après un refresh « réussi » ne doit
+    // pas boucler à l'infini — 2e 401 → l'erreur se propage.
+    if (r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return patch(path, body, retried: true);
     }
     _check(r);
     return jsonDecode(r.body) as Map<String, dynamic>;
@@ -155,43 +158,43 @@ class ApiClient {
     await post("/auth/verify-email", {"token": token});
   }
 
-  Future<void> delete(String path) async {
+  Future<void> delete(String path, {bool retried = false}) async {
     final r = await _http.delete(Uri.parse("$baseUrl$path"),
         headers: {"Authorization": "Bearer $accessToken"}).timeout(timeout);
-    if (r.statusCode == 401 && await _tryRefresh()) {
-      return delete(path);
+    if (r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return delete(path, retried: true);
     }
     _check(r);
   }
 
-  Future<Map<String, dynamic>> get(String path) async {
+  Future<Map<String, dynamic>> get(String path, {bool retried = false}) async {
     final r = await _http.get(Uri.parse("$baseUrl$path"),
         headers: {"Authorization": "Bearer $accessToken"}).timeout(timeout);
-    if (r.statusCode == 401 && await _tryRefresh()) {
-      return get(path);
+    if (r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return get(path, retried: true);
     }
     _check(r);
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
-  Future<List<dynamic>> getList(String path) async {
+  Future<List<dynamic>> getList(String path, {bool retried = false}) async {
     final r = await _http.get(Uri.parse("$baseUrl$path"),
         headers: {"Authorization": "Bearer $accessToken"}).timeout(timeout);
-    if (r.statusCode == 401 && await _tryRefresh()) {
-      return getList(path);
+    if (r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return getList(path, retried: true);
     }
     _check(r);
     return jsonDecode(r.body) as List<dynamic>;
   }
 
   Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body,
-      {required bool auth}) async {
+      {required bool auth, bool retried = false}) async {
     final headers = {"Content-Type": "application/json"};
     if (auth) headers["Authorization"] = "Bearer $accessToken";
     final r = await _http.post(Uri.parse("$baseUrl$path"),
         headers: headers, body: jsonEncode(body)).timeout(timeout);
-    if (auth && r.statusCode == 401 && await _tryRefresh()) {
-      return _post(path, body, auth: auth);
+    if (auth && r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return _post(path, body, auth: auth, retried: true);
     }
     _check(r);
     // 204 sans corps (ex. verify-email) : pas de JSON à décoder.
