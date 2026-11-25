@@ -13,13 +13,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 from app.db import SessionLocal, get_session
 from app.main import app
 from app.models import Item, User
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 @pytest.fixture
@@ -410,7 +409,7 @@ async def test_patch_list_null_color_folder_clear(client):
     )
     assert r.status_code == 200
     lists = (await client.get("/lists", headers=h)).json()
-    me = next(l for l in lists if l["id"] == lid["id"])
+    me = next(x for x in lists if x["id"] == lid["id"])
     assert me["color"] is None and me["folder"] is None
 
 
@@ -444,6 +443,6 @@ async def test_sync_list_create_null_color_folder_clears(client):
     )
     assert r.status_code == 200 and not r.json()["rejected"], r.text
     lists = (await client.get("/lists", headers=h)).json()
-    me = next(l for l in lists if l["id"] == lid)
+    me = next(x for x in lists if x["id"] == lid)
     assert me["color"] is None and me["folder"] is None
     assert me["title"] == "S"

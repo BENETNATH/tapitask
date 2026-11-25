@@ -70,7 +70,11 @@ if ($buildApk -eq "O" -or $buildApk -eq "o") {
                 & keytool -genkeypair -v -keystore "$Root\tapitask.keystore" -alias tapitask `
                     -keyalg RSA -keysize 2048 -validity 10000 -storepass $ksPass -keypass $ksPass `
                     -dname "CN=Tapitask, O=Tapitask" | Out-Null
-                "storeFile=$Root/tapitask.keystore`nstorePassword=$ksPass`nkeyPassword=$ksPass`nkeyAlias=tapitask" | Out-File $keyProps -Encoding ascii
+                # M7 (prod4) : chemins forward-slash dans key.properties —
+                # java.util.Properties.load interprète les backslash comme
+                # échappements (\U, \t, …) : "C:\Tapitask" deviendrait un
+                # tab. (Test : pwsh indispo sur cette machine — diff lu.)
+                "storeFile=($Root -replace '\\', '/')/tapitask.keystore`nstorePassword=$ksPass`nkeyPassword=$ksPass`nkeyAlias=tapitask" | Out-File $keyProps -Encoding ascii
                 Write-Host "[OK] Keystore cree (mot de passe dans android\app\key.properties - NE PAS COMMITER)" -ForegroundColor Green
             } else {
                 Write-Host "[!] keytool introuvable (installe un JDK) - APK signe en debug" -ForegroundColor Yellow

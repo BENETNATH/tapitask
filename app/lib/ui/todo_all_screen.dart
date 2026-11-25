@@ -89,7 +89,7 @@ class _TodoAllScreenState extends State<TodoAllScreen> {
                     builder: (context, snap) => Text(
                       "${snap.data?.title ?? ""}"
                       "${item.dueDate != null ? "  •  ${_fmtDue(item.dueDate!)}" : ""}"
-                      "${overdue ? "  •  en retard" : ""}",
+                      "${overdue ? S.t("overdueSuffix") : ""}",
                       style: TextStyle(
                           fontSize: 12,
                           color: overdue ? scheme.error : scheme.outline),

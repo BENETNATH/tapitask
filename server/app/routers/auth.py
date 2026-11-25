@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -12,20 +11,20 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
-from ..events import hub
 from ..db import get_session
 from ..deps import Principal, RateLimiter, client_key, get_principal
+from ..events import hub
 from ..models import RefreshToken, User, utcnow
 from ..schemas import (
     ChangeEmailIn,
-    UserSettingsIn,
     LoginIn,
     RefreshIn,
     RegisterIn,
+    TokenOut,
     TotpEnableIn,
     TotpSetupOut,
-    TokenOut,
     UserOut,
+    UserSettingsIn,
     VerifyEmailIn,
 )
 
@@ -56,21 +55,35 @@ async def _send_change_email(to: str, token: str) -> None:
         f"{token}\n\n"
         "Si ce n'était pas vous, ignorez ce message.",
     )
-from ..security import (
+
+
+from ..security import (  # noqa: E402
     create_access_token,
-    create_totp_setup_token,
-    new_email_token,
-    new_totp_secret,
-    totp_uri,
-    verify_totp,
     create_refresh_token,
+    create_totp_setup_token,
     decode_token,
     hash_password,
+    new_email_token,
+    new_totp_secret,
     token_fingerprint,
+    totp_uri,
     verify_password,
+    verify_totp,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# S5 (prod4) : tâches mail en vol — sans référence forte, asyncio peut les
+# garbage-collecter avant exécution (même motif que sharing._in_flight_emails,
+# 3.4 prod3).
+_in_flight_emails: set[asyncio.Task] = set()
+
+
+def _spawn_auth_email(coro) -> None:
+    task = asyncio.create_task(coro)
+    _in_flight_emails.add(task)
+    task.add_done_callback(_in_flight_emails.discard)
+
 
 _login_limiter = RateLimiter(settings.RATE_LIMIT_PER_MINUTE)
 _register_limiter = RateLimiter(5)
@@ -89,7 +102,9 @@ def _register_failed_login(key: str) -> None:
 
     now = time.monotonic()
     # Purge expired entries (cheap: bounded by distinct keys seen).
-    for k in [k for k, (_, t) in _failed_logins.items() if now - t > _FAILED_LOGINS_TTL]:
+    for k in [
+        k for k, (_, t) in _failed_logins.items() if now - t > _FAILED_LOGINS_TTL
+    ]:
         _failed_logins.pop(k, None)
     count, _ = _failed_logins.get(key, (0, now))
     _failed_logins[key] = (count + 1, now)
@@ -110,7 +125,9 @@ def _is_locked_out(key: str) -> bool:
 
 # Same status AND body for a fresh and a repeat register: the caller must
 # never learn whether the account already exists (Strix vuln-0003).
-_REGISTER_UNIFORM_MESSAGE = "Si ce compte existe, un email de vérification a été (re)envoyé."
+_REGISTER_UNIFORM_MESSAGE = (
+    "Si ce compte existe, un email de vérification a été (re)envoyé."
+)
 
 
 @router.post("/register", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
@@ -121,8 +138,16 @@ async def register(
 ):
     await _register_limiter.check(f"reg:{client_key(request)}")
     email = data.email.lower()
-    existing = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
+    existing = (
+        await session.execute(select(User).where(User.email == email))
+    ).scalar_one_or_none()
     if existing is not None:
+        # D-2 (prod4) : compte vérifié OU changement d'email en attente →
+        # 202 uniforme SANS toucher email_token ni envoyer d'email. Un token
+        # de vérification déjà en cours doit rester valide ; le mail
+        # d'origine part vers pending_email, jamais vers l'ancien email.
+        if existing.is_email_verified or existing.pending_email is not None:
+            raise HTTPException(status.HTTP_202_ACCEPTED, _REGISTER_UNIFORM_MESSAGE)
         # Uniform reply: the tokens are INERT (sub maps to no account), so
         # the response looks identical to a fresh register on the wire but
         # grants nothing — the caller does not own this account.
@@ -130,10 +155,14 @@ async def register(
             existing.email_token = new_email_token()
             existing.email_token_created_at = utcnow()
             await session.commit()
-            asyncio.create_task(_send_verification_email(existing.email, existing.email_token))
+            _spawn_auth_email(
+                _send_verification_email(existing.email, existing.email_token)
+            )
             raise HTTPException(status.HTTP_202_ACCEPTED, _REGISTER_UNIFORM_MESSAGE)
-        return TokenOut(access_token=create_access_token(uuid4()),
-                        refresh_token=create_refresh_token(uuid4()))
+        return TokenOut(
+            access_token=create_access_token(uuid4()),
+            refresh_token=create_refresh_token(uuid4()),
+        )
     user = User(email=email, password_hash=hash_password(data.password))
     if settings.SMTP_ENABLED:
         user.is_email_verified = False
@@ -146,10 +175,12 @@ async def register(
         # lost the create race: answer exactly like a repeat register
         if settings.SMTP_ENABLED:
             raise HTTPException(status.HTTP_202_ACCEPTED, _REGISTER_UNIFORM_MESSAGE)
-        return TokenOut(access_token=create_access_token(uuid4()),
-                        refresh_token=create_refresh_token(uuid4()))
+        return TokenOut(
+            access_token=create_access_token(uuid4()),
+            refresh_token=create_refresh_token(uuid4()),
+        )
     if settings.SMTP_ENABLED:
-        asyncio.create_task(_send_verification_email(user.email, user.email_token))
+        _spawn_auth_email(_send_verification_email(user.email, user.email_token))
         raise HTTPException(status.HTTP_202_ACCEPTED, _REGISTER_UNIFORM_MESSAGE)
     return await _issue_tokens(session, user)
 
@@ -163,7 +194,9 @@ async def login(
     key = f"login:{client_key(request)}"
     await _login_limiter.check(key)
     if _is_locked_out(key):
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed attempts, try later")
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed attempts, try later"
+        )
     result = await session.execute(select(User).where(User.email == data.email.lower()))
     user = result.scalar_one_or_none()
     # 1.6 (prod3) : verify_password D'ABORD, pour tout compte connu —
@@ -200,7 +233,9 @@ async def refresh(data: RefreshIn, session: AsyncSession = Depends(get_session))
     except Exception:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
     fingerprint = token_fingerprint(data.refresh_token)
-    user_result = await session.execute(select(User).where(User.id == UUID(payload["sub"])))
+    user_result = await session.execute(
+        select(User).where(User.id == UUID(payload["sub"]))
+    )
     user = user_result.scalar_one_or_none()
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
@@ -208,9 +243,11 @@ async def refresh(data: RefreshIn, session: AsyncSession = Depends(get_session))
     # /refresh concurrent gagne. rowcount == 0 → inconnu, déjà utilisé, expiré.
     claimed = await session.execute(
         update(RefreshToken)
-        .where(RefreshToken.token_hash == fingerprint,
-               RefreshToken.revoked.is_(False),
-               RefreshToken.expires_at > utcnow())
+        .where(
+            RefreshToken.token_hash == fingerprint,
+            RefreshToken.revoked.is_(False),
+            RefreshToken.expires_at > utcnow(),
+        )
         .values(revoked=True)
     )
     if claimed.rowcount == 0:
@@ -220,7 +257,10 @@ async def refresh(data: RefreshIn, session: AsyncSession = Depends(get_session))
 
 
 @router.get("/me", response_model=UserOut)
-async def me(principal: Principal = Depends(get_principal), session: AsyncSession = Depends(get_session)):
+async def me(
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+):
     result = await session.execute(select(User).where(User.id == principal.user_id))
     user = result.scalar_one_or_none()
     if user is None:
@@ -229,8 +269,14 @@ async def me(principal: Principal = Depends(get_principal), session: AsyncSessio
         settings = json.loads(user.settings) if user.settings else {}
     except Exception:
         settings = {}
-    return UserOut(id=user.id, email=user.email, is_admin=user.is_admin, settings=settings,
-                   pending_email=user.pending_email, totp=user.totp_secret is not None)
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        is_admin=user.is_admin,
+        settings=settings,
+        pending_email=user.pending_email,
+        totp=user.totp_secret is not None,
+    )
 
 
 @router.patch("/me", response_model=UserOut)
@@ -246,8 +292,13 @@ async def update_settings(
     user.settings = json.dumps(data.settings)
     await session.commit()
     return UserOut(
-        id=user.id, email=user.email, is_admin=user.is_admin, settings=data.settings,
-        pending_email=user.pending_email, totp=user.totp_secret is not None)
+        id=user.id,
+        email=user.email,
+        is_admin=user.is_admin,
+        settings=data.settings,
+        pending_email=user.pending_email,
+        totp=user.totp_secret is not None,
+    )
 
 
 @router.post("/verify-email", status_code=status.HTTP_204_NO_CONTENT)
@@ -281,18 +332,24 @@ async def verify_email(
         # Collision (C1.1e) : l'email attendu est déjà pris par UN AUTRE
         # compte (email actif OU en attente) → rien n'est appliqué, 409,
         # l'état périmé est nettoyé (l'utilisateur relance change-email).
-        taken = (await session.execute(
-            select(User).where(
-                or_(User.email == user.pending_email,
-                    User.pending_email == user.pending_email),
-                User.id != user.id,
-            ))).first()
+        taken = (
+            await session.execute(
+                select(User).where(
+                    or_(
+                        User.email == user.pending_email,
+                        User.pending_email == user.pending_email,
+                    ),
+                    User.id != user.id,
+                )
+            )
+        ).first()
         if taken is not None:
             user.pending_email = None
             await session.commit()
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
-                "Cet email est déjà utilisé par un autre compte")
+                "Cet email est déjà utilisé par un autre compte",
+            )
         user.email = user.pending_email
         user.pending_email = None
     user.is_email_verified = True
@@ -317,8 +374,9 @@ async def resend_verification(
     user.email_token = new_email_token()
     user.email_token_created_at = utcnow()
     await session.commit()
-    asyncio.create_task(
-        _send_verification_email(user.pending_email or user.email, user.email_token))
+    _spawn_auth_email(
+        _send_verification_email(user.pending_email or user.email, user.email_token)
+    )
     return None
 
 
@@ -353,12 +411,13 @@ async def change_email(
     if not settings.SMTP_ENABLED:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Vérification email indisponible (SMTP non configuré)")
+            "Vérification email indisponible (SMTP non configuré)",
+        )
     user.pending_email = new_email
     user.email_token = new_email_token()
     user.email_token_created_at = utcnow()
     await session.commit()
-    asyncio.create_task(_send_change_email(new_email, user.email_token))
+    _spawn_auth_email(_send_change_email(new_email, user.email_token))
     return None
 
 
@@ -409,10 +468,12 @@ async def totp_enable(
         payload = decode_token(data.token or "", "totp_setup")
     except Exception:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Token de setup invalide ou expiré")
+            status.HTTP_400_BAD_REQUEST, "Token de setup invalide ou expiré"
+        )
     if payload.get("sub") != str(principal.user_id) or not payload.get("secret"):
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Token de setup invalide ou expiré")
+            status.HTTP_400_BAD_REQUEST, "Token de setup invalide ou expiré"
+        )
     secret = payload["secret"]
     if not (data.code and verify_totp(secret, data.code)):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Code invalide")

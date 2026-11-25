@@ -30,6 +30,9 @@ dependencies:
   flutter_local_notifications: ^23.0.1
   home_widget: ^0.10.0
   web_socket_channel: ^3.0.1
+  # M6 (D-4, prod4) : remplacement de dart:html (deprecated) dans
+  # update_opener_web.dart — déjà présent en transitif dans pubspec.lock.
+  web: ^1.1.2
 
 dev_dependencies:
   flutter_test:

@@ -10,10 +10,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from app.main import app
 from httpx import ASGITransport, AsyncClient
 
 from app import main
-from app.main import app
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VERSION_FILE = REPO_ROOT / "server" / "VERSION"

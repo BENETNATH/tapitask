@@ -10,7 +10,6 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("WEBHOOK_ALLOWED_HOSTS", "127.0.0.1")
 
 import pytest
-
 from app.db import Base, engine
 from app.routers import auth as auth_router
 from app.routers import sharing as sharing_router
@@ -28,8 +27,9 @@ async def setup_db():
     # 3.4 (prod3) : les tâches mail fire-and-forget de la boucle du test
     # précédent (pytest-asyncio : une boucle par test) ne s'exécuteront
     # jamais — les purger, sinon un drain asyncio.gather les attendrait
-    # pour toujours.
+    # pour toujours. (S5 prod4 : auth._in_flight_emails aussi.)
     sharing_router._in_flight_emails.clear()
+    auth_router._in_flight_emails.clear()
     yield
     # Chaque test a sa boucle asyncio (pytest-asyncio, scope function) mais
     # StaticPool partage UNE connexion aiosqlite entre les tests : le lock de

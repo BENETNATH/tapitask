@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
 from ..deps import Principal, accessible_list, rate_limit_principal, require_write
-from ..events import record_change, notify_list
+from ..events import notify_list, record_change
 from ..models import Checklist, Item, ListMember, Role, utcnow
 from ..schemas import SyncChange, SyncIn, SyncOut, validate_sync_event
 from .lists import _spawn_next, _validate_parent
@@ -19,12 +19,17 @@ router = APIRouter(prefix="/sync", tags=["sync"])
 
 
 def _utc(dt: datetime) -> datetime:
-    """MD-1 (prod3) : normalisation UTC — un datetimes entrant AWARE est
-    converti en UTC avant stockage/comparaison (un +02:00 ne doit plus
-    décaler l'horodatage de 2 h) ; un NAÏF est supposé UTC (comme les
-    valeurs stockées issues de utcnow() en texte SQLite). Double backend :
-    SQLite garde le texte naïf-UTC, Postgres TIMESTAMPTZ accepte l'aware."""
-    return dt.astimezone(timezone.utc) if dt.tzinfo is not None else dt
+    """D-3 (prod4) : normalisation UTC AWARE — un datetimes entrant AWARE est
+    converti en UTC ; un NAÏF est supposé UTC (contrat MD-1) et rendu aware.
+    Les binds SQL reçoivent TOUJOURS un aware-UTC : sur Postgres un naïf
+    serait interprété au fuseau de session (drift) ; sur SQLite le texte
+    reste naïf-UTC (l'offset est ignoré au stockage). Postgres TIMESTAMPTZ
+    accepte l'aware."""
+    return (
+        dt.astimezone(timezone.utc)
+        if dt.tzinfo is not None
+        else dt.replace(tzinfo=timezone.utc)
+    )
 
 
 def _utc_naive(dt: datetime) -> datetime:
@@ -44,12 +49,20 @@ SYNC_CLOCK_TOLERANCE = timedelta(seconds=5)
 
 
 def _clamp_client_dt(dt: datetime) -> datetime:
+    # D-3 (prod4) : le clamp ±5 s s'applique en espace naïf-UTC (comparaisons
+    # mémoire, contrat MD-1) puis le résultat est rendu AWARE-UTC pour le
+    # bind SQL (Postgres ne doit plus recevoir de naïf).
     dt = _utc_naive(dt)
     now = _utc_naive(utcnow())
     # Symétrique (audit lot T) : un horodatage très antérieur au serveur est
     # aussi une horloge cassée — sans clamp, un item scellé dans le passé
     # resterait invisible au delta des autres clients.
-    return now if dt > now + SYNC_CLOCK_TOLERANCE or dt < now - SYNC_CLOCK_TOLERANCE else dt
+    clamped = (
+        now
+        if dt > now + SYNC_CLOCK_TOLERANCE or dt < now - SYNC_CLOCK_TOLERANCE
+        else dt
+    )
+    return clamped.replace(tzinfo=timezone.utc)
 
 
 @router.post("", response_model=SyncOut)
@@ -71,9 +84,13 @@ async def sync(
         try:
             # Un savepoint par événement : un événement refusé ne rollback
             # que lui-même, jamais les écritures des événements précédents.
+            # M1 (prod4) : les notifications de l'événement sont agrégées
+            # UNIQUEMENT après la sortie du savepoint — un flush en échec
+            # (IntegrityError) ne doit pas envoyer de notification.
             async with session.begin_nested():
                 validate_sync_event(event)
-                await _apply_event(session, event, principal, pending_notifies)
+                event_notifies = await _apply_event(session, event, principal)
+            pending_notifies.extend(event_notifies)
         except HTTPException:
             # Business rejection ONLY (403/404 from accessible_list: unknown
             # or deleted list, lost access). The event is reported so the
@@ -182,55 +199,85 @@ async def sync(
     return SyncOut(server_time=now, changes=changes, rejected=rejected)
 
 
-async def _apply_event(session: AsyncSession, event, principal, pending_notifies: list) -> None:
+async def _apply_event(session: AsyncSession, event, principal) -> list:
+    """M1 (prod4) : renvoie la liste des notifications de l'événement,
+    agrégée par l'appelant APRÈS la sortie du savepoint (un flush en échec
+    ne doit pas déclencher de notification). Plus de paramètre partagé :
+    les écritures et les notifies d'un événement échoué restent ensemble."""
     if event.kind == "list.create":
-        await _apply_list_create(session, event, principal, pending_notifies)
-        return
+        return await _apply_list_create(session, event, principal)
     if event.kind == "list.delete":
         # Delete requires OWNER (checked below); viewer access is enough to
         # reach the check itself.
         checklist, _ = await accessible_list(event.list_id, principal, session)
         if checklist.owner_id != principal.user_id:
-            return
+            return []
         checklist.deleted = True
         checklist.updated_at = _clamp_client_dt(event.updated_at)
         await record_change(
-            session, list_id=event.list_id, checklist_id=checklist.id, kind="list.delete",
-            commit=False)
-        pending_notifies.append(
-            (event.list_id, {"kind": "list.delete", "list_id": str(event.list_id)}))
-        return
+            session,
+            list_id=event.list_id,
+            checklist_id=checklist.id,
+            kind="list.delete",
+            commit=False,
+        )
+        return [(event.list_id, {"kind": "list.delete", "list_id": str(event.list_id)})]
     # ALL other write kinds require the EDITOR role — same authorization as
     # the equivalent REST endpoints. A viewer pushing item.upsert, item.delete
     # or list.rename through the sync path is rejected (403 -> rejected id).
     checklist, _ = await accessible_list(
-        event.list_id, principal, session, min_role=Role.editor)
+        event.list_id, principal, session, min_role=Role.editor
+    )
     if event.kind == "item.upsert":
-        await _apply_item_upsert(session, event, principal, pending_notifies)
-    elif event.kind == "item.delete":
-        await _apply_item_delete(session, event, principal, pending_notifies)
-    elif event.kind == "list.rename":
+        return await _apply_item_upsert(session, event, principal)
+    if event.kind == "item.delete":
+        return await _apply_item_delete(session, event, principal)
+    if event.kind == "list.rename":
+        # M2 (prod4) : triade LWW + audit + notify (comme list.create).
+        stamp = _clamp_client_dt(event.updated_at)
+        if checklist.updated_at is not None and _utc_naive(
+            checklist.updated_at
+        ) >= _utc_naive(stamp):
+            return []
         checklist.title = event.label or checklist.title
-        checklist.updated_at = _clamp_client_dt(event.updated_at)
+        checklist.updated_at = stamp
+        await record_change(
+            session,
+            list_id=event.list_id,
+            checklist_id=checklist.id,
+            kind="list.rename",
+            commit=False,
+        )
+        return [(event.list_id, {"kind": "list.rename", "id": str(event.list_id)})]
+    return []
 
 
-async def _accessible_list_ids(principal: Principal, session: AsyncSession) -> list[UUID]:
+async def _accessible_list_ids(
+    principal: Principal, session: AsyncSession
+) -> list[UUID]:
     # A scoped key sees only its list - and only if the principal still has
     # canonical access to it (same rule as accessible_list, deps.py).
     if principal.list_scope is not None:
-        row = (await session.execute(
-            select(Checklist.id).where(
-                Checklist.id == principal.list_scope,
-                Checklist.deleted.is_(False),
-                or_(
-                    Checklist.owner_id == principal.user_id,
-                    Checklist.id.in_(
-                        select(ListMember.list_id).where(ListMember.user_id == principal.user_id)
+        row = (
+            await session.execute(
+                select(Checklist.id).where(
+                    Checklist.id == principal.list_scope,
+                    Checklist.deleted.is_(False),
+                    or_(
+                        Checklist.owner_id == principal.user_id,
+                        Checklist.id.in_(
+                            select(ListMember.list_id).where(
+                                ListMember.user_id == principal.user_id
+                            )
+                        ),
                     ),
-                ),
-            ))).first()
+                )
+            )
+        ).first()
         return [row[0]] if row is not None else []
-    owned = await session.execute(select(Checklist.id).where(Checklist.owner_id == principal.user_id))
+    owned = await session.execute(
+        select(Checklist.id).where(Checklist.owner_id == principal.user_id)
+    )
     ids = [lid for (lid,) in owned.all()]
     shared = await session.execute(
         select(ListMember.list_id).where(ListMember.user_id == principal.user_id)
@@ -239,8 +286,11 @@ async def _accessible_list_ids(principal: Principal, session: AsyncSession) -> l
     return ids
 
 
-async def _apply_list_create(session: AsyncSession, event, principal, pending_notifies: list) -> None:
-    """A list created offline arrives here; create it if the server doesn't know it yet."""
+async def _apply_list_create(session: AsyncSession, event, principal) -> list:
+    """A list created offline arrives here; create it if the server doesn't
+    know it yet. M1/M2 (prod4) : renvoie les notifications (agrégées par
+    l'appelant après le savepoint) et applique la triade LWW + audit +
+    notify à la branche « liste déjà connue »."""
     result = await session.execute(select(Checklist).where(Checklist.id == event.id))
     existing = result.scalar_one_or_none()
     if existing is not None:
@@ -249,6 +299,14 @@ async def _apply_list_create(session: AsyncSession, event, principal, pending_no
         # rename/recolor someone else's list via a forged list.create event.
         if existing.owner_id != principal.user_id:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Not the list owner")
+        # M2 (prod4) : LWW — un état serveur plus récent que le stamp client
+        # gagne : l'événement est ignoré (pas d'écriture, pas d'audit, pas
+        # de notify).
+        stamp = _clamp_client_dt(event.updated_at)
+        if existing.updated_at is not None and _utc_naive(
+            existing.updated_at
+        ) >= _utc_naive(stamp):
+            return []
         changed = False
         # Title : jamais vidé (NOT NULL) — label absent garde l'ancien.
         if event.label and event.label != existing.title:
@@ -262,10 +320,16 @@ async def _apply_list_create(session: AsyncSession, event, principal, pending_no
             existing.folder = event.folder
             changed = True
         if changed:
-            existing.updated_at = _clamp_client_dt(event.updated_at)
-            pending_notifies.append(
-                (event.list_id, {"kind": "list.rename", "id": str(event.list_id)}))
-        return
+            existing.updated_at = stamp
+            await record_change(
+                session,
+                list_id=event.list_id,
+                checklist_id=existing.id,
+                kind="list.rename",
+                commit=False,
+            )
+            return [(event.list_id, {"kind": "list.rename", "id": str(event.list_id)})]
+        return []
     stamp = _clamp_client_dt(event.updated_at)
     checklist = Checklist(
         id=event.id,
@@ -278,18 +342,22 @@ async def _apply_list_create(session: AsyncSession, event, principal, pending_no
     )
     session.add(checklist)
     await record_change(
-        session, list_id=checklist.id, checklist_id=checklist.id,
-        kind="list.create", actor_id=principal.user_id,
+        session,
+        list_id=checklist.id,
+        checklist_id=checklist.id,
+        kind="list.create",
+        actor_id=principal.user_id,
         commit=False,
     )
-    pending_notifies.append((checklist.id, {"kind": "list.create", "id": str(checklist.id)}))
+    return [(checklist.id, {"kind": "list.create", "id": str(checklist.id)})]
 
 
-async def _apply_item_upsert(session: AsyncSession, event, principal, pending_notifies: list) -> None:
+async def _apply_item_upsert(session: AsyncSession, event, principal) -> list:
     stamp = _clamp_client_dt(event.updated_at)
     result = await session.execute(select(Item).where(Item.id == event.id))
     item = result.scalar_one_or_none()
     newly_done = False
+    event_notifies: list = []
     if item is None:
         # A1 : label vide (None ou espaces) sur un item NOUVEAU → rejet
         # (400 → rejected → outbox purgé) au lieu d'un IntegrityError 500
@@ -306,21 +374,28 @@ async def _apply_item_upsert(session: AsyncSession, event, principal, pending_no
         # a cross-tenant read + corruption primitive.
         if item.list_id != event.list_id:
             await accessible_list(
-                item.list_id, principal, session, min_role=Role.editor)
+                item.list_id, principal, session, min_role=Role.editor
+            )
         if item.updated_at is not None and (
             _utc_naive(item.updated_at) >= _utc_naive(stamp)
             # Horloge client trop en arrière : événement périmé — le clamp
             # symétrique (lot T) ne doit pas le faire gagner sur l'état
             # existant (LWW, spec §3.5).
-            or _utc_naive(event.updated_at) < _utc_naive(utcnow()) - SYNC_CLOCK_TOLERANCE
+            or _utc_naive(event.updated_at)
+            < _utc_naive(utcnow()) - SYNC_CLOCK_TOLERANCE
         ):
-            return
+            return event_notifies
     newly_done = bool(event.done) and not bool(item.done)
     # 2.3 (prod3) : le parent est validé comme dans les routes REST
     # (absent / autre liste / supprimé / soi-même / sous-tâche → 400 →
     # l'événement passe dans `rejected`).
-    await _validate_parent(session, event.list_id, event.parent_id,
-                           exclude_item_id=event.id, missing_status=400)
+    await _validate_parent(
+        session,
+        event.list_id,
+        event.parent_id,
+        exclude_item_id=event.id,
+        missing_status=400,
+    )
     item.list_id = event.list_id
     # Label : jamais vidé (NOT NULL) — un label absent/vide garde l'ancien.
     if event.label is not None and event.label.strip():
@@ -339,22 +414,30 @@ async def _apply_item_upsert(session: AsyncSession, event, principal, pending_no
     # outbox (item.upsert done=true), so the next occurrence must be spawned
     # here too — not only in PATCH /items/{id}.
     if newly_done and item.recurrence and item.recurrence != "none":
-        await _spawn_next(session, item, principal.user_id,
-                          commit=False, pending=pending_notifies)
+        await _spawn_next(
+            session, item, principal.user_id, commit=False, pending=event_notifies
+        )
     await record_change(
-        session, list_id=event.list_id, item_id=item.id, kind="item.upsert",
+        session,
+        list_id=event.list_id,
+        item_id=item.id,
+        kind="item.upsert",
         commit=False,
     )
-    pending_notifies.append((event.list_id, {"kind": "item.upsert", "id": str(event.id)}))
+    event_notifies.append((event.list_id, {"kind": "item.upsert", "id": str(event.id)}))
+    return event_notifies
 
 
-async def _apply_item_delete(session: AsyncSession, event, principal, pending_notifies: list) -> None:
+async def _apply_item_delete(session: AsyncSession, event, principal) -> list:
     stamp = _clamp_client_dt(event.updated_at)
     result = await session.execute(select(Item).where(Item.id == event.id))
     item = result.scalar_one_or_none()
-    if item is None or _utc_naive(item.updated_at) >= _utc_naive(stamp) \
-            or _utc_naive(event.updated_at) < _utc_naive(utcnow()) - SYNC_CLOCK_TOLERANCE:
-        return
+    if (
+        item is None
+        or _utc_naive(item.updated_at) >= _utc_naive(stamp)
+        or _utc_naive(event.updated_at) < _utc_naive(utcnow()) - SYNC_CLOCK_TOLERANCE
+    ):
+        return []
     # The actor must have editor access to the list the item actually lives in
     # (not just the event's target list), otherwise a forged item.delete with a
     # global item id could soft-delete items in lists the actor cannot access.
@@ -362,6 +445,11 @@ async def _apply_item_delete(session: AsyncSession, event, principal, pending_no
         await accessible_list(item.list_id, principal, session, min_role=Role.editor)
     item.deleted = True
     item.updated_at = stamp
-    await record_change(session, list_id=event.list_id, item_id=item.id, kind="item.delete",
-                        commit=False)
-    pending_notifies.append((event.list_id, {"kind": "item.delete", "id": str(event.id)}))
+    await record_change(
+        session,
+        list_id=event.list_id,
+        item_id=item.id,
+        kind="item.delete",
+        commit=False,
+    )
+    return [(event.list_id, {"kind": "item.delete", "id": str(event.id)})]

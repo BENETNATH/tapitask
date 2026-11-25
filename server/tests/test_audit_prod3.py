@@ -3,18 +3,17 @@
 Chaque test verrouille une propriété de la spec, pas le code : les baselines
 existantes (test_api, test_events, test_lot_t_security…) restent les
 proprioétaires des comportements non couverts ici."""
+
 from __future__ import annotations
 
 import asyncio
 import datetime as dt
 import uuid
 
-from httpx import ASGITransport, AsyncClient
-
 import pytest
-
 from app.config import settings
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture
@@ -60,9 +59,15 @@ async def test_sync_push_plus02_datetime_stored_as_utc(client):
     # en +02:00. Le moment instantané en UTC ne bouge pas.
     instant = server_time - dt.timedelta(seconds=4)
     plus02 = instant.astimezone(dt.timezone(dt.timedelta(hours=2)))
-    ev = {"id": str(uuid.uuid4()), "list_id": list_id, "kind": "item.upsert",
-          "label": "x", "done": False, "position": 1,
-          "updated_at": plus02.isoformat()}
+    ev = {
+        "id": str(uuid.uuid4()),
+        "list_id": list_id,
+        "kind": "item.upsert",
+        "label": "x",
+        "done": False,
+        "position": 1,
+        "updated_at": plus02.isoformat(),
+    }
     r = await client.post("/sync", json={"events": [ev]}, headers=h)
     assert r.status_code == 200 and r.json()["rejected"] == []
 
@@ -70,7 +75,8 @@ async def test_sync_push_plus02_datetime_stored_as_utc(client):
     stored = _as_utc(items[0]["updated_at"])
     # Avant le fix : stored == instant + 2 h.
     assert abs((stored - instant).total_seconds()) < 1, (
-        f"stored={stored.isoformat()} instant={instant.isoformat()}")
+        f"stored={stored.isoformat()} instant={instant.isoformat()}"
+    )
 
 
 @pytest.mark.asyncio
@@ -85,17 +91,30 @@ async def test_sync_lww_aware_timestamps_compare_cleanly(client):
     r = await client.post("/sync", json={"events": []}, headers=h)
     server_time = _as_utc(r.json()["server_time"])
 
-    first = {"id": item_id, "list_id": list_id, "kind": "item.upsert",
-             "label": "nouveau", "done": False, "position": 1,
-             "updated_at": (server_time - dt.timedelta(seconds=1)).isoformat()}
+    first = {
+        "id": item_id,
+        "list_id": list_id,
+        "kind": "item.upsert",
+        "label": "nouveau",
+        "done": False,
+        "position": 1,
+        "updated_at": (server_time - dt.timedelta(seconds=1)).isoformat(),
+    }
     r = await client.post("/sync", json={"events": [first]}, headers=h)
     assert r.json()["rejected"] == []
 
     older = (server_time - dt.timedelta(seconds=10)).astimezone(
-        dt.timezone(dt.timedelta(hours=2)))
-    second = {"id": item_id, "list_id": list_id, "kind": "item.upsert",
-              "label": "ancien", "done": False, "position": 1,
-              "updated_at": older.isoformat()}
+        dt.timezone(dt.timedelta(hours=2))
+    )
+    second = {
+        "id": item_id,
+        "list_id": list_id,
+        "kind": "item.upsert",
+        "label": "ancien",
+        "done": False,
+        "position": 1,
+        "updated_at": older.isoformat(),
+    }
     r = await client.post("/sync", json={"events": [second]}, headers=h)
     assert r.status_code == 200 and r.json()["rejected"] == []
 
@@ -110,10 +129,11 @@ async def _enable_totp(client, h: dict) -> dict:
     import pyotp
 
     setup = (await client.post("/auth/totp/setup", headers=h)).json()
-    r = await client.post("/auth/totp/enable",
-                          json={"code": pyotp.TOTP(setup["secret"]).now(),
-                                "token": setup["token"]},
-                          headers=h)
+    r = await client.post(
+        "/auth/totp/enable",
+        json={"code": pyotp.TOTP(setup["secret"]).now(), "token": setup["token"]},
+        headers=h,
+    )
     assert r.status_code == 204, r.text
     return setup
 
@@ -129,12 +149,15 @@ async def test_login_bad_password_uniform_401_and_counted(client):
     await _enable_totp(client, h)
 
     before = sum(c for c, _ in auth_router._failed_logins.values())
-    r = await client.post("/auth/login",
-                          json={"email": "lg16a@example.com", "password": "WrongPassw0rd!"})
+    r = await client.post(
+        "/auth/login", json={"email": "lg16a@example.com", "password": "WrongPassw0rd!"}
+    )
     assert r.status_code == 401
     assert r.json()["detail"] == "Invalid credentials"
     after = sum(c for c, _ in auth_router._failed_logins.values())
-    assert after >= before + 1, "l'échec mdp d'un compte TOTP doit compter dans le lockout"
+    assert after >= before + 1, (
+        "l'échec mdp d'un compte TOTP doit compter dans le lockout"
+    )
 
 
 @pytest.mark.asyncio
@@ -148,9 +171,14 @@ async def test_login_totp_failure_counted_in_lockout(client):
     await _enable_totp(client, h)
 
     before = sum(c for c, _ in auth_router._failed_logins.values())
-    r = await client.post("/auth/login", json={
-        "email": "lg16b@example.com", "password": "LongPassw0rd!x",
-        "totp_code": "000000"})
+    r = await client.post(
+        "/auth/login",
+        json={
+            "email": "lg16b@example.com",
+            "password": "LongPassw0rd!x",
+            "totp_code": "000000",
+        },
+    )
     assert r.status_code == 401
     after = sum(c for c, _ in auth_router._failed_logins.values())
     assert after >= before + 1
@@ -170,8 +198,9 @@ async def test_totp_setup_persists_nothing(client):
     me = (await client.get("/auth/me", headers=h)).json()
     assert me["totp"] is False
     # login sans code toujours possible
-    r = await client.post("/auth/login",
-                          json={"email": "ts16@example.com", "password": "LongPassw0rd!x"})
+    r = await client.post(
+        "/auth/login", json={"email": "ts16@example.com", "password": "LongPassw0rd!x"}
+    )
     assert r.status_code == 200
 
 
@@ -184,17 +213,19 @@ async def test_totp_enable_requires_own_valid_token(client):
 
     import pyotp
 
-    r = await client.post("/auth/totp/enable",
-                          json={"code": pyotp.TOTP(setup["secret"]).now()}, headers=h)
+    r = await client.post(
+        "/auth/totp/enable", json={"code": pyotp.TOTP(setup["secret"]).now()}, headers=h
+    )
     assert r.status_code == 400
 
     other = await register(client, "te16b@example.com")
     h2 = auth_headers(other)
     setup2 = (await client.post("/auth/totp/setup", headers=h2)).json()
-    r = await client.post("/auth/totp/enable",
-                          json={"code": pyotp.TOTP(setup["secret"]).now(),
-                                "token": setup2["token"]},
-                          headers=h)
+    r = await client.post(
+        "/auth/totp/enable",
+        json={"code": pyotp.TOTP(setup["secret"]).now(), "token": setup2["token"]},
+        headers=h,
+    )
     assert r.status_code == 400
     # le compte A reste non-activé
     assert (await client.get("/auth/me", headers=h)).json()["totp"] is False
@@ -210,15 +241,17 @@ async def test_totp_disable_requires_valid_code(client):
     h = auth_headers(tokens)
     setup = await _enable_totp(client, h)
 
-    r = await client.post("/auth/totp/enable",
-                          json={"code": "000000", "disable": True}, headers=h)
+    r = await client.post(
+        "/auth/totp/enable", json={"code": "000000", "disable": True}, headers=h
+    )
     assert r.status_code == 400
     assert (await client.get("/auth/me", headers=h)).json()["totp"] is True
 
-    r = await client.post("/auth/totp/enable",
-                          json={"code": pyotp.TOTP(setup["secret"]).now(),
-                                "disable": True},
-                          headers=h)
+    r = await client.post(
+        "/auth/totp/enable",
+        json={"code": pyotp.TOTP(setup["secret"]).now(), "disable": True},
+        headers=h,
+    )
     assert r.status_code == 204
     assert (await client.get("/auth/me", headers=h)).json()["totp"] is False
 
@@ -226,16 +259,16 @@ async def test_totp_disable_requires_valid_code(client):
 @pytest.mark.asyncio
 async def test_verify_email_rate_limited(client):
     """1.6 / MD-3 : /verify-email borné à 5/min par clé client → 429 au 6e."""
-    from app.routers import auth as auth_router
-
     from app.db import SessionLocal
     from app.models import User
+    from app.routers import auth as auth_router
     from sqlalchemy import select
 
-    tokens = await register(client, "ve16@example.com")
+    await register(client, "ve16@example.com")
     async with SessionLocal() as s:
-        user = (await s.execute(
-            select(User).where(User.email == "ve16@example.com"))).scalar_one()
+        user = (
+            await s.execute(select(User).where(User.email == "ve16@example.com"))
+        ).scalar_one()
         user.email_token = "token-verify-16"
         await s.commit()
 
@@ -254,10 +287,11 @@ async def test_verify_email_expired_token_rejected(client):
     from app.models import User, utcnow
     from sqlalchemy import select
 
-    tokens = await register(client, "ve16b@example.com")
+    await register(client, "ve16b@example.com")
     async with SessionLocal() as s:
-        user = (await s.execute(
-            select(User).where(User.email == "ve16b@example.com"))).scalar_one()
+        user = (
+            await s.execute(select(User).where(User.email == "ve16b@example.com"))
+        ).scalar_one()
         user.email_token = "token-old"
         user.email_token_created_at = utcnow() - dt.timedelta(hours=25)
         await s.commit()
@@ -266,8 +300,9 @@ async def test_verify_email_expired_token_rejected(client):
     assert r.status_code == 400, r.text
 
     async with SessionLocal() as s:
-        user = (await s.execute(
-            select(User).where(User.email == "ve16b@example.com"))).scalar_one()
+        user = (
+            await s.execute(select(User).where(User.email == "ve16b@example.com"))
+        ).scalar_one()
         user.email_token = "token-fresh"
         user.email_token_created_at = utcnow()
         await s.commit()
@@ -283,8 +318,9 @@ async def _list_with_items(client, h: dict, n: int = 1) -> tuple[str, list[dict]
     list_id = (await client.post("/lists", json={"title": "T"}, headers=h)).json()["id"]
     items = []
     for i in range(n):
-        r = await client.post(f"/lists/{list_id}/items",
-                              json={"label": f"i{i}"}, headers=h)
+        r = await client.post(
+            f"/lists/{list_id}/items", json={"label": f"i{i}"}, headers=h
+        )
         items.append(r.json()[0])
     return list_id, items
 
@@ -296,14 +332,20 @@ async def test_patch_item_parent_validation(client):
     tokens = await register(client, "p23@example.com")
     h = auth_headers(tokens)
     list_id, [item] = await _list_with_items(client, h)
-    parent = (await client.post(f"/lists/{list_id}/items",
-                                json={"label": "p"}, headers=h)).json()[0]
-    child = (await client.post(f"/lists/{list_id}/items",
-                               json={"label": "c", "parent_id": parent["id"]},
-                               headers=h)).json()[0]
+    parent = (
+        await client.post(f"/lists/{list_id}/items", json={"label": "p"}, headers=h)
+    ).json()[0]
+    child = (
+        await client.post(
+            f"/lists/{list_id}/items",
+            json={"label": "c", "parent_id": parent["id"]},
+            headers=h,
+        )
+    ).json()[0]
     other = (await client.post("/lists", json={"title": "U"}, headers=h)).json()["id"]
-    foreign_parent = (await client.post(f"/lists/{other}/items",
-                                        json={"label": "x"}, headers=h)).json()[0]
+    foreign_parent = (
+        await client.post(f"/lists/{other}/items", json={"label": "x"}, headers=h)
+    ).json()[0]
 
     url = f"/lists/{list_id}/items/{item['id']}"
     r = await client.patch(url, json={"parent_id": str(uuid.uuid4())}, headers=h)
@@ -327,10 +369,16 @@ async def test_sync_upsert_parent_validation_rejected(client):
     h = auth_headers(tokens)
     list_id, [item] = await _list_with_items(client, h)
 
-    ev = {"id": item["id"], "list_id": list_id, "kind": "item.upsert",
-          "label": "i0", "done": False, "position": 1,
-          "parent_id": str(uuid.uuid4()),
-          "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+    ev = {
+        "id": item["id"],
+        "list_id": list_id,
+        "kind": "item.upsert",
+        "label": "i0",
+        "done": False,
+        "position": 1,
+        "parent_id": str(uuid.uuid4()),
+        "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
     r = await client.post("/sync", json={"events": [ev]}, headers=h)
     assert r.status_code == 200
     assert r.json()["rejected"] == [item["id"]]
@@ -342,9 +390,11 @@ async def test_rename_list_owner_role_and_folder(client):
     « member » en dur) et le folder (omis avant le fix)."""
     tokens = await register(client, "rn23@example.com")
     h = auth_headers(tokens)
-    list_id = (await client.post("/lists",
-                                 json={"title": "Avant", "folder": "Travail"},
-                                 headers=h)).json()["id"]
+    list_id = (
+        await client.post(
+            "/lists", json={"title": "Avant", "folder": "Travail"}, headers=h
+        )
+    ).json()["id"]
     r = await client.patch(f"/lists/{list_id}", json={"title": "Après"}, headers=h)
     assert r.status_code == 200
     body = r.json()
@@ -361,8 +411,9 @@ async def test_list_summary_total_counts_checked_items(client):
     h = auth_headers(tokens)
     list_id, items = await _list_with_items(client, h, n=3)
     for it in items[:2]:
-        r = await client.patch(f"/lists/{list_id}/items/{it['id']}",
-                               json={"done": True}, headers=h)
+        r = await client.patch(
+            f"/lists/{list_id}/items/{it['id']}", json={"done": True}, headers=h
+        )
         assert r.status_code == 200
     r = await client.get(f"/lists/{list_id}/summary", headers=h)
     assert r.status_code == 200
@@ -375,16 +426,18 @@ async def test_list_summary_total_counts_checked_items(client):
 # ---- 2.4 : webhooks — schéma d'abord, trust_env=False ---------------------
 
 
-def test_webhook_non_http_scheme_with_allowed_host_rejected(monkeypatch):
+@pytest.mark.asyncio
+async def test_webhook_non_http_scheme_with_allowed_host_rejected(monkeypatch):
     """2.4 : le schéma http(s) est vérifié AVANT le bypass
-    WEBHOOK_ALLOWED_HOSTS — un file:// sur un host « autorisé » est refusé."""
+    WEBHOOK_ALLOWED_HOSTS — un file:// sur un host « autorisé » est refusé.
+    (prod4 : validate_webhook_url est async — DNS via to_thread, M3.)"""
     from app.events import validate_webhook_url
 
     monkeypatch.setattr(settings, "WEBHOOK_ALLOWED_HOSTS", ["internal.example.com"])
-    allowed, _ = validate_webhook_url("file://internal.example.com/evil")
+    allowed, _ = await validate_webhook_url("file://internal.example.com/evil")
     assert not allowed
     # et un http:// légitime passe toujours
-    allowed, _ = validate_webhook_url("http://internal.example.com/hook")
+    allowed, _ = await validate_webhook_url("http://internal.example.com/hook")
     assert allowed
 
 
@@ -418,13 +471,21 @@ async def test_webhook_delivery_client_trust_env_false(client, monkeypatch):
 
     tokens = await register(client, "wk24@example.com")
     h = auth_headers(tokens)
-    list_id = uuid.UUID((await client.post("/lists", json={"title": "T"}, headers=h)).json()["id"])
+    list_id = uuid.UUID(
+        (await client.post("/lists", json={"title": "T"}, headers=h)).json()["id"]
+    )
     user_id = uuid.UUID((await client.get("/auth/me", headers=h)).json()["id"])
     # webhook sur un host autorisé (pas de résolution réseau nécessaire)
     monkeypatch.setattr(settings, "WEBHOOK_ALLOWED_HOSTS", ["internal.example.com"])
     async with SessionLocal() as s:
-        s.add(Webhook(list_id=list_id, user_id=user_id,
-                      url="http://internal.example.com/hook", secret="s"))
+        s.add(
+            Webhook(
+                list_id=list_id,
+                user_id=user_id,
+                url="http://internal.example.com/hook",
+                secret="s",
+            )
+        )
         await s.commit()
 
     await events.fire_webhooks(list_id, {"event": "x"})
@@ -439,7 +500,6 @@ async def test_rate_limiter_purges_empty_keys():
     """3.3 : les deque vides ne restent pas en dict indéfiniment — purge
     amortie au-delà de 10 000 entrées (fuite lente, 1 clé par IP/cible)."""
     import time
-
     from collections import deque
 
     from app.deps import RateLimiter
@@ -509,9 +569,11 @@ async def test_invite_email_is_fire_and_forget(client, monkeypatch):
     tokens = await register(client, "sh34@example.com")
     h = auth_headers(tokens)
     list_id = (await client.post("/lists", json={"title": "T"}, headers=h)).json()["id"]
-    r = await client.post(f"/lists/{list_id}/invites",
-                          json={"hours": 24, "email": "invited@example.com"},
-                          headers=h)
+    r = await client.post(
+        f"/lists/{list_id}/invites",
+        json={"hours": 24, "email": "invited@example.com"},
+        headers=h,
+    )
     assert r.status_code == 201
     assert sent == [], "la réponse a attendu le relais SMTP (lent)"
     await asyncio.sleep(0.6)

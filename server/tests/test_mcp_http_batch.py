@@ -8,9 +8,8 @@ import asyncio
 import json
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture
@@ -33,11 +32,11 @@ def auth_headers(tokens: dict) -> dict:
 
 
 async def _bridge(email: str, queue):
+    from app.db import SessionLocal
+    from app.models import User
     from sqlalchemy import select
 
     from app import mcp_http
-    from app.db import SessionLocal
-    from app.models import User
 
     async with SessionLocal() as s:
         user_id = (

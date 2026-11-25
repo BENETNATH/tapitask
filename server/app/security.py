@@ -29,7 +29,9 @@ def verify_password(password_hash: str, password: str) -> bool:
         return False
 
 
-def _create_token(sub: str, kind: str, ttl: int, extra: dict[str, Any] | None = None) -> str:
+def _create_token(
+    sub: str, kind: str, ttl: int, extra: dict[str, Any] | None = None
+) -> str:
     now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
         "sub": sub,

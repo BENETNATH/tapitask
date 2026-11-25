@@ -99,7 +99,11 @@ class WidgetItemAdapter(
             views.setTextViewText(
                 R.id.item_row_label,
                 "✓  " + snapshotAllDone)
-            views.setOnClickFillInIntent(R.id.item_row_label, null)
+            // S1 (prod4) / MD-4 : ligne recyclée — un Intent() vide
+            // (sans action) réinitialise le fill-in, comme la branche
+            // item sans id (avant fix : null conservait l'ancien intent
+            // de toggle).
+            views.setOnClickFillInIntent(R.id.item_row_label, Intent())
             // 2.1 (prod3) : une ligne recyclée peut montrer l'ancien badge
             // d'échéance — toujours masqué dans l'état « tout coché ».
             views.setInt(R.id.item_row_due, "setVisibility", View.GONE)

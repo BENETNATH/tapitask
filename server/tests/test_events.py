@@ -5,11 +5,10 @@ import socket
 import uuid
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.config import settings
 from app.events import _webhook_host_allowed, record_change
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture
@@ -19,10 +18,10 @@ async def client():
         yield c
 
 
-async def register(client: AsyncClient, email: str = "a@example.com", password: str = "LongPassw0rd!x"):
-    r = await client.post(
-        "/auth/register", json={"email": email, "password": password}
-    )
+async def register(
+    client: AsyncClient, email: str = "a@example.com", password: str = "LongPassw0rd!x"
+):
+    r = await client.post("/auth/register", json={"email": email, "password": password})
     assert r.status_code == 201, r.text
     return r.json()
 
@@ -34,6 +33,13 @@ def auth_headers(tokens: dict) -> dict:
 def _ga(ips):
     def fake(host, port):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 0)) for ip in ips]
+
+    return fake
+
+
+def _ga6(ips):
+    def fake(host, port):
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", (ip, 0)) for ip in ips]
 
     return fake
 
@@ -76,20 +82,23 @@ async def test_cgnat_blocked(monkeypatch):
     il doit être bloqué comme les autres espaces non publics (audit run-2)."""
     monkeypatch.setattr(settings, "WEBHOOK_ALLOWED_HOSTS", set())
     # borne basse
-    assert _webhook_host_allowed("http://100.64.0.1/x") == (False, None)
+    assert await _webhook_host_allowed("http://100.64.0.1/x") == (False, None)
     # borne haute
-    assert _webhook_host_allowed("http://100.127.255.254/x") == (False, None)
+    assert await _webhook_host_allowed("http://100.127.255.254/x") == (False, None)
     # public juste avant le CGNAT
-    assert _webhook_host_allowed("http://100.63.255.255/x") == (True, "100.63.255.255")
+    assert await _webhook_host_allowed("http://100.63.255.255/x") == (
+        True,
+        "100.63.255.255",
+    )
     # public juste après le CGNAT
-    assert _webhook_host_allowed("http://100.128.0.1/x") == (True, "100.128.0.1")
+    assert await _webhook_host_allowed("http://100.128.0.1/x") == (True, "100.128.0.1")
 
 
 @pytest.mark.asyncio
 async def test_cgnat_allowlist_opt_in(monkeypatch):
     """L'allowlist reste prioritaire : opt-in explicite conservé."""
     monkeypatch.setattr(settings, "WEBHOOK_ALLOWED_HOSTS", {"100.64.0.1"})
-    assert _webhook_host_allowed("http://100.64.0.1/x")[0] is True
+    assert (await _webhook_host_allowed("http://100.64.0.1/x"))[0] is True
 
 
 @pytest.mark.asyncio
@@ -98,14 +107,20 @@ async def test_host_check_pins_first_allowed_ip(monkeypatch):
     TOCTOU rebinding)."""
     monkeypatch.setattr(settings, "WEBHOOK_ALLOWED_HOSTS", set())
     monkeypatch.setattr(socket, "getaddrinfo", _ga(["1.2.3.4"]))
-    assert _webhook_host_allowed("http://good.example.invalid:8443/x") == (True, "1.2.3.4")
+    assert await _webhook_host_allowed("http://good.example.invalid:8443/x") == (
+        True,
+        "1.2.3.4",
+    )
 
     monkeypatch.setattr(socket, "getaddrinfo", _ga(["10.0.0.5"]))
-    assert _webhook_host_allowed("http://priv.example.invalid/x") == (False, None)
+    assert await _webhook_host_allowed("http://priv.example.invalid/x") == (False, None)
 
     # une seule adresse bloquée disqualifie l'hôte entier
     monkeypatch.setattr(socket, "getaddrinfo", _ga(["1.2.3.4", "10.0.0.5"]))
-    assert _webhook_host_allowed("http://mixed.example.invalid/x") == (False, None)
+    assert await _webhook_host_allowed("http://mixed.example.invalid/x") == (
+        False,
+        None,
+    )
 
 
 @pytest.mark.asyncio
@@ -123,14 +138,18 @@ async def test_webhook_dns_rebinding_is_pinned(client, monkeypatch):
 
     tokens = await register(client, "rebind@example.com")
     h = auth_headers(tokens)
-    list_id = (await client.post("/lists", json={"title": "RB"}, headers=h)).json()["id"]
+    list_id = (await client.post("/lists", json={"title": "RB"}, headers=h)).json()[
+        "id"
+    ]
     r = await client.post(
         f"/lists/{list_id}/hooks",
-        json={"url": "http://rebind.example.invalid:8443/x"}, headers=h,
+        json={"url": "http://rebind.example.invalid:8443/x"},
+        headers=h,
     )
     assert r.status_code == 201
-    item = (await client.post(
-        f"/lists/{list_id}/items", json={"label": "x"}, headers=h)).json()[0]
+    item = (
+        await client.post(f"/lists/{list_id}/items", json={"label": "x"}, headers=h)
+    ).json()[0]
 
     # posé après la setup : le client de test est un httpx.AsyncClient lui-même
     captured = {}
@@ -144,7 +163,8 @@ async def test_webhook_dns_rebinding_is_pinned(client, monkeypatch):
     monkeypatch.setattr(settings, "WEBHOOK_ALLOWED_HOSTS", ["1.2.3.4"])
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
     r = await client.patch(
-        f"/lists/{list_id}/items/{item['id']}", json={"done": True}, headers=h)
+        f"/lists/{list_id}/items/{item['id']}", json={"done": True}, headers=h
+    )
     assert r.status_code == 200
 
     # C1.3 : la livraison est fire-and-forget — elle tourne après la réponse.
@@ -157,3 +177,57 @@ async def test_webhook_dns_rebinding_is_pinned(client, monkeypatch):
     assert "127.0.0.1" not in captured["url"]
     assert captured["headers"].get("Host") == "rebind.example.invalid"
     assert calls == ["rebind.example.invalid"]  # résolu une seule fois
+
+
+# ---- M3 (prod4) : DNS non bloquant + CGNAT v4-mappé + rejet explicite -----
+
+
+@pytest.mark.asyncio
+async def test_cgnat_v4_mapped_blocked(monkeypatch):
+    """M3 : un CGNAT/privé en v4-mappé (::ffff:a.b.c.d) est déplié en IPv4
+    et rejeté comme le v4 pur (avant le fix : is_global IPv6 → accepté).
+    Un public v4-mappé reste accepté (pinned = l'IPv4 déplié)."""
+    monkeypatch.setattr(settings, "WEBHOOK_ALLOWED_HOSTS", set())
+    monkeypatch.setattr(socket, "getaddrinfo", _ga6(["::ffff:100.64.0.1"]))
+    assert await _webhook_host_allowed("http://cgnat-mapped.invalid/x") == (False, None)
+    monkeypatch.setattr(socket, "getaddrinfo", _ga6(["::ffff:10.0.0.5"]))
+    assert await _webhook_host_allowed("http://priv-mapped.invalid/x") == (False, None)
+    monkeypatch.setattr(socket, "getaddrinfo", _ga6(["::ffff:1.2.3.4"]))
+    assert await _webhook_host_allowed("http://pub-mapped.invalid/x") == (
+        True,
+        "1.2.3.4",
+    )
+
+
+@pytest.mark.asyncio
+async def test_dns_goes_through_to_thread(monkeypatch):
+    """M3 : le DNS (socket.getaddrinfo) passe par asyncio.to_thread — le
+    worker uvicorn unique n'est pas bloqué par un DNS lent."""
+    import asyncio
+
+    through_to_thread = []
+    real_to_thread = asyncio.to_thread
+
+    async def spy_to_thread(func, *args, **kwargs):
+        through_to_thread.append(func)
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", spy_to_thread)
+    monkeypatch.setattr(settings, "WEBHOOK_ALLOWED_HOSTS", set())
+    monkeypatch.setattr(socket, "getaddrinfo", _ga(["93.184.21.34"]))
+    ok, pinned = await _webhook_host_allowed("http://dns-spy.invalid/x")
+    assert ok is True and pinned == "93.184.21.34"
+    assert socket.getaddrinfo in through_to_thread, "le DNS doit passer par to_thread"
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_host_is_rejected_at_delivery(monkeypatch):
+    """M3 : host non résolvable → rejet explicite (aucune notification
+    n'est envoyée)."""
+    monkeypatch.setattr(settings, "WEBHOOK_ALLOWED_HOSTS", set())
+
+    def nxdomain(host, port):
+        raise socket.gaierror("Name or service not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", nxdomain)
+    assert await _webhook_host_allowed("http://nope.invalid/x") == (False, None)

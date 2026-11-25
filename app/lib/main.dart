@@ -1,7 +1,7 @@
 import "dart:async";
 
 import "package:flutter/foundation.dart"
-    show defaultTargetPlatform, TargetPlatform;
+    show defaultTargetPlatform, kIsWeb, TargetPlatform, visibleForTesting;
 import "package:http/http.dart" as http;
 import "package:material_ui/material_ui.dart";
 import "package:cupertino_ui/cupertino_ui.dart";
@@ -89,15 +89,30 @@ Future<void> main(List<String> args) async {
   runApp(const ChecklistsApp());
 }
 
+/// M6 (D-4, prod4) : condition du dialog de MAJ au boot — desktop
+/// uniquement (l'app web n'offre pas d'installateur). Extraite en
+/// fonction testable : kIsWeb est un const, insimulable en test.
+@visibleForTesting
+bool shouldShowBootUpdateDialog({
+  required bool clientAvailable,
+  required bool isWeb,
+  required TargetPlatform platform,
+}) =>
+    clientAvailable &&
+    !isWeb &&
+    (platform == TargetPlatform.windows || platform == TargetPlatform.android);
+
 /// A2 : check de boot — le résultat est stocké dans [appState] ; le dialog
-/// est présenté APRÈS la 1re frame (par ChecklistsApp), Windows + Android.
+/// est présenté APRÈS la 1re frame (par ChecklistsApp), Windows + Android,
+/// jamais sur web (M6 / D-4, prod4).
 Future<void> _checkUpdatesAtBoot() async {
   final client = http.Client();
   try {
     final info = await checkForUpdates(client: client, api: appState.api);
-    if (info.clientAvailable &&
-        (defaultTargetPlatform == TargetPlatform.windows ||
-            defaultTargetPlatform == TargetPlatform.android)) {
+    if (shouldShowBootUpdateDialog(
+        clientAvailable: info.clientAvailable,
+        isWeb: kIsWeb,
+        platform: defaultTargetPlatform)) {
       appState.setPendingBootUpdate(info);
     }
   } catch (_) {} finally {

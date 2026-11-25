@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -10,8 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..db import get_session
-from ..deps import Principal, accessible_list, get_principal, rate_limit_principal, require_write
-from ..models import Checklist, Item, ListMember, Role, new_id, utcnow
+from ..deps import (
+    Principal,
+    accessible_list,
+    get_principal,
+    rate_limit_principal,
+    require_write,
+)
+from ..events import fire_webhooks, notify_list, record_change, validate_webhook_url
+from ..models import Checklist, Item, ListMember, Role, Webhook, new_id, utcnow
 from ..schemas import (
     ChecklistIn,
     ChecklistOut,
@@ -23,8 +31,6 @@ from ..schemas import (
     WebhookIn,
     WebhookOut,
 )
-from ..events import record_change, notify_list, fire_webhooks, validate_webhook_url
-from ..models import Webhook
 from ..security import new_email_token
 
 router = APIRouter(prefix="/lists", tags=["lists"])
@@ -34,10 +40,13 @@ router = APIRouter(prefix="/lists", tags=["lists"])
 _in_flight_webhooks: set[asyncio.Task] = set()
 
 
-async def _validate_parent(session: AsyncSession, list_id: UUID,
-                           parent_id: UUID | None,
-                           exclude_item_id: UUID | None = None,
-                           missing_status: int = status.HTTP_404_NOT_FOUND) -> None:
+async def _validate_parent(
+    session: AsyncSession,
+    list_id: UUID,
+    parent_id: UUID | None,
+    exclude_item_id: UUID | None = None,
+    missing_status: int = status.HTTP_404_NOT_FOUND,
+) -> None:
     """2.3 (prod3) : validation du parent PARTAGÉE (add_item, patch_item,
     upsert sync). Le parent doit exister dans la MÊME liste, ne pas être
     supprimé, ne pas être l'item lui-même (cycle) et ne pas être déjà une
@@ -53,11 +62,13 @@ async def _validate_parent(session: AsyncSession, list_id: UUID,
     if parent is None or parent.list_id != list_id or parent.deleted:
         raise HTTPException(missing_status, "Parent item not found")
     if exclude_item_id is not None and parent_id == exclude_item_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            "An item cannot be its own parent")
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "An item cannot be its own parent"
+        )
     if parent.parent_id is not None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            "Sub-tasks are limited to one level")
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Sub-tasks are limited to one level"
+        )
 
 
 def _fire_and_forget(coro) -> None:
@@ -74,39 +85,68 @@ async def my_lists(
     # Une clé API scopée ne voit QUE sa liste — même règle que le delta-read
     # (sync._accessible_list_ids) et accessible_list (deps.py) (audit run-3).
     if principal.list_scope is not None:
-        row = (await session.execute(
-            select(Checklist).where(Checklist.id == principal.list_scope,
-                                    Checklist.deleted.is_(False)))).scalar_one_or_none()
+        row = (
+            await session.execute(
+                select(Checklist).where(
+                    Checklist.id == principal.list_scope, Checklist.deleted.is_(False)
+                )
+            )
+        ).scalar_one_or_none()
         if row is None:
             return []
         if row.owner_id == principal.user_id:
             role = "owner"
         else:
-            member = (await session.execute(
-                select(ListMember).where(ListMember.list_id == row.id,
-                                         ListMember.user_id == principal.user_id)
-            )).scalar_one_or_none()
+            member = (
+                await session.execute(
+                    select(ListMember).where(
+                        ListMember.list_id == row.id,
+                        ListMember.user_id == principal.user_id,
+                    )
+                )
+            ).scalar_one_or_none()
             if member is None:
                 return []
             role = member.role.value
-        return [ChecklistOut(id=row.id, owner_id=row.owner_id, title=row.title,
-                             updated_at=row.updated_at, role=role,
-                             color=row.color, folder=row.folder)]
+        return [
+            ChecklistOut(
+                id=row.id,
+                owner_id=row.owner_id,
+                title=row.title,
+                updated_at=row.updated_at,
+                role=role,
+                color=row.color,
+                folder=row.folder,
+            )
+        ]
     owned = await session.execute(
-        select(Checklist).where(Checklist.owner_id == principal.user_id, Checklist.deleted.is_(False))
+        select(Checklist)
+        .where(Checklist.owner_id == principal.user_id, Checklist.deleted.is_(False))
         .order_by(Checklist.updated_at.desc())
     )
     result = [
         ChecklistOut(
-            id=c.id, owner_id=c.owner_id, title=c.title, updated_at=c.updated_at,
-            role="owner", color=c.color, folder=c.folder
+            id=c.id,
+            owner_id=c.owner_id,
+            title=c.title,
+            updated_at=c.updated_at,
+            role="owner",
+            color=c.color,
+            folder=c.folder,
         )
         for c in owned.scalars()
     ]
+    # S5 (prod4) : un propriétaire ayant accepté sa propre invitation garde
+    # une ligne ListMember EN PLUS de owner_id → sans ce filtre la liste
+    # apparaîtrait deux fois (owner + member).
     memberships = await session.execute(
         select(ListMember, Checklist)
         .join(Checklist, Checklist.id == ListMember.list_id)
-        .where(ListMember.user_id == principal.user_id, Checklist.deleted.is_(False))
+        .where(
+            ListMember.user_id == principal.user_id,
+            Checklist.owner_id != principal.user_id,
+            Checklist.deleted.is_(False),
+        )
         .order_by(Checklist.updated_at.desc())
     )
     for member, checklist in memberships.all():
@@ -134,11 +174,20 @@ async def create_list(
         # A scoped key is bound to its single list: no creation outside it
         # (Strix vuln-0002).
         raise HTTPException(status.HTTP_403_FORBIDDEN, "API key scoped to another list")
-    checklist = Checklist(owner_id=principal.user_id, title=data.title, color=data.color, folder=data.folder)
+    checklist = Checklist(
+        owner_id=principal.user_id,
+        title=data.title,
+        color=data.color,
+        folder=data.folder,
+    )
     session.add(checklist)
     await session.commit()
-    await record_change(session, list_id=checklist.id, checklist_id=checklist.id, kind="list.create")
-    await notify_list(checklist.id, {"kind": "list.create", "list_id": str(checklist.id)})
+    await record_change(
+        session, list_id=checklist.id, checklist_id=checklist.id, kind="list.create"
+    )
+    await notify_list(
+        checklist.id, {"kind": "list.create", "list_id": str(checklist.id)}
+    )
     return ChecklistOut(
         id=checklist.id,
         owner_id=checklist.owner_id,
@@ -169,7 +218,11 @@ async def list_items(
     return [ItemOut.model_validate(i) for i in result.scalars()]
 
 
-@router.post("/{list_id}/items", response_model=list[ItemOut], status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{list_id}/items",
+    response_model=list[ItemOut],
+    status_code=status.HTTP_201_CREATED,
+)
 async def add_item(
     list_id: UUID,
     data: ItemIn,
@@ -179,14 +232,25 @@ async def add_item(
     await accessible_list(list_id, principal, session, min_role=Role.editor)
     # Sub-tasks: max 2 levels (a sub-task cannot have a sub-task).
     await _validate_parent(session, list_id, data.parent_id)
-    item = await _add_single(session, list_id, data.label, principal.user_id,
-                             parent_id=data.parent_id, recurrence=data.recurrence,
-                             due_date=data.due_date, notes=data.notes,
-                             assignee_id=data.assignee_id)
+    item = await _add_single(
+        session,
+        list_id,
+        data.label,
+        principal.user_id,
+        parent_id=data.parent_id,
+        recurrence=data.recurrence,
+        due_date=data.due_date,
+        notes=data.notes,
+        assignee_id=data.assignee_id,
+    )
     return [ItemOut.model_validate(item)]
 
 
-@router.post("/{list_id}/items/bulk", response_model=list[ItemOut], status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{list_id}/items/bulk",
+    response_model=list[ItemOut],
+    status_code=status.HTTP_201_CREATED,
+)
 async def add_items_bulk(
     list_id: UUID,
     data: ItemsBulkIn,
@@ -197,7 +261,9 @@ async def add_items_bulk(
     """One item per line — designed for quick-add paste and agents."""
     await accessible_list(list_id, principal, session, min_role=Role.editor)
     max_pos = await session.execute(
-        select(func.coalesce(func.max(Item.position), -1)).where(Item.list_id == list_id)
+        select(func.coalesce(func.max(Item.position), -1)).where(
+            Item.list_id == list_id
+        )
     )
     position = (max_pos.scalar() or -1) + 1
     lines = [line.strip() for line in data.text.splitlines() if line.strip()]
@@ -214,10 +280,14 @@ async def add_items_bulk(
     await session.commit()
     out = []
     for item in items:
-        await record_change(session, list_id=list_id, item_id=item.id, kind="item.upsert", commit=False)
+        await record_change(
+            session, list_id=list_id, item_id=item.id, kind="item.upsert", commit=False
+        )
         out.append(ItemOut.model_validate(item))
     await session.commit()
-    await notify_list(list_id, {"kind": "items.added", "list_id": str(list_id), "count": len(out)})
+    await notify_list(
+        list_id, {"kind": "items.added", "list_id": str(list_id), "count": len(out)}
+    )
     return out
 
 
@@ -231,13 +301,19 @@ async def patch_item(
 ):
     await accessible_list(list_id, principal, session, min_role=Role.editor)
     result = await session.execute(
-        select(Item).where(Item.id == item_id, Item.list_id == list_id, Item.deleted.is_(False))
+        select(Item).where(
+            Item.id == item_id, Item.list_id == list_id, Item.deleted.is_(False)
+        )
     )
     item = result.scalar_one_or_none()
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Item not found")
     if data.updated_at is not None:
-        from .sync import _clamp_client_dt, _utc_naive  # import local : sync.py importe déjà lists (L15)
+        from .sync import (  # import local : sync.py importe déjà lists (L15)
+            _clamp_client_dt,
+            _utc_naive,
+        )
+
         client_ts = _clamp_client_dt(data.updated_at)
         if _utc_naive(client_ts) > _utc_naive(item.updated_at):
             item.updated_at = client_ts
@@ -265,8 +341,13 @@ async def patch_item(
     if "parent_id" in data.model_fields_set:
         # 2.3 (prod3) : le parent est validé comme partout ailleurs
         # (autre liste / supprimé / soi-même / sous-tâche → 400).
-        await _validate_parent(session, list_id, data.parent_id,
-                               exclude_item_id=item_id, missing_status=400)
+        await _validate_parent(
+            session,
+            list_id,
+            data.parent_id,
+            exclude_item_id=item_id,
+            missing_status=400,
+        )
         item.parent_id = data.parent_id
     if item.updated_at is None:
         item.updated_at = utcnow()
@@ -276,13 +357,22 @@ async def patch_item(
     if newly_done and item.recurrence and item.recurrence != "none":
         spawned = await _spawn_next(session, item, principal.user_id)
     await record_change(session, list_id=list_id, item_id=item.id, kind="item.upsert")
-    await notify_list(list_id, {"kind": "item.upsert", "list_id": str(list_id), "id": str(item.id)})
+    await notify_list(
+        list_id, {"kind": "item.upsert", "list_id": str(list_id), "id": str(item.id)}
+    )
     # C1.3 : fire-and-forget — une webhook lente ne retarde pas la réponse.
-    _fire_and_forget(fire_webhooks(list_id, {
-        "event": "item.checked" if data.done is True else "item.updated",
-        "list_id": str(list_id), "item_id": str(item.id), "label": item.label,
-        "recurrence": item.recurrence,
-    }))
+    _fire_and_forget(
+        fire_webhooks(
+            list_id,
+            {
+                "event": "item.checked" if data.done is True else "item.updated",
+                "list_id": str(list_id),
+                "item_id": str(item.id),
+                "label": item.label,
+                "recurrence": item.recurrence,
+            },
+        )
+    )
     result = ItemOut.model_validate(item)
     if spawned is not None:
         return [result, ItemOut.model_validate(spawned)]
@@ -298,7 +388,9 @@ async def delete_item(
 ):
     await accessible_list(list_id, principal, session, min_role=Role.editor)
     result = await session.execute(
-        select(Item).where(Item.id == item_id, Item.list_id == list_id, Item.deleted.is_(False))
+        select(Item).where(
+            Item.id == item_id, Item.list_id == list_id, Item.deleted.is_(False)
+        )
     )
     item = result.scalar_one_or_none()
     if item is None:
@@ -307,7 +399,9 @@ async def delete_item(
     item.updated_at = utcnow()
     await session.commit()
     await record_change(session, list_id=list_id, item_id=item.id, kind="item.delete")
-    await notify_list(list_id, {"kind": "item.delete", "list_id": str(list_id), "id": str(item.id)})
+    await notify_list(
+        list_id, {"kind": "item.delete", "list_id": str(list_id), "id": str(item.id)}
+    )
     return None
 
 
@@ -319,11 +413,15 @@ async def delete_list(
 ):
     checklist, _ = await accessible_list(list_id, principal, session)
     if checklist.owner_id != principal.user_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner can delete a list")
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Only the owner can delete a list"
+        )
     checklist.deleted = True
     checklist.updated_at = utcnow()
     await session.commit()
-    await record_change(session, list_id=list_id, checklist_id=checklist.id, kind="list.delete")
+    await record_change(
+        session, list_id=list_id, checklist_id=checklist.id, kind="list.delete"
+    )
     await notify_list(list_id, {"kind": "list.delete", "list_id": str(list_id)})
     return None
 
@@ -335,7 +433,9 @@ async def rename_list(
     principal: Principal = Depends(require_write),
     session: AsyncSession = Depends(get_session),
 ):
-    checklist, member = await accessible_list(list_id, principal, session, min_role=Role.editor)
+    checklist, member = await accessible_list(
+        list_id, principal, session, min_role=Role.editor
+    )
     checklist.title = data.title
     # null = vider (C1.2) : appliqué seulement si le champ est présent.
     if "color" in data.model_fields_set:
@@ -344,8 +444,12 @@ async def rename_list(
         checklist.folder = data.folder
     checklist.updated_at = utcnow()
     await session.commit()
-    await record_change(session, list_id=list_id, checklist_id=checklist.id, kind="list.rename")
-    await notify_list(list_id, {"kind": "list.rename", "list_id": str(list_id), "title": data.title})
+    await record_change(
+        session, list_id=list_id, checklist_id=checklist.id, kind="list.rename"
+    )
+    await notify_list(
+        list_id, {"kind": "list.rename", "list_id": str(list_id), "title": data.title}
+    )
     # 2.3 (prod3) : le rôle réel (owner pour le propriétaire, pas "member"
     # en dur) et le folder (omis avant le fix).
     role = "owner" if checklist.owner_id == principal.user_id else member.role.value
@@ -360,12 +464,21 @@ async def rename_list(
     )
 
 
-async def _add_single(session: AsyncSession, list_id: UUID, label: str, user_id: UUID,
-                      parent_id: UUID | None = None, recurrence: str = "none",
-                      due_date=None, notes: str | None = None,
-                      assignee_id: UUID | None = None) -> Item:
+async def _add_single(
+    session: AsyncSession,
+    list_id: UUID,
+    label: str,
+    user_id: UUID,
+    parent_id: UUID | None = None,
+    recurrence: str = "none",
+    due_date=None,
+    notes: str | None = None,
+    assignee_id: UUID | None = None,
+) -> Item:
     max_pos = await session.execute(
-        select(func.coalesce(func.max(Item.position), -1)).where(Item.list_id == list_id)
+        select(func.coalesce(func.max(Item.position), -1)).where(
+            Item.list_id == list_id
+        )
     )
     item = Item(
         list_id=list_id,
@@ -381,7 +494,9 @@ async def _add_single(session: AsyncSession, list_id: UUID, label: str, user_id:
     session.add(item)
     await session.commit()
     await record_change(session, list_id=list_id, item_id=item.id, kind="item.upsert")
-    await notify_list(list_id, {"kind": "item.upsert", "list_id": str(list_id), "id": str(item.id)})
+    await notify_list(
+        list_id, {"kind": "item.upsert", "list_id": str(list_id), "id": str(item.id)}
+    )
     return item
 
 
@@ -393,12 +508,18 @@ def _add_months(dt: datetime, months: int) -> datetime:
     # Clamp the day to the target month's length (no spillover into the
     # following month like a plain +30 days would do).
     import calendar
+
     day = min(dt.day, calendar.monthrange(year, month)[1])
     return dt.replace(year=year, month=month, day=day)
 
 
-async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID,
-                      commit: bool = True, pending: list | None = None) -> Item | None:
+async def _spawn_next(
+    session: AsyncSession,
+    item: Item,
+    user_id: UUID,
+    commit: bool = True,
+    pending: list | None = None,
+) -> Item | None:
     """Create the next occurrence of a recurring item (unchecked, next due date).
 
     Idempotent per source item: the occurrence records the id of the item it
@@ -415,7 +536,8 @@ async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID,
     from datetime import timedelta
 
     existing = await session.execute(
-        select(Item.id).where(Item.recurrence_source_id == item.id).limit(1))
+        select(Item.id).where(Item.recurrence_source_id == item.id).limit(1)
+    )
     if existing.scalar_one_or_none() is not None:
         return None
 
@@ -457,34 +579,59 @@ async def _spawn_next(session: AsyncSession, item: Item, user_id: UUID,
         # batch restent en attente et saines.
         try:
             async with session.begin_nested():
-                await session.execute(insert(Item).values(
-                    id=next_item.id,
-                    list_id=next_item.list_id,
-                    parent_id=next_item.parent_id,
-                    label=next_item.label,
-                    notes=None,
-                    assignee_id=None,
-                    done=False,
-                    position=next_item.position,
-                    recurrence=next_item.recurrence,
-                    due_date=next_item.due_date,
-                    recurrence_source_id=next_item.recurrence_source_id,
-                    created_by=next_item.created_by,
-                    created_at=now,
-                    updated_at=now,
-                    deleted=False,
-                ))
+                await session.execute(
+                    insert(Item).values(
+                        id=next_item.id,
+                        list_id=next_item.list_id,
+                        parent_id=next_item.parent_id,
+                        label=next_item.label,
+                        notes=None,
+                        assignee_id=None,
+                        done=False,
+                        position=next_item.position,
+                        recurrence=next_item.recurrence,
+                        due_date=next_item.due_date,
+                        recurrence_source_id=next_item.recurrence_source_id,
+                        created_by=next_item.created_by,
+                        created_at=now,
+                        updated_at=now,
+                        deleted=False,
+                    )
+                )
         except IntegrityError:
             existing = await session.execute(
-                select(Item.id).where(Item.recurrence_source_id == item.id).limit(1))
+                select(Item.id).where(Item.recurrence_source_id == item.id).limit(1)
+            )
             if existing.scalar_one_or_none() is None:
                 raise  # autre contrainte unique : ce n'est pas cette race
             return None  # l'occurrence existe déjà (l'exécution concurrente a gagné)
-    await record_change(session, list_id=item.list_id, item_id=next_item.id, kind="item.upsert", commit=commit)
+    await record_change(
+        session,
+        list_id=item.list_id,
+        item_id=next_item.id,
+        kind="item.upsert",
+        commit=commit,
+    )
     if pending is not None:
-        pending.append((item.list_id, {"kind": "item.upsert", "list_id": str(item.list_id), "id": str(next_item.id)}))
+        pending.append(
+            (
+                item.list_id,
+                {
+                    "kind": "item.upsert",
+                    "list_id": str(item.list_id),
+                    "id": str(next_item.id),
+                },
+            )
+        )
     else:
-        await notify_list(item.list_id, {"kind": "item.upsert", "list_id": str(item.list_id), "id": str(next_item.id)})
+        await notify_list(
+            item.list_id,
+            {
+                "kind": "item.upsert",
+                "list_id": str(item.list_id),
+                "id": str(next_item.id),
+            },
+        )
     return next_item
 
 
@@ -496,14 +643,17 @@ async def list_summary(
 ):
     """Compact digest — designed for agents and notifications."""
     await accessible_list(list_id, principal, session)
-    checklist = (await session.execute(
-        select(Checklist).where(Checklist.id == list_id))).scalar_one()
+    checklist = (
+        await session.execute(select(Checklist).where(Checklist.id == list_id))
+    ).scalar_one()
     items = await unchecked_of(session, list_id)
     # 2.3 (prod3) : total = TOUS les items non supprimés de la liste
     # (avant le fix, total était == unchecked).
-    total = (await session.execute(
-        select(func.count()).where(Item.list_id == list_id, Item.deleted.is_(False))
-    )).scalar_one()
+    total = (
+        await session.execute(
+            select(func.count()).where(Item.list_id == list_id, Item.deleted.is_(False))
+        )
+    ).scalar_one()
     return SummaryOut(
         list_id=list_id,
         title=checklist.title,
@@ -531,7 +681,9 @@ async def purge_done_items(
     """Archive: soft-delete every checked item of the list."""
     await accessible_list(list_id, principal, session, min_role=Role.editor)
     result = await session.execute(
-        select(Item).where(Item.list_id == list_id, Item.deleted.is_(False), Item.done.is_(True))
+        select(Item).where(
+            Item.list_id == list_id, Item.deleted.is_(False), Item.done.is_(True)
+        )
     )
     now = utcnow()
     count = 0
@@ -541,18 +693,31 @@ async def purge_done_items(
         count += 1
     await session.commit()
     if count:
-        await record_change(session, list_id=list_id, kind="item.purge", actor_id=principal.user_id)
-        await notify_list(list_id, {"kind": "items.purged", "list_id": str(list_id), "count": count})
-        _fire_and_forget(fire_webhooks(list_id, {
-            "event": "items.purged", "list_id": str(list_id), "count": count,
-        }))
+        await record_change(
+            session, list_id=list_id, kind="item.purge", actor_id=principal.user_id
+        )
+        await notify_list(
+            list_id, {"kind": "items.purged", "list_id": str(list_id), "count": count}
+        )
+        _fire_and_forget(
+            fire_webhooks(
+                list_id,
+                {
+                    "event": "items.purged",
+                    "list_id": str(list_id),
+                    "count": count,
+                },
+            )
+        )
     return None
 
 
 # ---- Webhooks ------------------------------------------------------------
 
 
-@router.post("/{list_id}/hooks", response_model=WebhookOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{list_id}/hooks", response_model=WebhookOut, status_code=status.HTTP_201_CREATED
+)
 async def create_hook(
     list_id: UUID,
     data: WebhookIn,
@@ -561,17 +726,24 @@ async def create_hook(
 ):
     await accessible_list(list_id, principal, session, min_role=Role.editor)
     # SSRF gate at creation (Strix vuln-0004); delivery re-checks it.
-    allowed, _ = validate_webhook_url(data.url)
+    # M3 (prod4) : validate_webhook_url est async (DNS via to_thread).
+    allowed, _ = await validate_webhook_url(data.url)
     if not allowed:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid webhook URL")
     # Plafond par liste (audit lot T) : borne le gather de fire_webhooks.
-    count = (await session.execute(
-        select(func.count()).where(Webhook.list_id == list_id))).scalar_one()
+    count = (
+        await session.execute(select(func.count()).where(Webhook.list_id == list_id))
+    ).scalar_one()
     if count >= settings.WEBHOOKS_MAX_PER_LIST:
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            "Plafond de webhooks atteint pour cette liste")
-    hook = Webhook(list_id=list_id, user_id=principal.user_id,
-                   url=data.url, secret=new_email_token())
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Plafond de webhooks atteint pour cette liste"
+        )
+    hook = Webhook(
+        list_id=list_id,
+        user_id=principal.user_id,
+        url=data.url,
+        secret=new_email_token(),
+    )
     session.add(hook)
     await session.commit()
     return WebhookOut(id=hook.id, list_id=list_id, url=hook.url, secret=hook.secret)
@@ -589,10 +761,17 @@ async def list_hooks(
     # admin) peut le lire — un membre ou une clé API scopée ne doit pas pouvoir
     # l'exfiltrer.
     can_read_secret = principal.is_admin or (
-        principal.list_scope is None and checklist.owner_id == principal.user_id)
-    return [WebhookOut(id=h.id, list_id=h.list_id, url=h.url,
-                       secret=h.secret if can_read_secret else None)
-            for h in result.scalars()]
+        principal.list_scope is None and checklist.owner_id == principal.user_id
+    )
+    return [
+        WebhookOut(
+            id=h.id,
+            list_id=h.list_id,
+            url=h.url,
+            secret=h.secret if can_read_secret else None,
+        )
+        for h in result.scalars()
+    ]
 
 
 @router.delete("/{list_id}/hooks/{hook_id}", status_code=status.HTTP_204_NO_CONTENT)

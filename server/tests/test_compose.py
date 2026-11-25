@@ -1,6 +1,7 @@
 """docker-compose API exposure: the plaintext API must bind to loopback by
 default (audit run-2, tapitask.compose.plaintext_api_all_profiles).
 """
+
 from __future__ import annotations
 
 import os
@@ -23,14 +24,24 @@ def _compose_config(api_bind: str | None) -> dict:
     env_file.close()
     try:
         r = subprocess.run(
-            ["docker", "compose", "--env-file", env_file.name,
-             "config", "--format", "json"],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                env_file.name,
+                "config",
+                "--format",
+                "json",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
         )
     finally:
         os.unlink(env_file.name)
     assert r.returncode == 0, r.stderr
     import json
+
     return json.loads(r.stdout)
 
 
@@ -43,6 +54,7 @@ def _api_port_entry(ports: list) -> dict:
 def test_api_port_binds_loopback_by_default():
     if shutil.which("docker") is None:
         import pytest
+
         pytest.skip("docker not available")
     config = _compose_config(None)
     port = _api_port_entry(config["services"]["api"]["ports"])
@@ -53,6 +65,7 @@ def test_api_port_binds_loopback_by_default():
 def test_api_port_can_bind_all_interfaces_explicitly():
     if shutil.which("docker") is None:
         import pytest
+
         pytest.skip("docker not available")
     config = _compose_config("0.0.0.0")
     port = _api_port_entry(config["services"]["api"]["ports"])

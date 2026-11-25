@@ -94,7 +94,7 @@ class _TodayScreenState extends State<TodayScreen> {
                     future: _listOf(item.listId),
                     builder: (context, snap) => Text(
                       "${snap.data?.title ?? ""}"
-                      "${overdue ? "  •  en retard" : ""}",
+                      "${overdue ? S.t("overdueSuffix") : ""}",
                       style: TextStyle(
                           fontSize: 12,
                           color: overdue ? scheme.error : scheme.outline),

@@ -67,7 +67,8 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             const SizedBox(height: 16),
             FilledButton(
-              onPressed: () async => _submit(),
+              // S3 (prod4) : désactivé pendant le submit (double-tap).
+              onPressed: _busy ? null : () async => _submit(),
               child: Text(_register ? S.createAccount : S.login),
             ),
             TextButton(
@@ -135,7 +136,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(S.listAdded)));
-        Navigator.pushReplacementNamed(context, "/home");
+        _gotoHome();
       }
     } on ApiException catch (e) {
       setState(() => _error = "Invitation refusée : ${e.message}");
@@ -206,47 +207,83 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  /// M8 (D-5, prod4) : finaliser sur la pile [Home] — popUntil le premier
+  /// « home » de la pile (route initiale "/" = HomeScreen, ou "/home"),
+  /// puis pushReplacement. Sans ça, un login via Réglages laissait
+  /// [Home, Settings, Home] : Back revenait sur Settings (pile résiduelle).
+  /// Si aucun home n'existe dans la pile, le popUntil est un no-op et le
+  /// pushReplacementNamed seul suffit.
+  void _gotoHome() {
+    final nav = Navigator.of(context);
+    nav.popUntil((route) =>
+        route.settings.name == "/" || route.settings.name == "/home");
+    nav.pushReplacementNamed("/home");
+  }
+
+  /// S3 (prod4) : bouton désactivé pendant le submit — un double-tap ne
+  /// doit pas lancer deux logins parallèles (deux `_auth()`, deux persists).
+  bool _busy = false;
+
   /// 1.4 (prod3) : renvoie `true` si la session est ouverte et le profil
   /// chargé. `reloadProfile(required: true)` : un profil non chargé laisse
   /// `email` sur le compte PRÉCÉDENT → pas de purge → fuite des données A
   /// dans le sync B. Échec → erreur affichée, ni purge ni fullSync.
   Future<bool> _submit({bool silent = false}) async {
-    final api = widget.state.api;
-    if (!await _applyServerUrl()) return false;
+    if (_busy) return false;
+    _busy = true;
     try {
-      if (_register) {
-        await api.register(_email.text.trim(), _password.text);
-      } else {
-        await api.login(_email.text.trim(), _password.text,
-            totpCode: _totp.text.trim().isEmpty ? null : _totp.text.trim());
+      final api = widget.state.api;
+      if (!await _applyServerUrl()) return false;
+      try {
+        if (_register) {
+          await api.register(_email.text.trim(), _password.text);
+        } else {
+          await api.login(_email.text.trim(), _password.text,
+              totpCode: _totp.text.trim().isEmpty ? null : _totp.text.trim());
+        }
+      } on EmailVerificationRequired {
+        // C1.7 (A1) : register 202 — on reste sur l'écran, pas de
+        // navigation, pas de fullSync, aucun token persisté.
+        if (mounted) setState(() => _error = S.emailVerificationSent);
+        return false;
+      } catch (e) {
+        if (mounted) setState(() => _error = S.loginFailed(e));
+        return false;
       }
-    } on EmailVerificationRequired {
-      // C1.7 (A1) : register 202 — on reste sur l'écran, pas de navigation,
-      // pas de fullSync, aucun token persisté.
-      setState(() => _error = S.emailVerificationSent);
-      return false;
-    } catch (e) {
-      setState(() => _error = S.loginFailed(e));
-      return false;
+      await api.persist();
+      try {
+        // Le profil d'abord (C2.8 : c'est lui qui donne l'email du compte
+        // pour détecter un changement de compte), puis purge éventuelle des
+        // données locales du précédent, PUIS le pull.
+        await widget.state.reloadProfile(required: true);
+      } catch (e) {
+        // B1 (D-1, prod4) : le profil n'a pas pu être validé → écraser les
+        // tokens persistés par _auth() AVANT l'affichage d'erreur (sinon le
+        // prochain démarrage sync avec les données du compte précédent). Le
+        // pattern « ne persister qu'après succès » est rejeté : _auth() est
+        // partagé (login + refresh) — le catch est minimal et local.
+        api.accessToken = null;
+        api.refreshTokenValue = null;
+        await api.persist();
+        if (mounted) setState(() => _error = S.loginFailed(e));
+        return false;
+      }
+      try {
+        await widget.state.onAccountSwitch();
+        // Fresh login: pull everything, start realtime, reload the profile
+        // (admin flag + feature settings) instead of waiting for a restart.
+        await widget.state.sync.fullSync();
+        await widget.state.sync.listenRealtime();
+        await widget.state.refreshAfterLogin();
+        if (mounted && !silent) _gotoHome();
+      } catch (e) {
+        if (mounted) setState(() => _error = S.loginFailed(e));
+        return false;
+      }
+      return true;
+    } finally {
+      _busy = false;
     }
-    await api.persist();
-    try {
-      // Le profil d'abord (C2.8 : c'est lui qui donne l'email du compte
-      // pour détecter un changement de compte), puis purge éventuelle des
-      // données locales du précédent, PUIS le pull.
-      await widget.state.reloadProfile(required: true);
-      await widget.state.onAccountSwitch();
-      // Fresh login: pull everything, start realtime, reload the profile
-      // (admin flag + feature settings) instead of waiting for a restart.
-      await widget.state.sync.fullSync();
-      await widget.state.sync.listenRealtime();
-      await widget.state.refreshAfterLogin();
-      if (mounted && !silent) Navigator.pushReplacementNamed(context, "/home");
-    } catch (e) {
-      setState(() => _error = S.loginFailed(e));
-      return false;
-    }
-    return true;
   }
 
   @override

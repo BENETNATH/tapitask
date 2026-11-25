@@ -5,6 +5,7 @@ mcp_server.py is exercised end to end — but it holds all state in memory, so
 no real key is ever created. Behaviour mirrors server/app (same status codes
 for the cases the setup command relies on).
 """
+
 from __future__ import annotations
 
 import json
@@ -14,18 +15,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class FakeApi:
-    def __init__(self, *, email="me@example.com", password="correct-horse", totp=None,
-                 lists=None):
+    def __init__(
+        self, *, email="me@example.com", password="correct-horse", totp=None, lists=None
+    ):
         self.email, self.password, self.totp = email, password, totp
         # id -> {"title", "role"}
         self.lists = lists or {
-            "11111111-1111-1111-1111-111111111111": {"title": "Groceries", "role": "owner"},
+            "11111111-1111-1111-1111-111111111111": {
+                "title": "Groceries",
+                "role": "owner",
+            },
             "22222222-2222-2222-2222-222222222222": {"title": "Work", "role": "editor"},
-            "33333333-3333-3333-3333-333333333333": {"title": "Shared read", "role": "viewer"},
+            "33333333-3333-3333-3333-333333333333": {
+                "title": "Shared read",
+                "role": "viewer",
+            },
         }
-        self.keys: dict[str, dict] = {}      # id -> record (incl. "raw")
+        self.keys: dict[str, dict] = {}  # id -> record (incl. "raw")
         self.tokens: set[str] = set()
-        self.requests: list[tuple[str, str, str]] = []   # (method, path, who)
+        self.requests: list[tuple[str, str, str]] = []  # (method, path, who)
         self.login_bodies: list[dict] = []
         # fault injection
         self.leak_all_lists_to_scoped_keys = False
@@ -53,8 +61,11 @@ class FakeApi:
         return next(k for k in self.keys.values() if k["name"] == name)
 
     def calls(self, method=None, path_prefix=""):
-        return [r for r in self.requests
-                if (method is None or r[0] == method) and r[1].startswith(path_prefix)]
+        return [
+            r
+            for r in self.requests
+            if (method is None or r[0] == method) and r[1].startswith(path_prefix)
+        ]
 
     # request handling
     def _who(self, auth: str):
@@ -69,9 +80,16 @@ class FakeApi:
         return None, None
 
     def _visible_lists(self, kind, key):
-        if kind == "key" and key["list_scope"] and not self.leak_all_lists_to_scoped_keys:
-            return {key["list_scope"]: self.lists[key["list_scope"]]} \
-                if key["list_scope"] in self.lists else {}
+        if (
+            kind == "key"
+            and key["list_scope"]
+            and not self.leak_all_lists_to_scoped_keys
+        ):
+            return (
+                {key["list_scope"]: self.lists[key["list_scope"]]}
+                if key["list_scope"] in self.lists
+                else {}
+            )
         return self.lists
 
     def _handler(self):
@@ -104,36 +122,74 @@ class FakeApi:
                 if method == "POST" and path == "/auth/login":
                     api.login_bodies.append(body)
                     if api.redirect_login:
-                        return self._send(302, None, {"Location": "https://elsewhere.invalid/auth/login"})
+                        return self._send(
+                            302,
+                            None,
+                            {"Location": "https://elsewhere.invalid/auth/login"},
+                        )
                     if api.totp and body.get("totp_code") != api.totp:
-                        return self._send(401, {"detail": "Code 2FA requis ou invalide"})
-                    if body.get("email") != api.email or body.get("password") != api.password:
+                        return self._send(
+                            401, {"detail": "Code 2FA requis ou invalide"}
+                        )
+                    if (
+                        body.get("email") != api.email
+                        or body.get("password") != api.password
+                    ):
                         return self._send(401, {"detail": "Invalid credentials"})
                     tok = "jwt-" + secrets.token_hex(8)
                     api.tokens.add(tok)
-                    return self._send(200, {"access_token": tok, "refresh_token": "r", "token_type": "bearer"})
+                    return self._send(
+                        200,
+                        {
+                            "access_token": tok,
+                            "refresh_token": "r",
+                            "token_type": "bearer",
+                        },
+                    )
 
                 if kind is None:
                     return self._send(401, {"detail": "Missing credentials"})
 
                 if method == "GET" and path == "/lists":
                     vis = api._visible_lists(kind, key)
-                    return self._send(200, [
-                        {"id": i, "title": v["title"], "role": v["role"], "owner_id": "o",
-                         "updated_at": "2026-01-01T00:00:00Z"} for i, v in vis.items()])
+                    return self._send(
+                        200,
+                        [
+                            {
+                                "id": i,
+                                "title": v["title"],
+                                "role": v["role"],
+                                "owner_id": "o",
+                                "updated_at": "2026-01-01T00:00:00Z",
+                            }
+                            for i, v in vis.items()
+                        ],
+                    )
 
-                if method == "GET" and path.startswith("/lists/") and path.endswith("/items"):
+                if (
+                    method == "GET"
+                    and path.startswith("/lists/")
+                    and path.endswith("/items")
+                ):
                     lid = path.split("/")[2]
                     if kind == "key" and key["list_scope"] and lid != key["list_scope"]:
-                        return self._send(403, {"detail": "API key scoped to another list"})
+                        return self._send(
+                            403, {"detail": "API key scoped to another list"}
+                        )
                     if lid not in api.lists:
                         return self._send(404, {"detail": "List not found"})
                     return self._send(200, [])
 
                 if method == "POST" and path == "/lists":
-                    if kind == "key" and key["read_only"] and not api.writable_readonly_keys:
+                    if (
+                        kind == "key"
+                        and key["read_only"]
+                        and not api.writable_readonly_keys
+                    ):
                         return self._send(403, {"detail": "Read-only credentials"})
-                    return self._send(422, {"detail": [{"msg": "field required", "input": {}}]})
+                    return self._send(
+                        422, {"detail": [{"msg": "field required", "input": {}}]}
+                    )
 
                 if method == "POST" and path == "/api-keys":
                     if kind == "key" and key["read_only"]:
@@ -143,19 +199,35 @@ class FakeApi:
                         return self._send(404, {"detail": "List not found"})
                     kid = secrets.token_hex(8)
                     raw = "chk_" + secrets.token_urlsafe(32)
-                    api.keys[kid] = {"id": kid, "name": body["name"], "raw": raw,
-                                     "read_only": body.get("read_only", False),
-                                     "list_scope": scope, "revoked": False}
-                    return self._send(201, {"key": raw, "id": kid, "name": body["name"],
-                                            "read_only": api.keys[kid]["read_only"],
-                                            "note": "Store this key now"})
+                    api.keys[kid] = {
+                        "id": kid,
+                        "name": body["name"],
+                        "raw": raw,
+                        "read_only": body.get("read_only", False),
+                        "list_scope": scope,
+                        "revoked": False,
+                    }
+                    return self._send(
+                        201,
+                        {
+                            "key": raw,
+                            "id": kid,
+                            "name": body["name"],
+                            "read_only": api.keys[kid]["read_only"],
+                            "note": "Store this key now",
+                        },
+                    )
 
                 if method == "GET" and path == "/api-keys":
                     rows = []
                     for k in api.active_keys().values():
-                        row = {"id": k["id"], "name": k["name"], "key_prefix": k["raw"][:10],
-                               "read_only": k["read_only"],
-                               "created_at": "2026-01-01T00:00:00Z"}
+                        row = {
+                            "id": k["id"],
+                            "name": k["name"],
+                            "key_prefix": k["raw"][:10],
+                            "read_only": k["read_only"],
+                            "created_at": "2026-01-01T00:00:00Z",
+                        }
                         if not api.omit_list_scope_in_listing:
                             row["list_scope"] = k["list_scope"]
                         rows.append(row)

@@ -18,8 +18,14 @@ bearer = HTTPBearer(auto_error=False)
 
 
 class Principal:
-    def __init__(self, user_id: UUID, read_only: bool = False, via: str = "jwt",
-                 is_admin: bool = False, list_scope: UUID | None = None):
+    def __init__(
+        self,
+        user_id: UUID,
+        read_only: bool = False,
+        via: str = "jwt",
+        is_admin: bool = False,
+        list_scope: UUID | None = None,
+    ):
         self.user_id = user_id
         self.read_only = read_only
         self.via = via
@@ -56,7 +62,9 @@ class RateLimiter:
                 if count == 1:
                     await self.redis.expire(bucket, self.window)
                 if count > self.max_requests:
-                    raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests")
+                    raise HTTPException(
+                        status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests"
+                    )
                 return
             except HTTPException:
                 raise
@@ -66,7 +74,8 @@ class RateLimiter:
                 import logging
 
                 logging.getLogger("tapitask").exception(
-                    "rate-limit: Redis indisponible (%s) — fallback mémoire", key)
+                    "rate-limit: Redis indisponible (%s) — fallback mémoire", key
+                )
         # 3.3 (prod3) : fuite lente — les deque vides (fenêtre écoulée) ne
         # sont jamais retirés du dict (1 clé par IP/cible, indéfiniment).
         # Purge amortie : un passage de dict à chaque check seulement au-
@@ -110,7 +119,9 @@ async def get_principal(
     token = credentials.credentials
     if token.startswith("chk_"):
         result = await session.execute(
-            select(ApiKey).where(ApiKey.key_hash == hash_api_key(token), ApiKey.revoked.is_(False))
+            select(ApiKey).where(
+                ApiKey.key_hash == hash_api_key(token), ApiKey.revoked.is_(False)
+            )
         )
         api_key = result.scalar_one_or_none()
         if api_key is None:
@@ -118,8 +129,13 @@ async def get_principal(
         owner = await session.get(User, api_key.user_id)
         if owner is None or not owner.is_active:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Account disabled")
-        principal = Principal(api_key.user_id, read_only=api_key.read_only, via="api_key",
-                              is_admin=owner.is_admin, list_scope=api_key.list_scope)
+        principal = Principal(
+            api_key.user_id,
+            read_only=api_key.read_only,
+            via="api_key",
+            is_admin=owner.is_admin,
+            list_scope=api_key.list_scope,
+        )
     else:
         try:
             payload = decode_token(token, "access")
@@ -129,8 +145,11 @@ async def get_principal(
         if user is None or not user.is_active:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Account disabled")
         principal = Principal(user.id, is_admin=user.is_admin)
-    if principal.read_only and request.method != "GET" \
-            and not request.url.path.startswith("/mcp/"):
+    if (
+        principal.read_only
+        and request.method != "GET"
+        and not request.url.path.startswith("/mcp/")
+    ):
         # Global gate: a read-only credential is refused on every mutation
         # route (Strix vuln-0001). MCP is excluded on purpose: one POST
         # channel multiplexes read and write tools, guarded per tool in
@@ -179,14 +198,18 @@ async def accessible_list(
 ) -> tuple[Checklist, ListMember | None]:
     if principal.list_scope is not None and list_id != principal.list_scope:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "API key scoped to another list")
-    result = await session.execute(select(Checklist).where(Checklist.id == list_id, Checklist.deleted.is_(False)))
+    result = await session.execute(
+        select(Checklist).where(Checklist.id == list_id, Checklist.deleted.is_(False))
+    )
     checklist = result.scalar_one_or_none()
     if checklist is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "List not found")
     if checklist.owner_id == principal.user_id:
         return checklist, None
     result = await session.execute(
-        select(ListMember).where(ListMember.list_id == list_id, ListMember.user_id == principal.user_id)
+        select(ListMember).where(
+            ListMember.list_id == list_id, ListMember.user_id == principal.user_id
+        )
     )
     member = result.scalar_one_or_none()
     if member is None:

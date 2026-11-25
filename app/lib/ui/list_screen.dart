@@ -233,6 +233,7 @@ class _ListScreenState extends State<ListScreen> {
                   );
                 }
                 final list = await _list();
+                if (!mounted) return; // S3 (prod4) : plus d'UI après l'await
                 if (list == null) return;
                 if (action == "rename") await _renameList(list);
                 if (action == "delete") await _deleteList(list);

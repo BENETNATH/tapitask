@@ -151,9 +151,25 @@ class AppState extends ChangeNotifier {
   /// C1.6 : partie réseau du démarrage — fond, non fatale (erreurs
   /// loguées, jamais de crash).
   Future<void> _initNetwork() async {
+    // B1 (D-1, prod4) : le profil D'ABORD (required), puis onAccountSwitch
+    // (purge éventuelle du compte précédent), PUIS le sync — un échec de
+    // reloadProfile avant le sync conduit à l'état déconnecté, jamais à un
+    // sync avec les données du compte précédent.
     try {
+      await reloadProfile(required: true);
+    } catch (e) {
+      debugPrint("tapitask: background init failed: $e");
+      if (api.accessToken != null || api.refreshTokenValue != null) {
+        api.accessToken = null;
+        api.refreshTokenValue = null;
+        await api.persist();
+      }
+      handleSessionExpired();
+      return;
+    }
+    try {
+      await onAccountSwitch();
       await sync.init();
-      await reloadProfile();
       await _refreshWidget();
       if (featureAlerts && settings["notify_app"] != false) {
         await AlertService.ensureInitialized();
@@ -168,6 +184,12 @@ class AppState extends ChangeNotifier {
   /// Seam test : _applyWidgetUri est private (scopée à ce library).
   @visibleForTesting
   Future<void> applyWidgetUriForTesting(Uri? uri) => _applyWidgetUri(uri);
+
+  /// Seam test : _initNetwork est private (scopée à ce library) — le test
+  /// B1 (prod4) pilote l'ordre reloadProfile → onAccountSwitch → sync.init
+  /// et l'échec de reloadProfile (état déconnecté, pas de sync).
+  @visibleForTesting
+  Future<void> initNetworkForTesting() => _initNetwork();
 
   /// Push natif « widgetLaunch » (relance depuis le widget, app déjà ouverte).
   Future<void> _onWidgetLaunch(MethodCall call) async {

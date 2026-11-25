@@ -47,6 +47,13 @@ class ApiClient {
       {required String key}) async {
     final plain = prefs.getString(key);
     if (plain != null) {
+      // M5 (prod4) : une valeur claire VIDE n'est pas migrée (sinon ""
+      // serait écrit en secure storage et `accessToken != null` avec un
+      // token vide) — elle est juste supprimée.
+      if (plain.isEmpty) {
+        await prefs.remove(key);
+        return null;
+      }
       // Migration : valeur claire trouvée → secure storage, puis suppression.
       await secureStorage.write(key: key, value: plain);
       await prefs.remove(key);
@@ -95,6 +102,19 @@ class ApiClient {
   }
 
   bool get isConfigured => baseUrl.isNotEmpty;
+
+  /// S2 (prod4) : logout volontaire — le serveur révoque le refresh token
+  /// (best effort : hors-ligne, la purge locale fait quand même son
+  /// travail, l'endpoint révoquera… rien, le token est déjà local purgé).
+  Future<void> logout() async {
+    final token = refreshTokenValue;
+    if (token == null || token.isEmpty) return;
+    try {
+      await _http.post(Uri.parse("$baseUrl/auth/logout"),
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode({"refresh_token": token})).timeout(timeout);
+    } catch (_) {}
+  }
 
   Future<void> register(String email, String password) async {
     await _auth("/auth/register", {"email": email, "password": password});

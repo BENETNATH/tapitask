@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.config import settings
 from app.events import hub
 from app.main import app, ensure_admin_user
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture
@@ -25,8 +24,9 @@ async def bootstrap_admin(client: AsyncClient, email: str) -> dict:
     settings.ADMIN_EMAIL = email
     settings.ADMIN_PASSWORD = "WsAdminPass1!"
     assert await ensure_admin_user() is True
-    r = await client.post("/auth/login",
-                          json={"email": email, "password": "WsAdminPass1!"})
+    r = await client.post(
+        "/auth/login", json={"email": email, "password": "WsAdminPass1!"}
+    )
     assert r.status_code == 200
     settings.ADMIN_EMAIL = ""
     settings.ADMIN_PASSWORD = ""
@@ -63,11 +63,20 @@ async def run_ws(app, path, token, close_after=None, wait_for_message=False):
         else:
             received.append(msg)
 
-    scope = {"type": "websocket", "asgi": {"version": "3.0", "spec_version": "2.3"},
-             "http_version": "1.1", "method": "GET", "scheme": "http",
-             "path": path, "root_path": "", "query_string": b"",
-             "headers": [(b"host", b"test")], "client": ("127.0.0.1", 0),
-             "server": ("test", 80), "app": app}
+    scope = {
+        "type": "websocket",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "root_path": "",
+        "query_string": b"",
+        "headers": [(b"host", b"test")],
+        "client": ("127.0.0.1", 0),
+        "server": ("test", 80),
+        "app": app,
+    }
     task = asyncio.create_task(app(scope, receive, send))
     if close_after is not None:
         await close_after()
@@ -87,8 +96,9 @@ async def run_ws(app, path, token, close_after=None, wait_for_message=False):
 
 async def _user_id(client, email) -> tuple[str, dict]:
     tokens = await register(client, email)
-    r = await client.get("/auth/me",
-                         headers={"Authorization": f"Bearer {tokens['access_token']}"})
+    r = await client.get(
+        "/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"}
+    )
     assert r.status_code == 200
     return r.json()["id"], tokens
 
@@ -99,9 +109,9 @@ async def test_ws_rejects_disabled_user_at_connect(client):
     run-2, ws.connection_auth.stale_session_after_disable)."""
     admin_h = await bootstrap_admin(client, "wsadmin1@tapitask.fr")
     user_id, tokens = await _user_id(client, "ws1@example.com")
-    h = {"Authorization": f"Bearer {tokens['access_token']}"}
-    r = await client.patch(f"/admin/users/{user_id}",
-                           json={"is_active": False}, headers=admin_h)
+    r = await client.patch(
+        f"/admin/users/{user_id}", json={"is_active": False}, headers=admin_h
+    )
     assert r.status_code == 200 and r.json()["is_active"] is False
 
     received, close_code = await run_ws(app, "/ws", tokens["access_token"])
@@ -129,12 +139,14 @@ async def test_ws_closed_on_disable_while_connected(client, monkeypatch):
                 break
             await asyncio.sleep(0.01)
         assert uid in hub._subscribers
-        r = await client.patch(f"/admin/users/{user_id}",
-                               json={"is_active": False}, headers=admin_h)
+        r = await client.patch(
+            f"/admin/users/{user_id}", json={"is_active": False}, headers=admin_h
+        )
         assert r.status_code == 200
 
-    received, close_code = await run_ws(app, "/ws", tokens["access_token"],
-                                        close_after=disable)
+    received, close_code = await run_ws(
+        app, "/ws", tokens["access_token"], close_after=disable
+    )
     # un ping peut avoir été émis entre l'accept et la désactivation :
     # l'assert porte sur le close, pas sur l'absence de ping
     assert close_code == 4401
@@ -146,11 +158,30 @@ async def test_ws_ping_for_active_user(client, monkeypatch):
     monkeypatch.setattr(settings, "WS_PING_INTERVAL", 0.1)
     _, tokens = await _user_id(client, "ws3@example.com")
 
-    received, close_code = await run_ws(app, "/ws", tokens["access_token"],
-                                        wait_for_message=True)
+    received, close_code = await run_ws(
+        app, "/ws", tokens["access_token"], wait_for_message=True
+    )
     assert len(received) >= 1
     assert received[0]["type"] == "websocket.send"
     import json as _json
 
     assert _json.loads(received[0]["text"]) == {"kind": "ping"}
     assert close_code is None
+
+
+@pytest.mark.asyncio
+async def test_ws_closed_when_access_token_expires(client, monkeypatch):
+    """S5 (prod4) : le JWT access expire — la vérif exp au keepalive coupe
+    la connexion au prochain tick (avant le fix : ouverte pour la vie)."""
+    monkeypatch.setattr(settings, "WS_PING_INTERVAL", 0.1)
+    user_id, _ = await _user_id(client, "ws4@example.com")
+    # token qui expire ~1 s après la connexion
+    from uuid import UUID
+
+    monkeypatch.setattr(settings, "ACCESS_TOKEN_TTL", 1)
+    from app.security import create_access_token
+
+    short_token = create_access_token(UUID(user_id))
+
+    received, close_code = await run_ws(app, "/ws", short_token)
+    assert close_code == 4401

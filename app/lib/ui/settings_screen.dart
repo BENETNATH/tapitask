@@ -41,6 +41,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await widget.state.saveSettings();
   }
 
+  /// S2 (prod4) : « Se déconnecter » — logout volontaire : endpoint serveur
+  /// (révocation du refresh token, best effort) puis purge locale (tokens
+  /// null + persist) + état déconnecté (profil effacé, WS fermé) + retour
+  /// LoginScreen. C'est une déconnexion volontaire : pas de
+  /// onSessionExpired (c'est pour l'expiration définitive).
+  bool _loggingOut = false;
+
+  Future<void> _logout() async {
+    if (_loggingOut) return; // S3 (prod4) : pas de double logout
+    _loggingOut = true;
+    final s = widget.state;
+    try {
+      await s.api.logout();
+      s.api.accessToken = null;
+      s.api.refreshTokenValue = null;
+      await s.api.persist();
+      s.handleSessionExpired();
+      if (mounted) {
+        Navigator.pushNamedAndRemoveUntil(context, "/login", (route) => false);
+      }
+    } finally {
+      _loggingOut = false;
+    }
+  }
+
   // ---- petits composants compacts (pas de cartes, pas de bordures) ----
 
   Widget _header(String title) => Padding(
@@ -514,6 +539,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ? S.notConfigured
                               : s.api.baseUrl,
                           () => Navigator.pushNamed(context, "/login")),
+                      _divider(),
+                      // S2 (prod4) : « Se déconnecter » — libellé FR en dur
+                      // (pas de clé l10n existante ; D-9 : pas de création
+                      // de clé).
+                      SizedBox(
+                        height: 44,
+                        child: TextButton.icon(
+                          onPressed: _loggingOut ? null : _logout,
+                          icon: const Icon(Icons.logout, size: 18),
+                          label: const Text("Se déconnecter"),
+                        ),
+                      ),
                     ],
                   ),
           ),

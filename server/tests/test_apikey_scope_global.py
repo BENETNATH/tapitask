@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from httpx import ASGITransport, AsyncClient
-
 import pytest
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture
@@ -39,11 +37,17 @@ async def test_read_only_key_refused_on_all_mutation_routes(client):
     h = auth_headers(tokens)
     kh = await make_key(client, h, read_only=True)
 
-    assert (await client.patch("/auth/me", json={"settings": {"a": 1}}, headers=kh)).status_code == 403
+    assert (
+        await client.patch("/auth/me", json={"settings": {"a": 1}}, headers=kh)
+    ).status_code == 403
     assert (await client.post("/auth/totp/setup", headers=kh)).status_code == 403
-    assert (await client.post("/auth/totp/enable", json={"code": "000000"}, headers=kh)).status_code == 403
+    assert (
+        await client.post("/auth/totp/enable", json={"code": "000000"}, headers=kh)
+    ).status_code == 403
     # a generic mutation route: proves the guard is global, not per-route
-    assert (await client.post("/lists", json={"title": "X"}, headers=kh)).status_code == 403
+    assert (
+        await client.post("/lists", json={"title": "X"}, headers=kh)
+    ).status_code == 403
 
     # reads remain allowed
     assert (await client.get("/auth/me", headers=kh)).status_code == 200
@@ -57,13 +61,20 @@ async def test_read_write_key_passes_mutation_routes(client):
     h = auth_headers(tokens)
     kh = await make_key(client, h, read_only=False)
 
-    assert (await client.patch("/auth/me", json={"settings": {"a": 1}}, headers=kh)).status_code == 200
+    assert (
+        await client.patch("/auth/me", json={"settings": {"a": 1}}, headers=kh)
+    ).status_code == 200
     r = await client.post("/auth/totp/setup", headers=kh)
     assert r.status_code == 200, r.text
     secret = r.json()["secret"]
     token = r.json()["token"]
-    assert (await client.post(
-        "/auth/totp/enable",
-        json={"code": pyotp.TOTP(secret).now(), "token": token},
-        headers=kh)).status_code == 204
-    assert (await client.post("/lists", json={"title": "X"}, headers=kh)).status_code == 201
+    assert (
+        await client.post(
+            "/auth/totp/enable",
+            json={"code": pyotp.TOTP(secret).now(), "token": token},
+            headers=kh,
+        )
+    ).status_code == 204
+    assert (
+        await client.post("/lists", json={"title": "X"}, headers=kh)
+    ).status_code == 201

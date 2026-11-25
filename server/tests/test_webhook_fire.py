@@ -15,9 +15,8 @@ import subprocess
 import time
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture
@@ -106,19 +105,21 @@ async def test_pinned_ip_https_delivery_presents_origin_sni(
     """Le fetch part vers l'IP épinglée (netloc) mais SNI + vérification du
     certificat portent sur le hostname d'origine : sans ça, https vers un
     hostname résolu en IP ne fonctionne jamais."""
-    import httpx
-
     import app.events as ev
+    import httpx
 
     cert, key = tls_certs
     server, port, received = await _tls_server(cert, key)
     try:
         # Pas de DNS dans le test : création du hook sans résolution.
         monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [])
+
         # La validation SSRF est simulée : épinglé sur le serveur local.
-        monkeypatch.setattr(
-            ev, "_webhook_host_allowed", lambda url: (True, "127.0.0.1")
-        )
+        # (prod4 : _webhook_host_allowed est async — M3, DNS via to_thread.)
+        async def _fake_host_allowed(url):
+            return (True, "127.0.0.1")
+
+        monkeypatch.setattr(ev, "_webhook_host_allowed", _fake_host_allowed)
 
         original_client = httpx.AsyncClient
 

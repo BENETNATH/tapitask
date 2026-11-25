@@ -137,7 +137,9 @@ class ItemPatch(BaseModel):
     done: bool | None = None
     position: int | None = None
     parent_id: UUID | None = None
-    recurrence: str | None = Field(default=None, pattern="^(none|daily|weekly|monthly)$")
+    recurrence: str | None = Field(
+        default=None, pattern="^(none|daily|weekly|monthly)$"
+    )
     due_date: datetime | None = None
     notes: str | None = None
     assignee_id: UUID | None = None
@@ -166,7 +168,8 @@ class SyncEvent(BaseModel):
     # validate_sync_event — request-level validation would 400 the whole
     # batch and poison the client's outbox forever (audit C1.1b).
     kind: str = Field(
-        pattern="^(item.upsert|item.delete|list.rename|list.create|list.delete)$")
+        pattern="^(item.upsert|item.delete|list.rename|list.create|list.delete)$"
+    )
     id: UUID
     list_id: UUID
     label: str | None = None
@@ -188,10 +191,10 @@ def validate_sync_event(event: SyncEvent) -> None:
     l'appelant (sync) le bascule dans `rejected` — un event malformé ne
     réussira jamais → rejet, pas de retry."""
     for field, value, max_len in (
-            ("label", event.label, 2000),
-            ("notes", event.notes, None),
-            ("color", event.color, 16),
-            ("folder", event.folder, 100),
+        ("label", event.label, 2000),
+        ("notes", event.notes, None),
+        ("color", event.color, 16),
+        ("folder", event.folder, 100),
     ):
         if value is None:
             continue
@@ -200,7 +203,11 @@ def validate_sync_event(event: SyncEvent) -> None:
         if max_len is not None and len(value) > max_len:
             raise ValueError(f"{field}: at most {max_len} characters")
     if event.recurrence is not None and event.recurrence not in (
-            "none", "daily", "weekly", "monthly"):
+        "none",
+        "daily",
+        "weekly",
+        "monthly",
+    ):
         raise ValueError("recurrence: must be none, daily, weekly or monthly")
 
 
@@ -267,7 +274,6 @@ class MemberIn(BaseModel):
 
 class MemberRoleIn(BaseModel):
     role: RoleEnum
-
 
 
 class AdminUserCreateIn(BaseModel):

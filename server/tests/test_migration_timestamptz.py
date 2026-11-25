@@ -43,11 +43,10 @@ async def test_ensure_columns_sqlite_noop():
     d'erreur, la colonne due_date reste utilisable (base fresh create_all)."""
     import uuid
 
-    from sqlalchemy import inspect, select
-
     from app.db import SessionLocal, engine
     from app.main import _ensure_columns
     from app.models import Checklist, Item, User, utcnow
+    from sqlalchemy import inspect, select
 
     await _ensure_columns()
 
