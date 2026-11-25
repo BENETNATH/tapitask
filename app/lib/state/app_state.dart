@@ -23,7 +23,9 @@ import "widget_intent.dart";
 class AppState extends ChangeNotifier {
   final AppDb db;
   AppState({AppDb? db}) : db = db ?? AppDb();
-  late final ApiClient api;
+  /// Seam test (D-7, spec 2026-11-25) : posé par [init] (ApiClient.load),
+  /// assignable pour que les widget tests injectent un client espion.
+  late ApiClient api;
   late final SyncService sync;
 
   bool isAdmin = false;

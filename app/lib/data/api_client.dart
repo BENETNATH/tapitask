@@ -197,6 +197,39 @@ class ApiClient {
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
+  /// D-7 (spec 2026-11-25) : corps BRUT d'un export (JSON/markdown/CSV) —
+  /// pas de décodage JSON, le texte est sauvé tel quel.
+  Future<String> getRaw(String path, {bool retried = false}) async {
+    final r = await _http.get(Uri.parse("$baseUrl$path"),
+        headers: {"Authorization": "Bearer $accessToken"}).timeout(timeout);
+    if (r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return getRaw(path, retried: true);
+    }
+    _check(r);
+    return r.body;
+  }
+
+  /// D-7 : POST /import — corps brut (export JSON tapitask OU markdown
+  /// Obsidian ; le serveur détecte). [name] = nom du fichier (titre d'une
+  /// liste markdown sans H1). Renvoie le corps de la réponse (listes créées).
+  Future<Map<String, dynamic>> importFile(String body, {String? name}) async {
+    var uri = Uri.parse("$baseUrl/import");
+    if (name != null) {
+      uri = uri.replace(queryParameters: {"name": name});
+    }
+    final r = await _http.post(uri,
+        headers: {
+          "Authorization": "Bearer $accessToken",
+          "Content-Type": "application/octet-stream"
+        },
+        body: body).timeout(timeout);
+    if (r.statusCode == 401 && await _tryRefresh()) {
+      return importFile(body, name: name);
+    }
+    _check(r);
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
   Future<List<dynamic>> getList(String path, {bool retried = false}) async {
     final r = await _http.get(Uri.parse("$baseUrl$path"),
         headers: {"Authorization": "Bearer $accessToken"}).timeout(timeout);
@@ -267,6 +300,9 @@ class ApiClient {
   }
 
   Future<bool>? _refreshInFlight;
+
+  /// Ferme le client HTTP (tests : pas de fuite d'HttpClient au teardown).
+  void close() => _http.close();
 
   void _check(http.Response r) {
     if (r.statusCode >= 400) {

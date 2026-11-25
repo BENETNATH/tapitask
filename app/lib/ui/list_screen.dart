@@ -5,6 +5,7 @@ import "package:material_ui/material_ui.dart";
 import "package:flutter/services.dart";
 
 import "../data/database.dart";
+import "../platform/file_service.dart";
 import "../state/app_state.dart";
 import "due_format.dart";
 import "list_dialogs.dart";
@@ -122,6 +123,44 @@ class _ListScreenState extends State<ListScreen> {
       await widget.state.deleteList(list.id);
       if (mounted) Navigator.pop(context);
     }
+  }
+
+  /// D-7 (spec 2026-11-25) : export de la liste courante (JSON / Markdown /
+  /// CSV) — le corps serveur est sauvé tel quel sous `« titre ».format`.
+  Future<void> _exportList(LocalList list, String action) async {
+    final fmt =
+        action == "export_json" ? "json" : action == "export_md" ? "md" : "csv";
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final saved = await runExport(
+          widget.state.api, "/lists/${list.id}/export.$fmt",
+          "${_fileSlug(list.title)}.$fmt");
+      if (saved) {
+        messenger.showSnackBar(SnackBar(content: Text(S.exportedOk)));
+      }
+    } catch (_) {
+      messenger.showSnackBar(SnackBar(content: Text(S.exportFailed)));
+    }
+  }
+
+  /// D-7 : import (JSON ou markdown) — POST /import, le serveur crée des
+  /// nouvelles listes ; l'annulation du dialog ne montre rien.
+  Future<void> _importFile() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final count = await runImport(widget.state.api);
+      if (count != null) {
+        messenger.showSnackBar(SnackBar(content: Text(S.importedOk)));
+      }
+    } catch (_) {
+      messenger.showSnackBar(SnackBar(content: Text(S.importFailed)));
+    }
+  }
+
+  String _fileSlug(String title) {
+    final slug =
+        title.toLowerCase().replaceAll(RegExp(r"[^a-z0-9]+"), "-");
+    return slug.isEmpty ? "list" : slug;
   }
 
   /// Titre de l'app bar, construit sur le cache `_lists` : sur un État
@@ -245,6 +284,13 @@ class _ListScreenState extends State<ListScreen> {
                   await widget.state.setDefaultList(
                       widget.state.defaultListId == list.id ? null : list.id);
                 }
+                // D-7 (spec 2026-11-25) : export par liste (JSON/Markdown/CSV)
+                if (action == "export_json" ||
+                    action == "export_md" ||
+                    action == "export_csv") {
+                  await _exportList(list, action);
+                }
+                if (action == "import") await _importFile();
               },
               itemBuilder: (context) => [
                 PopupMenuItem(
@@ -266,7 +312,9 @@ class _ListScreenState extends State<ListScreen> {
                   child: Row(children: [
                     Icon(Icons.delete_sweep_outlined),
                     const SizedBox(width: 12),
-                    Text(S.cleanDone),
+                    Flexible(
+                        child:
+                            Text(S.cleanDone, overflow: TextOverflow.ellipsis)),
                   ]),
                 ),
                 PopupMenuItem(
@@ -274,7 +322,8 @@ class _ListScreenState extends State<ListScreen> {
                   child: Row(children: [
                     Icon(Icons.share),
                     const SizedBox(width: 12),
-                    Text(S.share),
+                    Flexible(
+                        child: Text(S.share, overflow: TextOverflow.ellipsis)),
                   ]),
                 ),
                 PopupMenuItem(
@@ -282,7 +331,50 @@ class _ListScreenState extends State<ListScreen> {
                   child: Row(children: [
                     Icon(Icons.palette_outlined),
                     SizedBox(width: 12),
-                    Text(S.color),
+                    Flexible(
+                        child:
+                            Text(S.color, overflow: TextOverflow.ellipsis)),
+                  ]),
+                ),
+                PopupMenuItem(
+                  value: "export_json",
+                  child: Row(children: [
+                    Icon(Icons.file_download_outlined),
+                    const SizedBox(width: 12),
+                    Flexible(
+                        child:
+                            Text(S.exportJson, overflow: TextOverflow.ellipsis)),
+                  ]),
+                ),
+                PopupMenuItem(
+                  value: "export_md",
+                  child: Row(children: [
+                    Icon(Icons.description_outlined),
+                    const SizedBox(width: 12),
+                    Flexible(
+                        child:
+                            Text(S.exportMarkdown,
+                                overflow: TextOverflow.ellipsis)),
+                  ]),
+                ),
+                PopupMenuItem(
+                  value: "export_csv",
+                  child: Row(children: [
+                    Icon(Icons.table_chart_outlined),
+                    const SizedBox(width: 12),
+                    Flexible(
+                        child:
+                            Text(S.exportCsv, overflow: TextOverflow.ellipsis)),
+                  ]),
+                ),
+                PopupMenuItem(
+                  value: "import",
+                  child: Row(children: [
+                    Icon(Icons.upload_file_outlined),
+                    const SizedBox(width: 12),
+                    Flexible(
+                        child:
+                            Text(S.importFile, overflow: TextOverflow.ellipsis)),
                   ]),
                 ),
                 PopupMenuItem(
@@ -294,9 +386,11 @@ class _ListScreenState extends State<ListScreen> {
                           ? Icons.cloud_off_outlined
                           : Icons.cloud_done_outlined),
                       const SizedBox(width: 12),
-                      Text(snap.data?.localOnly == true
-                          ? "Activer la synchro"
-                          : "Local uniquement"),
+                      Flexible(
+                          child: Text(snap.data?.localOnly == true
+                              ? "Activer la synchro"
+                              : "Local uniquement",
+                                  overflow: TextOverflow.ellipsis)),
                     ]),
                   ),
                 ),
@@ -305,7 +399,9 @@ class _ListScreenState extends State<ListScreen> {
                   child: Row(children: [
                     Icon(Icons.drive_file_rename_outline),
                     SizedBox(width: 12),
-                    Text(S.rename),
+                    Flexible(
+                        child:
+                            Text(S.rename, overflow: TextOverflow.ellipsis)),
                   ]),
                 ),
                 PopupMenuItem(
@@ -313,7 +409,9 @@ class _ListScreenState extends State<ListScreen> {
                   child: Row(children: [
                     Icon(Icons.delete_outline),
                     SizedBox(width: 12),
-                    Text(S.delete),
+                    Flexible(
+                        child:
+                            Text(S.delete, overflow: TextOverflow.ellipsis)),
                   ]),
                 ),
               ],

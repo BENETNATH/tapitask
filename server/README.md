@@ -1,6 +1,8 @@
 # Tapitask — API Serveur
 
-FastAPI + SQLAlchemy async + Postgres (asyncpg). Tests sur SQLite (aiosqlite).
+FastAPI + SQLAlchemy async. Backend de déploiement : Postgres (asyncpg) ou SQLite
+fichier (aiosqlite — flag `DB_BACKEND`, WAL + `busy_timeout` au connect).
+Tests sur SQLite (aiosqlite).
 
 ## Endpoints principaux
 
@@ -13,12 +15,17 @@ FastAPI + SQLAlchemy async + Postgres (asyncpg). Tests sur SQLite (aiosqlite).
 | GET/POST/PATCH/DELETE | `/lists[...]` | Listes CRUD |
 | GET/POST | `/lists/{id}/items[...]` | Items ; `bulk` accepte du texte multi-lignes |
 | PATCH | `/lists/{id}/items/{id}` | Cocher / renommer (LWW sur `updated_at`) |
+| GET | `/lists/{id}/export.json` · `export.md` · `export.csv` | Export de la liste : JSON 1:1 modèle (y compris soft-deleted) / Markdown Obsidian / CSV `;` (header `liste;titre;fait;echeance;ordre`) |
+| GET | `/export.json?scope=all` · `/export.csv?scope=all` | Export global (listes possédées + memberships) |
+| POST | `/import` | Import JSON (enveloppe tapitask) ou Markdown Obsidian (détection par le corps) → **nouvelles listes, nouveaux UUIDs** (jamais de merge) ; assignés/created_by nullifiés |
 | POST | `/sync` | Delta sync (push outbox + pull `since`) |
 | POST | `/lists/{id}/invites` · `/lists/invites/{id}/accept` | Partage par invitation |
 | POST/GET/DELETE | `/lists/{id}/members[...]` | Partage direct par email + rôles |
 | POST/GET/DELETE | `/api-keys[...]` | Clés d'API (agents) |
+| POST/GET/DELETE | `/lists/{id}/hooks[...]` | Webhooks signés HMAC |
 | WS | `/ws?token=...` | Temps réel (listes partagées) |
 | GET/POST/PATCH/DELETE | `/admin/users[...]` | Admin : lister, créer, désactiver, promouvoir, reset MDP |
+| GET | `/admin/audit` | Journal d'audit (admin, ≤1000 entrées) |
 
 Documentation interactive : `/docs` (Swagger), spec : `/openapi.json`.
 
@@ -29,18 +36,19 @@ python -m venv .venv
 .venv/bin/pip install -r requirements.txt
 export JWT_SECRET=$(openssl rand -hex 32)
 export DATABASE_URL=postgresql+asyncpg://checklists:checklists@localhost:5432/checklists
+# ou sans Postgres : export DATABASE_URL=sqlite+aiosqlite:///./tapitask.db
 uvicorn app.main:app --reload
 ```
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q    # 9 tests : auth, CRUD, bulk, partage, invitations, api keys, sync delta, 401
+.venv/bin/python -m pytest -q    # 249 tests (3 skipped sans DSN Postgres) : auth, CRUD, bulk, partage, invitations, api keys, sync, admin, webhooks HMAC, MCP, import/export, db
 ```
 
 ## Modèle de données
 
-`users`, `refresh_tokens`, `api_keys`, `lists`, `list_members` (viewer/editor/owner), `items`, `invites`, `change_log`.
+`users`, `refresh_tokens`, `api_keys`, `lists`, `list_members` (viewer/editor/owner), `items`, `invites`, `change_log`, `webhooks`.
 
 ## Synchro (contrat)
 

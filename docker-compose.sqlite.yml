@@ -1,0 +1,81 @@
+# Tapitask — déploiement SQLite (spec 2026-11-25, D-2).
+# Identique au mode PG sauf :
+#   - pas de service `db`, pas de depends_on ;
+#   - DATABASE_URL = SQLite FICHIER sur le volume nommé `data`
+#     (le fichier de base survit au rebuild/restart) ;
+#   - zéro DB_PASSWORD requis.
+# Lancé par scripts/compose-up.sh quand DB_BACKEND=sqlite.
+services:
+  api:
+    build: ./server
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////data/checklists.db
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # --- Email (invitations, partages, notifications) ---
+      SMTP_ENABLED: ${SMTP_ENABLED:-0}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-tapitask@localhost}
+      # --- Rate limiting multi-workers (optionnel) ---
+      REDIS_URL: ${REDIS_URL:-}
+      # Variables de config.py absentes de l'environment (audit C1.4) :
+      # sans ce pass-through, les valeurs par défaut du code ne peuvent pas
+      # être réglées en production.
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-20}
+      PRINCIPAL_RATE_LIMIT_PER_MINUTE: ${PRINCIPAL_RATE_LIMIT_PER_MINUTE:-300}
+      WS_PING_INTERVAL: ${WS_PING_INTERVAL:-30.0}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      WEBHOOK_ALLOWED_HOSTS: ${WEBHOOK_ALLOWED_HOSTS:-}
+      WEBHOOKS_MAX_PER_LIST: ${WEBHOOKS_MAX_PER_LIST:-10}
+    volumes:
+      # Le fichier de base (checklists.db + WAL/SHM) vit ici : il
+      # persiste au rebuild du conteneur.
+      - data:/data
+    networks: [internal]
+    ports:
+      # API en clair : écoute loopback par défaut (reverse proxy local).
+      # API_BIND=0.0.0.0 uniquement derrière un pare-feu.
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
+
+  # Webapp (optionnel) : --profile web (identique au mode PG)
+  web:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./app/build/web:/usr/share/nginx/html:ro
+    networks: [internal]
+    ports:
+      # Web en clair : écoute loopback par défaut, comme l'API (audit lot T).
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80"
+    profiles: ["web"]
+
+  # TLS intégré (optionnel) : --profile caddy (identique au mode PG)
+  # Par défaut, l'API est exposée sur ${API_PORT} pour ton propre reverse proxy.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [internal]
+    profiles: ["caddy"]
+
+volumes:
+  data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:

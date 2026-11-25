@@ -33,6 +33,10 @@ dependencies:
   # M6 (D-4, prod4) : remplacement de dart:html (deprecated) dans
   # update_opener_web.dart — déjà présent en transitif dans pubspec.lock.
   web: ^1.1.2
+  # Justification unique d'une nouvelle dépendance (spec 2026-11-25, D-7) :
+  # import/export — picker de fichier natif
+  # (android/web/windows) ; aucun picker de fichier n'existait dans l'app.
+  file_selector: ^1.1.0
 
 dev_dependencies:
   flutter_test:

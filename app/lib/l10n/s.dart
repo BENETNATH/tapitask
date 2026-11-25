@@ -21,6 +21,19 @@ class S {
     "delete": "Supprimer",
     "rename": "Renommer",
     "share": "Partager",
+    // --- import/export (spec 2026-11-25, D-7) ---
+    "importExport": "Exporter / Importer",
+    "exportJson": "Exporter en JSON",
+    "exportMarkdown": "Exporter en Markdown",
+    "exportCsv": "Exporter en CSV",
+    "importFile": "Importer un fichier…",
+    "importFileHint": "JSON (export Tapitask) ou Markdown (Obsidian)",
+    "exportAllJson": "Tout exporter (JSON)",
+    "exportAllCsv": "Tout exporter (CSV)",
+    "exportedOk": "Export réussi",
+    "importedOk": "Import réussi",
+    "exportFailed": "Échec de l'export",
+    "importFailed": "Échec de l'import",
     "later": "Plus tard",
     "none": "Aucun",
     "remove": "Retirer",
@@ -214,6 +227,18 @@ class S {
     "delete": "Delete",
     "rename": "Rename",
     "share": "Share",
+    "importExport": "Export / Import",
+    "exportJson": "Export as JSON",
+    "exportMarkdown": "Export as Markdown",
+    "exportCsv": "Export as CSV",
+    "importFile": "Import a file…",
+    "importFileHint": "JSON (Tapitask export) or Markdown (Obsidian)",
+    "exportAllJson": "Export all (JSON)",
+    "exportAllCsv": "Export all (CSV)",
+    "exportedOk": "Export saved",
+    "importedOk": "Import OK",
+    "exportFailed": "Export failed",
+    "importFailed": "Import failed",
     "later": "Later",
     "none": "None",
     "remove": "Remove",
@@ -571,6 +596,20 @@ class S {
   static String get passwordOrTotpInvalid => t("passwordOrTotpInvalid");
   static String get emailAlreadyUsed => t("emailAlreadyUsed");
   static String get emailVerifyUnavailable => t("emailVerifyUnavailable");
+
+  // --- import/export (spec 2026-11-25, D-7) ---
+  static String get importExport => t("importExport");
+  static String get exportJson => t("exportJson");
+  static String get exportMarkdown => t("exportMarkdown");
+  static String get exportCsv => t("exportCsv");
+  static String get importFile => t("importFile");
+  static String get importFileHint => t("importFileHint");
+  static String get exportAllJson => t("exportAllJson");
+  static String get exportAllCsv => t("exportAllCsv");
+  static String get exportedOk => t("exportedOk");
+  static String get importedOk => t("importedOk");
+  static String get exportFailed => t("exportFailed");
+  static String get importFailed => t("importFailed");
 
   // --- messages paramétrés ---
   static String loginFailed(Object e) => locale == "en" ? "Failed: $e" : "Échec : $e";

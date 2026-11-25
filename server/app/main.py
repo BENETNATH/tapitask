@@ -17,7 +17,7 @@ from .config import settings
 from .db import Base, SessionLocal, engine
 from .mcp_http import router as mcp_router
 from .models import RefreshToken, User, utcnow
-from .routers import admin, apikeys, auth, lists, sharing, sync
+from .routers import admin, apikeys, auth, import_export, lists, sharing, sync
 from .security import hash_password
 from .ws import router as ws_router
 
@@ -74,6 +74,7 @@ app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(admin.audit_router)
 app.include_router(lists.router)
+app.include_router(import_export.router)
 app.include_router(sharing.router)
 app.include_router(sync.router)
 app.include_router(apikeys.router)

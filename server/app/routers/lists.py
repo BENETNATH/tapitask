@@ -5,6 +5,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +33,7 @@ from ..schemas import (
     WebhookOut,
 )
 from ..security import new_email_token
+from . import import_export
 
 router = APIRouter(prefix="/lists", tags=["lists"])
 
@@ -164,6 +166,52 @@ async def my_lists(
     return result
 
 
+# ---- Export par liste (spec 2026-11-25 F2/F3/F4) --------------------------
+# Les routeurs de format vivent dans import_export (helpers partagés) ; ici
+# uniquement l'accès par liste (prefix /lists). Lecture seule : un membre
+# viewer peut exporter ce qu'il peut lire.
+
+
+@router.get("/{list_id}/export.json")
+async def export_list_json(
+    list_id: UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+):
+    checklist, _ = await accessible_list(list_id, principal, session)
+    # 1:1 modèle : tous les items, y compris les lignes soft-deleted
+    # (flag `deleted` conservé) — backup fidèle.
+    items = await import_export._items_of(session, list_id, include_deleted=True)
+    return import_export._envelope([(checklist, items)])
+
+
+@router.get("/{list_id}/export.md")
+async def export_list_md(
+    list_id: UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+):
+    checklist, _ = await accessible_list(list_id, principal, session)
+    items = await import_export._items_of(session, list_id, include_deleted=False)
+    return PlainTextResponse(
+        import_export._md_for_list(checklist.title, items),
+        media_type="text/markdown",
+    )
+
+
+@router.get("/{list_id}/export.csv")
+async def export_list_csv(
+    list_id: UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+):
+    checklist, _ = await accessible_list(list_id, principal, session)
+    items = await import_export._items_of(session, list_id, include_deleted=False)
+    return import_export._csv_response(
+        [(checklist, items)], import_export._csv_filename(checklist.title)
+    )
+
+
 @router.post("", response_model=ChecklistOut, status_code=status.HTTP_201_CREATED)
 async def create_list(
     data: ChecklistIn,
@@ -265,7 +313,8 @@ async def add_items_bulk(
             Item.list_id == list_id
         )
     )
-    position = (max_pos.scalar() or -1) + 1
+    # coalesce garantit non-None (`or -1` traitait 0 comme absent)
+    position = max_pos.scalar() + 1
     lines = [line.strip() for line in data.text.splitlines() if line.strip()]
     if not lines:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No non-empty lines")
@@ -485,7 +534,8 @@ async def _add_single(
         label=label,
         notes=notes,
         assignee_id=assignee_id,
-        position=(max_pos.scalar() or -1) + 1,
+        # coalesce garantit non-None (`or -1` traitait 0 comme absent)
+        position=max_pos.scalar() + 1,
         created_by=user_id,
         parent_id=parent_id,
         recurrence=recurrence,

@@ -95,8 +95,9 @@ PROFILE_ARGS=()
 if [ "$TLS_MODE" = "1" ]; then PROFILE_ARGS+=(--profile caddy); fi
 if [ "${WEB_ENABLED,,}" = "o" ]; then PROFILE_ARGS+=(--profile web); fi
 
+# --profile pg : le service db est sous ce profile (spec 2026-11-25, D-1)
 echo "==> Build + démarrage des conteneurs (db, api${PROFILE_ARGS[*]:+ profiles actifs})..."
-docker compose up -d --build "${PROFILE_ARGS[@]}"
+docker compose -f docker-compose.yml --profile pg up -d --build "${PROFILE_ARGS[@]}"
 
 echo "==> Attente de la base de données..."
 for i in $(seq 1 30); do

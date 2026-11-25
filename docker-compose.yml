@@ -1,6 +1,11 @@
 services:
+  # db est sous profile « pg » (spec 2026-11-25, D-1) : le mode SQLite
+  # (docker-compose.sqlite.yml) n'a pas de service de base de données.
+  # PG reste le défaut — le wrapper scripts/compose-up.sh et
+  # scripts/deploy_server.sh lancent avec --profile pg.
   db:
     image: postgres:19-alpine
+    profiles: ["pg"]
     restart: unless-stopped
     environment:
       POSTGRES_USER: checklists

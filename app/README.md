@@ -34,6 +34,9 @@ flutter run -d windows     # ou -d android
   URL serveur configurable.
 - **Partage** : bouton « Partager » sur une liste → code d'invitation, email avec rôle
   viewer/editor, membres, retrait.
+- **Export / Import** : menu « Exporter / Importer » sur une liste (JSON, Markdown
+  Obsidian, CSV) + export global (Tout exporter JSON/CSV) et import dans les réglages.
+  L'import (JSON ou Markdown) crée toujours de **nouvelles** listes (jamais de merge).
 - **Windows** : icône systray, volet rapide ancré près de la systray (Win32 natif),
   ajout rapide, listes épinglées en chips, épingle « toujours visible ».
 - **Android** : widgets d'écran d'accueil (voir plus bas).
@@ -53,7 +56,7 @@ Les deux providers sont **livrés dans le dépôt**
 Les layouts sont dans `app/android/app/src/main/res/layout/`
 (`list_widget.xml`, `quickadd_widget.xml`), les infos dans `res/xml/`.
 
-Le widget lit les données posées par `HomeWidgetService` (prefs partagées — cache
+Le widget lit les données posées par `WidgetService` (prefs partagées — cache
 local, fonctionne hors ligne) et se rafraîchit après chaque synchro / toggle / ajout.
 
 ## Tray Windows
@@ -74,33 +77,34 @@ local, fonctionne hors ligne) et se rafraîchit après chaque synchro / toggle /
 
 ```
 lib/
-├── main.dart               # bootstrap, observers (resume → sync/toggles), providers
-├── app.dart                # MaterialApp, thème, routes
-├── l10n/                   # localisation (fr/en)
-├── models/                 # List, Item, Subtask (entités métier)
-├── state/                  # AppController + AppService (actions, synchro, widgets)
+├── main.dart               # bootstrap, thème, observers (resume → sync/toggles), routes
+├── l10n/s.dart             # localisation (fr/en)
+├── state/
+│   ├── app_state.dart      # AppState : actions, synchro, widgets, parseur de dates/j+N
+│   └── widget_intent.dart  # deep-link widget → app
 ├── data/
-│   ├── database.dart       # base locale Drift/SQLite
-│   ├── api_client.dart     # HTTP + JWT + refresh automatique
-│   └── sync_service.dart   # synchro delta + WebSocket
+│   ├── database.dart       # base locale Drift/SQLite (LocalLists / LocalItems)
+│   ├── api_client.dart     # HTTP + JWT + refresh automatique + export/import (corps brut)
+│   ├── sync_service.dart   # synchro delta + WebSocket
+│   ├── connection/         # ouverture de la DB : native / web (WASM) / unsupported
+│   └── update_service.dart # in-app update (+ android_updater, windows_updater, app_version)
 ├── ui/
 │   ├── home_screen.dart    # liste des listes + vues transverses
-│   ├── list_screen.dart    # écran d'une liste (items, échéances, notes)
+│   ├── list_screen.dart    # écran d'une liste (items, échéances, notes, menu Exporter/Importer)
 │   ├── today_screen.dart   # « Aujourd'hui » : dus / en retard, toutes listes
 │   ├── todo_all_screen.dart# « À faire » : non cochés groupés par liste
-│   ├── settings_screen.dart# réglages par utilisateur + thème
+│   ├── search_screen.dart  # recherche
+│   ├── settings_screen.dart# réglages + export/import global
+│   ├── share_screen.dart   # partage (invitations, membres, rôles)
+│   ├── admin_screen.dart   # admin (comptes, audit)
 │   ├── login_screen.dart   # login / invite / URL serveur
-│   └── widgets.dart        # widgets partagés (tile, icône d'échéance…)
-├── widgets/
-│   └── home_widget.dart    # bridge Dart ↔ natif (prefs partagées, toggles)
+│   └── list_dialogs / due_picker / due_format / update_dialog
 ├── platform/
-│   ├── tray_controller.dart# icône systray + menu
-│   └── flyout_bridge.dart  # channel natif → volet Win32
-├── utils/
-│   ├── date_parser.dart    # « demain », « vendredi », j+N
-│   ├── repeat_parser.dart  # récurrences
-│   └── due_keywords.dart   # mots-clés d'échéance personnels
-└── theme/                  # thèmes clair/sombre
+│   ├── tray_controller.dart# icône systray + menu (+ tray_controller_web : no-op)
+│   ├── flyout_bridge.dart  # channel natif → volet Win32
+│   ├── widget_service.dart # bridge Dart ↔ natif Android (prefs partagées, toggles)
+│   ├── file_service.dart   # export/import de fichiers (dialog natif, web inclus)
+│   └── update_opener_*     # ouvrir le store / le téléchargement (update)
 ```
 
 ### Natif
@@ -118,8 +122,8 @@ Chaque action est **appliquée d'abord en local** (SQLite) et notifiée immédia
 
 ## Tests
 
-31 tests Dart couvrant synchro, parseurs, widget intent/toggles, deep-link ＋,
-icône d'échéance, overflow du titre de liste, lancement du widget.
+139 tests Dart couvrant synchro, parseurs, widgets, export/import, update,
+partage, admin/audit, deep-link, icône d'échéance, lancement du widget.
 
 ```bash
 # Prérequis système (Linux) : les plugins tray desktop déclenchent un build

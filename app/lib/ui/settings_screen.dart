@@ -7,6 +7,7 @@ import "../data/api_client.dart";
 import "../data/app_version.dart";
 import "../data/update_service.dart";
 import "../data/windows_updater.dart";
+import "../platform/file_service.dart";
 import "../state/app_state.dart";
 import "../l10n/s.dart";
 import "update_dialog.dart";
@@ -251,6 +252,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
             : null,
       ),
     );
+  }
+
+  // ---- Exporter / Importer (spec 2026-11-25, D-7) ----
+  // Site minimal choisi pour l'export/import GLOBAL : les réglages (le
+  // spec laissait le choix réglages/home — ici pas d'écran home dédié,
+  // les réglages sont le seul écran global stable).
+
+  Future<void> _exportAll(String fmt) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final saved = await runExport(
+          widget.state.api, "/export.$fmt?scope=all", "tapitask-all.$fmt");
+      if (saved) {
+        messenger.showSnackBar(SnackBar(content: Text(S.exportedOk)));
+      }
+    } catch (_) {
+      messenger.showSnackBar(SnackBar(content: Text(S.exportFailed)));
+    }
+  }
+
+  Future<void> _importFile() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final count = await runImport(widget.state.api);
+      if (count != null) {
+        messenger.showSnackBar(SnackBar(content: Text(S.importedOk)));
+      }
+    } catch (_) {
+      messenger.showSnackBar(SnackBar(content: Text(S.importFailed)));
+    }
   }
 
   // ---- dialogues ----
@@ -508,6 +539,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         width: 16, height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2))
                     : null),
+          ),
+
+          // ---- Exporter / Importer (spec 2026-11-25, D-7) ----
+          _header(S.importExport),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Column(
+              children: [
+                _tapRow(S.exportAllJson, "", () => _exportAll("json")),
+                _divider(),
+                _tapRow(S.exportAllCsv, "", () => _exportAll("csv")),
+                _divider(),
+                _tapRow(S.importFile, "", _importFile,
+                    subtitle: S.importFileHint),
+              ],
+            ),
           ),
 
           // ---- Compte ----
