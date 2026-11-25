@@ -26,10 +26,13 @@ def test_required_markers_present():
     assert "pg_upgrade" in t
     assert "appears to be PostgreSQL data in /var/lib/postgresql" in t
     # Pièce du piège : arrêt de l'API + coupure des connexions restantes.
-    assert "docker compose stop api" in t
+    # Depuis le lot 2026-11-25, le service db est sous le profil pg :
+    # les commandes du runbook portent --profile pg (sans, le projet
+    # est rejeté « depends on undefined service db » — reproduit).
+    assert "docker compose --profile pg stop api" in t
     assert "pg_terminate_backend" in t
     # Volume neuf, puis bring-up de la base.
-    assert "docker compose up -d db" in t
+    assert "docker compose --profile pg up -d db" in t
     # Le nom du volume est celui du compose (pgdata) — une erreur de nom
     # ferait re-attacher l'ancien volume PG16 (restart loop documenté).
     assert "docker volume rm tapitask_pgdata" in t
@@ -56,9 +59,9 @@ def test_step_order():
     # Ancre de chaque étape, dans l'ordre imposé par la spec.
     anchors = [
         "pg_dumpall",  # 1. backups
-        "docker compose stop api",  # 2. arrêt API
+        "docker compose --profile pg stop api",  # 2. arrêt API
         "volume neuf",  # 3. volume neuf
-        "docker compose up -d db",  # 4. bring-up + restore
+        "docker compose --profile pg up -d db",  # 4. bring-up + restore
         "Vérification par compteurs",  # 6. vérification par compteurs
         "Smoke",  # 7. smoke
     ]

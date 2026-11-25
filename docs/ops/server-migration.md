@@ -124,6 +124,8 @@ tar de l'étape 1).
 
 ### 7. Smoke
 
+- Racine : `curl -s -o /dev/null -w '%{http_code}' https://<host>/` →
+  **302** (redirect login).
 - API : `curl -s https://<host>/health` → **200** `{"status":"ok"}`.
 - `curl` sans token sur une route protégée → **401** (l'auth fonctionne).
 - Logs : **aucun 500** après les premiers appels.
