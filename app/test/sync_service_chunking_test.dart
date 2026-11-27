@@ -2,6 +2,7 @@
 // par POST). Pathway publique : items dirty dans la base → fullSync() →
 // _pushOutbox → _postEvents (mêmes patterns que test/audit_c1c2_test.dart).
 import "dart:convert";
+import "dart:io";
 
 import "package:drift/drift.dart";
 import "package:drift/native.dart";
@@ -60,5 +61,43 @@ void main() {
             "pas 1 seul avec tout dedans");
     expect(chunks.map((c) => c.length).toList(), [500, 500, 200],
         reason: "les deux premiers chunks sont pleins, le 3e au reste");
+  });
+
+  test("backoff : échec WS permanent → délai de reconnexion CROISSANT, "
+      "pas constant (spec 2026-11-27-sync-backoff-fix)", () async {
+    // Serveur loopback qui REFUSE l'upgrade WebSocket (404, pas de 101) :
+    // `ready` complète en erreur à CHAQUE tentative — seul mode où le
+    // compteur d'échecs doit persister. Une requête reçue = une tentative
+    // de connexion. (Pattern du serveur local de test/audit_prod3_test
+    // 1.4d, en mode échec.)
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final attempts = <DateTime>[];
+    server.listen((request) async {
+      attempts.add(DateTime.now());
+      request.response.statusCode = HttpStatus.notFound;
+      await request.response.close();
+    });
+    final api = ApiClient("http://127.0.0.1:${server.port}");
+    api.accessToken = "a";
+    final db = AppDb.forTesting(NativeDatabase.memory());
+    final sync = SyncService(api: api, db: db);
+    await sync.listenRealtime(); // tentative 1 (échoue → reconnexion timer)
+    // Les tentatives suivantes sortent du timer interne _scheduleReconnect :
+    // ≈4 s puis ≈8 s après le fix (2 << 1 puis 2 << 2). Attendre ~16 s
+    // pour capter les 3 premières tentatives (tolérance large : c'est la
+    // PROGRESSION du délai qui est vérifiée, pas la valeur exacte).
+    await Future<void>.delayed(const Duration(seconds: 16));
+    sync.dispose();
+    await server.close(force: true);
+    await db.close();
+
+    expect(attempts.length, greaterThanOrEqualTo(3),
+        reason: "au moins 3 tentatives de connexion captees");
+    final d1 = attempts[1].difference(attempts[0]);
+    final d2 = attempts[2].difference(attempts[1]);
+    expect(d2, greaterThan(d1 + const Duration(seconds: 2)),
+        reason: "le backoff doit progresser (≈4 s puis ≈8 s) ; un délai "
+            "constant à ≈4 s à chaque fois signale le reset intempestif "
+            "du compteur d'échecs avant confirmation de connexion");
   });
 }

@@ -336,12 +336,17 @@ class SyncService {
       _ws = WebSocketChannel.connect(Uri.parse("$wsUrl/ws"));
       // Échec de connexion : [ready] complète en erreur — sans listener,
       // c'est une erreur non gérée (le stream s'occupe déjà du cas
-      // connecté-puis-coupé via onError).
-      _ws!.ready.catchError((_) => _scheduleReconnect());
+      // connecté-puis-coupé via onError). Succès : SEUL point où le
+      // compteur d'échecs doit repartir à zéro (sinon le backoff
+      // exponentiel ne progresse jamais, cf. audit 2026-11-27).
+      _ws!.ready.then((_) {
+        _wsFailures = 0;
+      }).catchError((_) {
+        _scheduleReconnect();
+      });
       // Auth by FIRST MESSAGE (the token never travels in the query string,
       // where reverse-proxy access logs would capture it).
       _ws!.sink.add(jsonEncode({"token": api.accessToken}));
-      _wsFailures = 0;
       _wsSub = _ws!.stream.listen(
         (message) async {
           Map<String, dynamic> data;
