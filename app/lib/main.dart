@@ -16,12 +16,14 @@ import "platform/tray_controller_web.dart"
 import "ui/update_dialog.dart";
 import "l10n/s.dart";
 import "state/app_state.dart";
+import "ui/calendar_screen.dart";
 import "ui/home_screen.dart";
 import "ui/list_screen.dart";
 import "ui/login_screen.dart";
 import "ui/settings_screen.dart";
 import "ui/today_screen.dart";
 import "ui/todo_all_screen.dart";
+import "ui/task_details.dart";
 
 final appState = AppState();
 TrayController? trayController;
@@ -35,6 +37,7 @@ final appRoutes = <String, WidgetBuilder>{
   "/login": (_) => LoginScreen(state: appState),
   "/settings": (_) => SettingsScreen(state: appState),
   "/today": (_) => TodayScreen(state: appState),
+  "/calendar": (_) => CalendarScreen(state: appState),
   "/todo": (_) => TodoAllScreen(state: appState),
 };
 
@@ -139,12 +142,25 @@ class _ChecklistsAppState extends State<ChecklistsApp>
     super.initState();
     appState.addListener(_onChanged);
     WidgetsBinding.instance.addObserver(this);
+    _openRequestedTask();
     _maybeShowBootUpdate();
   }
 
   void _onChanged() {
     setState(() {});
+    _openRequestedTask();
     _maybeShowBootUpdate();
+  }
+
+  void _openRequestedTask() {
+    if (appState.requestedTask == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final task = appState.requestedTask;
+      final context = _navigatorKey.currentContext;
+      if (!mounted || task == null || context == null) return;
+      appState.requestedTask = null;
+      unawaited(showTaskDetails(context, appState, task));
+    });
   }
 
   /// A2 : MAJ trouvée au boot → dialog post-frameCallback (jamais au milieu

@@ -56,6 +56,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.descendant(of: dialog, matching: find.textContaining("demain")),
         findsOneWidget);
+    expect(find.textContaining("09:00"), findsNothing);
+    await tester.tap(find.textContaining("demain"));
+    await tester.pumpAndSettle();
+    expect(find.text(S.addTime), findsOneWidget);
+    Navigator.of(tester.element(find.text(S.addTime))).pop();
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text(S.cancel));
     await tester.pumpAndSettle();

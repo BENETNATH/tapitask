@@ -437,7 +437,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     (v) => _toggle("visible_actions", v),
                     info: S.visibleActionsHelp),
                 _divider(),
-                _switchRow(S.hideDoneApp, flag("hide_done_app", dflt: true),
+                _switchRow(S.hideDoneApp, flag("hide_done_app", dflt: false),
                     (v) => _toggle("hide_done_app", v),
                     info: S.hideDoneAppHelp),
               ],

@@ -152,6 +152,8 @@ MIGRATIONS = [
         "VARCHAR(10) NOT NULL DEFAULT 'none'",
     ),
     ("items", "due_date", "TIMESTAMP", "TIMESTAMPTZ"),
+    ("items", "due_day", "DATE", "DATE"),
+    ("items", "completed_at", "TIMESTAMP", "TIMESTAMPTZ"),
     ("lists", "color", "VARCHAR(16)", "VARCHAR(16)"),
     ("lists", "folder", "VARCHAR(100)", "VARCHAR(100)"),
     ("users", "settings", "TEXT", "TEXT"),

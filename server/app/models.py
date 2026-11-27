@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -168,11 +169,15 @@ class Item(Base):
         UUID(as_uuid=True), nullable=True
     )
     done: Mapped[bool] = mapped_column(Boolean, default=False)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     position: Mapped[int] = mapped_column(Integer, default=0)
     recurrence: Mapped[str] = mapped_column(String(10), default="none", nullable=False)
     due_date: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    due_day: Mapped[date | None] = mapped_column(Date, nullable=True)
     # Id of the recurring item whose completion spawned this occurrence.
     recurrence_source_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True

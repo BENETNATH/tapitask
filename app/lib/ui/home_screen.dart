@@ -6,6 +6,7 @@ import "../state/app_state.dart";
 import "admin_screen.dart";
 import "due_format.dart";
 import "due_picker.dart";
+import "task_details.dart";
 import "list_dialogs.dart";
 import "list_screen.dart";
 import "search_screen.dart";
@@ -263,7 +264,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (result == null || result.text.trim().isEmpty) return;
     _lastTaskListId = result.listId;
     await widget.state
-        .addQuickItems(result.listId, result.text, dueDate: result.due);
+        .addQuickItems(result.listId, result.text,
+            dueDate: result.due?.date, dueDay: result.due?.day);
   }
 
   Future<void> _promptNewList() async {
@@ -346,6 +348,7 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Scaffold(
         appBar: AppBar(
           title: Text("Tapitask",
+              maxLines: 1, overflow: TextOverflow.ellipsis,
               style: TextStyle(
                   color: scheme.onSurface, fontWeight: FontWeight.w600)),
           actions: [
@@ -358,6 +361,11 @@ class _HomeScreenState extends State<HomeScreen> {
               icon: const Icon(Icons.today_outlined),
               tooltip: S.today,
               onPressed: () => Navigator.pushNamed(context, "/today"),
+            ),
+            IconButton(
+              icon: const Icon(Icons.calendar_month_outlined),
+              tooltip: S.calendar,
+              onPressed: () => Navigator.pushNamed(context, "/calendar"),
             ),
             IconButton(
               icon: const Icon(Icons.search),
@@ -804,14 +812,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: scheme.outlineVariant.withValues(alpha: 0.5)),
             for (final item in shown)
               InkWell(
-                onTap: () => state.toggleItem(item.id, true),
+                onTap: () => showTaskDetails(context, state, item),
                 child: Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
                   child: Row(
                     children: [
-                      Icon(Icons.check_box_outline_blank,
-                          size: 17, color: scheme.outline),
+                      Checkbox(
+                        value: item.done,
+                        semanticLabel: item.label,
+                        visualDensity: VisualDensity.compact,
+                        onChanged: (value) => state.toggleItem(item.id, value == true),
+                      ),
                       const SizedBox(width: 10),
                       Expanded(
                           child: Row(
@@ -863,7 +875,7 @@ class _TemplateChoice {
 class _NewTask {
   final String text;
   final String listId;
-  final DateTime? due;
+  final DueChoice? due;
   const _NewTask(this.text, this.listId, this.due);
 }
 
@@ -881,7 +893,7 @@ class _NewTaskDialog extends StatefulWidget {
 class _NewTaskDialogState extends State<_NewTaskDialog> {
   final _text = TextEditingController();
   late String _listId = widget.initialListId;
-  DateTime? _due;
+  DueChoice? _due;
 
   @override
   void dispose() {
@@ -892,8 +904,9 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
   Future<void> _pickDue() async {
     final first = _text.text.trim().split("\n").first;
     final choice =
-        await chooseDueDate(context, first.isEmpty ? S.newTask : first, _due);
-    if (choice != null && mounted) setState(() => _due = choice.date);
+        await chooseDueDate(context, first.isEmpty ? S.newTask : first, _due?.date,
+            allDay: _due?.allDay ?? true);
+    if (choice != null && mounted) setState(() => _due = choice.date == null ? null : choice);
   }
 
   void _submit() =>
@@ -945,7 +958,8 @@ class _NewTaskDialogState extends State<_NewTaskDialog> {
                 avatar: Icon(_due == null ? Icons.event_outlined : Icons.event,
                     size: 18,
                     color: _due == null ? scheme.outline : scheme.primary),
-                label: Text(_due == null ? S.setDueDate : dueLabel(_due!, withTime: true)),
+                label: Text(_due == null ? S.setDueDate : dueLabel(_due!.date!,
+                    withTime: true, allDay: _due!.allDay)),
                 onPressed: _pickDue,
                 onDeleted: _due == null ? null : () => setState(() => _due = null),
               ),

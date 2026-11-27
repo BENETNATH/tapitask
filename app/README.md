@@ -17,6 +17,18 @@ dart run build_runner build --delete-conflicting-outputs
 flutter run -d windows     # ou -d android
 ```
 
+## Configurer Google Tasks sur Android
+
+1. Activez l’API Google Tasks dans le projet Google Cloud de Tapitask. [Console Google Cloud](https://console.cloud.google.com/apis/library/tasks.googleapis.com)
+2. Configurez l’audience et le consentement OAuth, puis ajoutez le scope `https://www.googleapis.com/auth/tasks` dans **Data Access**. En mode **Testing**, ajoutez les comptes des testeurs. Pour une diffusion publique, suivez la procédure de Google. [Vérification OAuth](https://support.google.com/cloud/answer/13464321)
+3. Dans **Clients**, créez un client OAuth Android pour `com.tapitask.tapitask` avec le SHA-1 du certificat qui signe l’APK distribué. Pour un APK de développement, enregistrez également le SHA-1 du certificat debug (`./gradlew :app:signingReport` depuis `app/android`). [Configuration OAuth Android](https://developer.android.com/identity/authorization#set-up-your-google-cloud-console-project)
+
+Le SHA-1 vérifié sur l’APK officiel v0.5.0 est `F4:E5:AA:41:09:7E:8B:1A:E1:38:AE:C0:07:77:05:A9:8F:CD:DB:DB`.
+
+L’envoi crée des copies avec le titre, les notes, le jour d’échéance et l’état coché. Les sous-tâches sont copiées comme tâches indépendantes. Un nouvel envoi crée de nouvelles copies.
+
+Lorsqu’une heure est définie, Tapitask l’ajoute aux notes de la copie si la place le permet. Pour la programmer dans Google Tasks, choisissez l’heure dans l’application Google Tasks.
+
 ## Fonctionnalités
 
 - **Offline-first** : chaque action (créer, cocher, éditer, supprimer) est appliquée
@@ -34,6 +46,13 @@ flutter run -d windows     # ou -d android
   URL serveur configurable.
 - **Partage** : bouton « Partager » sur une liste → code d'invitation, email avec rôle
   viewer/editor, membres, retrait.
+- Sur **Android**, faites un appui long sur une tâche pour l’envoyer vers Google
+  Tasks. Le menu ⋮ d'une liste permet d'envoyer toutes ses tâches à faire.
+  Choisissez la liste Google de destination et confirmez l'envoi.
+- **Importer depuis Google Tasks** dans le menu ⋮ copie les tâches de la liste Google choisie, y compris les tâches terminées, les notes, les liens et les jours d’échéance. Relancer le même import ajoute uniquement les tâches inédites dans la liste Tapitask.
+- Touchez le titre d’une tâche pour afficher ses détails, modifier ses notes ou ouvrir un lien. La case coche la tâche. Les tâches terminées sont barrées et regroupées en bas de la liste. Le menu ⋮ permet de les masquer.
+- Ouvrez **Calendrier** depuis l’accueil pour afficher un mois, une semaine ou un à quatre jours. Les filtres affichent les tâches planifiées, terminées ou les deux. Le calendrier utilise la date de fin enregistrée ou, pour les anciennes tâches terminées, leur échéance si elle existe.
+- Une échéance est définie pour la journée. Rouvrez le sélecteur et choisissez **Ajouter une heure** pour préciser l’heure. La synchronisation des jours d’échéance nécessite la mise à jour du serveur.
 - **Export / Import** : menu « Exporter / Importer » sur une liste (JSON, Markdown
   Obsidian, CSV) + export global (Tout exporter JSON/CSV) et import dans les réglages.
   L'import (JSON ou Markdown) crée toujours de **nouvelles** listes (jamais de merge).

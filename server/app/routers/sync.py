@@ -145,10 +145,12 @@ async def sync(
                     list_id=item.list_id,
                     label=item.label,
                     done=item.done,
+                    completed_at=item.completed_at,
                     position=item.position,
                     parent_id=item.parent_id,
                     recurrence=item.recurrence,
                     due_date=item.due_date,
+                    due_day=item.due_day,
                     notes=item.notes,
                     assignee_id=item.assignee_id,
                     updated_at=item.updated_at,
@@ -186,10 +188,12 @@ async def sync(
                     list_id=item.list_id,
                     label=item.label,
                     done=item.done,
+                    completed_at=item.completed_at,
                     position=item.position,
                     parent_id=item.parent_id,
                     recurrence=item.recurrence,
                     due_date=item.due_date,
+                    due_day=item.due_day,
                     notes=item.notes,
                     assignee_id=item.assignee_id,
                     updated_at=item.updated_at,
@@ -401,12 +405,39 @@ async def _apply_item_upsert(session: AsyncSession, event, principal) -> list:
     if event.label is not None and event.label.strip():
         item.label = event.label
     item.done = event.done if event.done is not None else item.done
+    if event.done is False:
+        item.completed_at = None
+    elif event.done is True and event.completed_at is not None:
+        # Pas de clamp : c'est une valeur (moment de complétion), pas un
+        # tampon LWW — un horodatage ancien légitime doit survivre au sync.
+        completed = event.completed_at
+        if completed.tzinfo is not None:
+            completed = completed.astimezone(timezone.utc)
+        else:
+            completed = completed.replace(tzinfo=timezone.utc)
+        item.completed_at = completed
+    elif newly_done and "completed_at" not in event.model_fields_set:
+        item.completed_at = stamp.replace(tzinfo=timezone.utc)
     item.position = event.position if event.position is not None else item.position
     # null = retirer : le client envoie l'état complet de l'item
     # (C1.2) — assignment explicite, plus de `event.X or item.X`.
     item.parent_id = event.parent_id
     item.recurrence = event.recurrence if event.recurrence is not None else "none"
-    item.due_date = event.due_date
+    # due_day : les apps installées avant ce champ ne l'envoient jamais —
+    # un upsert legacy (pas de due_day dans model_fields_set) ne doit pas
+    # écraser l'état all-day ; un due_date modifié sans due_day est un
+    # time-due qui annule l'all-day.
+    if "due_day" in event.model_fields_set:
+        item.due_day = event.due_day
+        item.due_date = event.due_date
+    elif event.due_date is not None:
+        if item.due_date is None or _utc_naive(item.due_date) != _utc_naive(
+            event.due_date
+        ):
+            item.due_day = None
+        item.due_date = event.due_date
+    else:
+        item.due_date = None
     item.notes = event.notes
     item.assignee_id = event.assignee_id
     item.updated_at = stamp

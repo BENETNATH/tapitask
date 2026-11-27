@@ -138,6 +138,10 @@ class FlyoutBridge {
       case "openApp":
         onOpenApp?.call();
         break;
+      case "openTask":
+        onOpenApp?.call();
+        await state.openTaskFromShortcut(a);
+        break;
       case "close":
         break;
     }

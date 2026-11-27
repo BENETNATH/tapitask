@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timezone
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_serializer,
+    field_validator,
+)
 
 from .models import Role as RoleEnum
 
@@ -116,7 +123,17 @@ class ItemIn(BaseModel):
         return v if v is None else _no_null_bytes(v)
 
 
-class ItemOut(BaseModel):
+class ItemCompletionOut(BaseModel):
+    completed_at: datetime | None = None
+
+    @field_serializer("completed_at")
+    def _serialize_completion(self, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
+
+class ItemOut(ItemCompletionOut):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
@@ -127,6 +144,7 @@ class ItemOut(BaseModel):
     position: int
     recurrence: str = "none"
     due_date: datetime | None = None
+    due_day: date | None = None
     notes: str | None = None
     assignee_id: UUID | None = None
     updated_at: datetime
@@ -178,10 +196,12 @@ class SyncEvent(BaseModel):
     notes: str | None = None
     assignee_id: UUID | None = None
     done: bool | None = None
+    completed_at: datetime | None = None
     position: int | None = None
     parent_id: UUID | None = None
     recurrence: str | None = None
     due_date: datetime | None = None
+    due_day: date | None = None
     updated_at: datetime
 
 
@@ -216,7 +236,7 @@ class SyncIn(BaseModel):
     events: list[SyncEvent] = Field(default_factory=list, max_length=1000)
 
 
-class SyncChange(BaseModel):
+class SyncChange(ItemCompletionOut):
     kind: str
     id: UUID
     list_id: UUID
@@ -230,6 +250,7 @@ class SyncChange(BaseModel):
     parent_id: UUID | None = None
     recurrence: str | None = None
     due_date: datetime | None = None
+    due_day: date | None = None
     updated_at: datetime
     deleted: bool = False
 

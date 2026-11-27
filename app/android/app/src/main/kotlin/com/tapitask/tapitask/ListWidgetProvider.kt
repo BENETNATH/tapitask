@@ -91,6 +91,7 @@ class ListWidgetProvider : AppWidgetProvider() {
         const val ACTION_CYCLE = "com.tapitask.tapitask.action.CYCLE_LIST"
         const val ACTION_TOGGLE = "com.tapitask.tapitask.action.TOGGLE_ITEM"
         const val EXTRA_ITEM_ID = "item_id"
+        const val EXTRA_OPEN_TASK = "open_task"
         const val EXTRA_LIST_INDEX = "list_index"
         const val EXTRA_DIRECTION = "direction"
 
@@ -275,8 +276,16 @@ class ListWidgetProvider : AppWidgetProvider() {
                 // les prefs partagées, un item_id factice est ignoré.
                 val itemId = intent.getStringExtra(EXTRA_ITEM_ID)
                 if (itemId != null && ITEM_ID_REGEX.matches(itemId)) {
-                    checkItem(context, itemId)
-                    triggerUpdate(context)
+                    if (intent.getBooleanExtra(EXTRA_OPEN_TASK, false)) {
+                        context.startActivity(Intent(context, MainActivity::class.java).apply {
+                            action = TapitaskActions.ACTION_LAUNCH
+                            data = Uri.parse("tapitask://task?item=$itemId")
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        })
+                    } else {
+                        checkItem(context, itemId)
+                        triggerUpdate(context)
+                    }
                 }
             }
         }
@@ -289,8 +298,10 @@ class ListWidgetProvider : AppWidgetProvider() {
             (done + itemId).joinToString(",")).apply()
         val toggled = prefs.getString("widget_toggled", "") ?: ""
         if (itemId !in toggled.split(',')) {
-            prefs.edit().putString("widget_toggled",
-                if (toggled.isEmpty()) itemId else "$toggled,$itemId").apply()
+            prefs.edit()
+                .putString("widget_toggled", if (toggled.isEmpty()) itemId else "$toggled,$itemId")
+                .putString("widget_completed_at_$itemId", System.currentTimeMillis().toString())
+                .apply()
         }
     }
 

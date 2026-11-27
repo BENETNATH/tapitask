@@ -1,6 +1,5 @@
 package com.tapitask.tapitask
 
-import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -23,9 +22,12 @@ class WidgetItemsRemoteViewsService : RemoteViewsService() {
 }
 
 /**
- * S3 : lignes du widget. Les labels sont déjà préfixés « ☐  »/« ✓  » +
- * badge côté Dart ; l'adapter n'affiche que ce qui est écrit.
- * - ligne cochée (id vide côté Dart) : non cliquable — toggle unidirectionnel.
+ * S3 : lignes du widget. Les labels sont préfixés « ☐  »/« ✓  » + badge
+ * côté Dart ; l'adapter retire le préfixe (la case est une colonne
+ * séparée).
+ * - le titre et le badge ouvrent les détails de la tâche (open_id) ;
+ *   la case coche une tâche ouverte.
+ * - ligne cochée (checkId vide côté Dart) : case « ✓ », non cliquable.
  * - ligne cochée depuis le widget (widget_done_ids) : masquée en attendant
  *   que l'app applique le cochage (feedback immédiat, même qu'avant S3).
  */
@@ -35,30 +37,42 @@ class WidgetItemAdapter(
 
     private fun prefs(): SharedPreferences = HomeWidgetPlugin.getData(context)
 
+    private data class Row(
+        val label: String,
+        val checkId: String,
+        val openId: String,
+        val due: String
+    )
+
     // C2.6 : snapshot pris dans onDataSetChanged() — le système relit
     // getCount()/getViewAt() après, et re-lire prefs à chaque appel pouvait
     // mélanger deux états (n de lignes ≠ lignes servies).
-    private var snapshotRows: List<Triple<String, String, String>> = emptyList()
+    private var snapshotRows: List<Row> = emptyList()
     private var snapshotHasLists = false
     private var snapshotDark = false
     private var snapshotAllDone = ""
 
-    /** Ligne = (label, id cliquable, badge d'échéance brut — "" si absent). */
-    private fun buildRows(d: SharedPreferences): List<Triple<String, String, String>> {
+    /**
+     * Ligne = (label préfixé, id de cochage — "" si la ligne est cochée,
+     * id d'ouverture — "" si jamais, badge d'échéance brut — "" si absent).
+     */
+    private fun buildRows(d: SharedPreferences): List<Row> {
         val total = d.getInt("list_count_lists", 0)
         if (total == 0) return emptyList()
         var index = d.getInt("list_index", 0)
         if (index >= total) index = 0
         val count = d.getInt("list_${index}_count", 0)
         val done = ListWidgetProvider.readDoneIds(d)
-        val rows = ArrayList<Triple<String, String, String>>()
+        val rows = ArrayList<Row>()
         for (i in 0 until count) {
             val label = d.getString("list_${index}_item_$i", "") ?: ""
-            val id = d.getString("list_${index}_item_${i}_id", "") ?: ""
+            val checkId = d.getString("list_${index}_item_${i}_id", "") ?: ""
+            val openId =
+                d.getString("list_${index}_item_${i}_open_id", checkId) ?: checkId
             val due = d.getString("list_${index}_item_${i}_due", "") ?: ""
             if (label.isEmpty()) continue
-            if (id.isNotEmpty() && id in done) continue
-            rows.add(Triple(label, id, due))
+            if (checkId.isNotEmpty() && checkId in done) continue
+            rows.add(Row(label, checkId, openId, due))
         }
         return rows
     }
@@ -73,7 +87,8 @@ class WidgetItemAdapter(
         snapshotHasLists = d.getInt("list_count_lists", 0) > 0
         snapshotRows = buildRows(d)
         snapshotDark = d.getString("theme", "light") == "dark"
-        snapshotAllDone = d.getString("label_all_done", "Tout est coché") ?: "Tout est coché"
+        snapshotAllDone =
+            d.getString("label_all_done", "Tout est coché") ?: "Tout est coché"
     }
 
     override fun onDestroy() {}
@@ -90,52 +105,79 @@ class WidgetItemAdapter(
         val text =
             if (snapshotDark) Color.rgb(226, 226, 226) else Color.parseColor("#1B1B1B")
         views.setInt(R.id.item_row_label, "setTextColor", text)
+        views.setInt(R.id.item_row_check, "setTextColor", text)
         // Badge d'échéance : couleur = couleur label (même action réflexion
         // setTextColor API<31), GONE par défaut (pas de due = pas de texte).
         views.setInt(R.id.item_row_due, "setTextColor", text)
         if (snapshotRows.isEmpty()) {
             // Une seule ligne (getCount() = 1) : le « ✓ … » ne dépend pas du
             // position — pas besoin de guard.
-            views.setTextViewText(
-                R.id.item_row_label,
-                "✓  " + snapshotAllDone)
+            views.setViewVisibility(R.id.item_row_check, View.GONE)
+            views.setTextViewText(R.id.item_row_label, "✓  " + snapshotAllDone)
             // S1 (prod4) / MD-4 : ligne recyclée — un Intent() vide
             // (sans action) réinitialise le fill-in, comme la branche
             // item sans id (avant fix : null conservait l'ancien intent
             // de toggle).
             views.setOnClickFillInIntent(R.id.item_row_label, Intent())
+            views.setOnClickFillInIntent(R.id.item_row_check, Intent())
             // 2.1 (prod3) : une ligne recyclée peut montrer l'ancien badge
             // d'échéance — toujours masqué dans l'état « tout coché ».
             views.setInt(R.id.item_row_due, "setVisibility", View.GONE)
         } else if (position in snapshotRows.indices) {
             // C2.6 : guard — position hors snapshot (changement pendant le
             // bind du launcher) → ligne vide plutôt qu'IndexOutOfBounds.
-            val (label, id, due) = snapshotRows[position]
-            views.setTextViewText(R.id.item_row_label, label)
+            val (label, checkId, openId, due) = snapshotRows[position]
+            views.setViewVisibility(R.id.item_row_check, View.VISIBLE)
+            views.setTextViewText(
+                R.id.item_row_check,
+                if (checkId.isEmpty()) "✓" else "☐"
+            )
+            views.setTextViewText(
+                R.id.item_row_label,
+                label.removePrefix("✓  ").removePrefix("☐  ")
+            )
             if (due.isEmpty()) {
                 views.setInt(R.id.item_row_due, "setVisibility", View.GONE)
             } else {
                 views.setTextViewText(R.id.item_row_due, due)
                 views.setInt(R.id.item_row_due, "setVisibility", View.VISIBLE)
             }
-            // Ligne cochée : Dart n'a pas écrit d'id → non cliquable
-            // (le widget reste unidirectionnel « cocher »).
-            if (id.isNotEmpty()) {
+            // La case coche une tâche ouverte ; une ligne cochée (id vide)
+            // est non cliquable — Intent() vide = reset du fill-in recyclé
+            // (S1 (prod4) / MD-4).
+            if (checkId.isNotEmpty()) {
+                views.setOnClickFillInIntent(
+                    R.id.item_row_check,
+                    rowIntent(checkId, open = false)
+                )
+            } else {
+                views.setOnClickFillInIntent(R.id.item_row_check, Intent())
+            }
+            // Le titre et le badge ouvrent les détails ; open_id est porté
+            // aussi par les lignes cochées (id de cochage vidé côté Dart).
+            if (openId.isNotEmpty()) {
                 views.setOnClickFillInIntent(
                     R.id.item_row_label,
-                    Intent(context, ListWidgetProvider::class.java).apply {
-                        action = ListWidgetProvider.ACTION_TOGGLE
-                        putExtra(ListWidgetProvider.EXTRA_ITEM_ID, id)
-                    })
+                    rowIntent(openId, open = true)
+                )
+                views.setOnClickFillInIntent(
+                    R.id.item_row_due,
+                    rowIntent(openId, open = true)
+                )
             } else {
-                // 2.1 (prod3) / MD-4 : une ligne recyclée hérite du clic de
-                // l'item précédent si on ne pose rien — un Intent() vide
-                // (sans action) réinitialise le fill-in.
                 views.setOnClickFillInIntent(R.id.item_row_label, Intent())
+                views.setOnClickFillInIntent(R.id.item_row_due, Intent())
             }
         }
         return views
     }
+
+    private fun rowIntent(id: String, open: Boolean): Intent =
+        Intent(context, ListWidgetProvider::class.java).apply {
+            action = ListWidgetProvider.ACTION_TOGGLE
+            putExtra(ListWidgetProvider.EXTRA_ITEM_ID, id)
+            putExtra(ListWidgetProvider.EXTRA_OPEN_TASK, open)
+        }
 
     override fun getItemId(position: Int): Long = position.toLong()
 

@@ -7,7 +7,7 @@ import "package:tapitask/state/app_state.dart";
 import "package:tapitask/ui/list_screen.dart";
 
 /// Spec lot W (W2) : le « Cacher les items cochés » de l'app est le réglage
-/// hide_done_app (défaut true), SÉPARÉ de hide_done — qui ne gouverne plus
+/// hide_done_app (défaut false), SÉPARÉ de hide_done — qui ne gouverne plus
 /// que le volet (Windows) et le widget (Android).
 void main() {
   const listId = "11111111-2222-3333-4444-555555555555";
@@ -31,11 +31,11 @@ void main() {
     return db;
   }
 
-  testWidgets("W2 : hide_done_app ON (défaut) — l'item coché est masqué de l'app",
+  testWidgets("W2 : hide_done_app ON — l'item coché est masqué de l'app",
       (tester) async {
     final db = await makeDb();
     final state = AppState(db: db);
-    // hide_done_app absent des réglages → défaut true.
+    state.settings["hide_done_app"] = true;
 
     tester.view.physicalSize = const Size(720, 1280);
     tester.view.devicePixelRatio = 2.0;
@@ -52,11 +52,14 @@ void main() {
     await db.close();
   });
 
-  testWidgets("W2 : hide_done_app OFF — l'item coché est visible (barré)",
+  testWidgets(
+      "completed tasks and subtasks are crossed out below active tasks by default",
       (tester) async {
     final db = await makeDb();
     final state = AppState(db: db);
-    state.settings["hide_done_app"] = false;
+    await db.addItem("done-child", listId, "Miel", 2, now,
+        parentId: openId, done: true);
+    await db.addItem("open-child", listId, "Thé", 3, now, parentId: doneId);
 
     tester.view.physicalSize = const Size(720, 1280);
     tester.view.devicePixelRatio = 2.0;
@@ -72,15 +75,22 @@ void main() {
     expect(label.style?.decoration, TextDecoration.lineThrough,
         reason: "W2 : réglage OFF → l'item coché reste affiché, barré");
     expect(find.text("Pain"), findsOneWidget);
+    expect(tester.getTopLeft(find.text("Thé")).dy,
+        lessThan(tester.getTopLeft(find.text("Lait")).dy));
+    expect(tester.getTopLeft(find.text("Pain")).dy,
+        lessThan(tester.getTopLeft(find.text("Miel")).dy));
+    expect(tester.widget<Text>(find.text("Miel")).style?.decoration,
+        TextDecoration.lineThrough);
     await db.close();
   });
 
-  testWidgets("W2 : séparation — hide_done OFF n'a plus d'effet sur l'app (coché masqué)",
+  testWidgets(
+      "W2 : séparation — hide_done OFF n'a plus d'effet sur l'app (coché masqué)",
       (tester) async {
     final db = await makeDb();
     final state = AppState(db: db);
     state.settings["hide_done"] = false; // volet/widget : tous les items
-    // hide_done_app absent → défaut true : l'app cache toujours les cochés.
+    state.settings["hide_done_app"] = true;
 
     tester.view.physicalSize = const Size(720, 1280);
     tester.view.devicePixelRatio = 2.0;
@@ -91,12 +101,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text("Lait"), findsNothing,
-        reason: "W2 : le réglage volet/widget ne pilote plus la liste de l'app");
+        reason:
+            "W2 : le réglage volet/widget ne pilote plus la liste de l'app");
     expect(find.text("Pain"), findsOneWidget);
     await db.close();
   });
 
-  testWidgets("W2 : séparation — hide_done_app OFF montre les cochés même si hide_done ON",
+  testWidgets(
+      "W2 : séparation — hide_done_app OFF montre les cochés même si hide_done ON",
       (tester) async {
     final db = await makeDb();
     final state = AppState(db: db);
@@ -112,7 +124,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text("Lait"), findsOneWidget,
-        reason: "W2 : le réglage app fait foi pour l'app — les cochés sont visibles");
+        reason:
+            "W2 : le réglage app fait foi pour l'app — les cochés sont visibles");
     expect(find.text("Pain"), findsOneWidget);
     await db.close();
   });
