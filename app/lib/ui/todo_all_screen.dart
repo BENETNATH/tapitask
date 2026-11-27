@@ -4,7 +4,7 @@ import "../data/database.dart";
 import "../l10n/s.dart";
 import "../state/app_state.dart";
 import "due_format.dart";
-import "task_details.dart";
+import "items_overview_body.dart";
 
 /// Vue « À faire » : tous les items non cochés, toutes listes confondues
 /// (uniquement les listes synchronisées), groupés par liste.
@@ -38,72 +38,21 @@ class _TodoAllScreenState extends State<TodoAllScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
     return Scaffold(
       appBar: AppBar(
         title: Text(S.todoAll,
             style: TextStyle(fontWeight: FontWeight.w600)),
       ),
-      body: StreamBuilder<List<LocalItem>>(
+      body: ItemsOverviewBody(
         stream: _todoStream,
-        initialData: const [],
-        builder: (context, snapshot) {
-          final items = snapshot.data ?? const [];
-          if (items.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.celebration_outlined,
-                      size: 64, color: scheme.outline),
-                  const SizedBox(height: 12),
-                  Text(S.allDone,
-                      style: TextStyle(color: scheme.outline)),
-                ],
-              ),
-            );
-          }
-          return ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: items.length,
-            itemBuilder: (context, i) {
-              final item = items[i];
-              final overdue = item.overdueAt(DateTime.now());
-              final due = item.localDue;
-              return Card(
-                elevation: 0,
-                margin: const EdgeInsets.symmetric(vertical: 3),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  side: BorderSide(
-                      color: overdue
-                          ? scheme.errorContainer
-                          : scheme.outlineVariant),
-                ),
-                child: TaskTile(
-                  state: widget.state,
-                  item: item,
-                  title: Text(item.label),
-                  subtitle: FutureBuilder<LocalList?>(
-                    future: _listOf(item.listId),
-                    builder: (context, snap) => Text(
-                      "${snap.data?.title ?? ""}"
-                      "${due != null ? "  •  ${dueLabel(due, withTime: false)}" : ""}"
-                      "${overdue ? S.t("overdueSuffix") : ""}",
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: overdue ? scheme.error : scheme.outline),
-                    ),
-                  ),
-                ),
-              );
-            },
-          );
+        state: widget.state,
+        emptyText: S.allDone,
+        subtitleText: (item, overdue) {
+          final due = item.localDue;
+          return "${due != null ? "  •  ${dueLabel(due, withTime: false)}" : ""}"
+              "${overdue ? S.t("overdueSuffix") : ""}";
         },
       ),
     );
   }
-
-  Future<LocalList?> _listOf(String id) => widget.state.db.getList(id);
 }
