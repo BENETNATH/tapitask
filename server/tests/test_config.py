@@ -50,6 +50,31 @@ def test_32_byte_secret_accepted_without_test_env():
     assert r.returncode == 0, r.stderr
 
 
+def test_webhook_allowed_hosts_default_empty_list():
+    """WEBHOOK_ALLOWED_HOSTS passe par _parse_csv comme CORS_ORIGINS /
+    TRUSTED_PROXIES — défaut (env absente) → [] (pas [''])."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("JWT_SECRET", "TEST_ENV", "WEBHOOK_ALLOWED_HOSTS")
+    }
+    env.update({"JWT_SECRET": "a" * 32})
+    env["PYTHONPATH"] = SERVER_DIR
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import app.config as c; print(c.settings.WEBHOOK_ALLOWED_HOSTS)",
+        ],
+        cwd=SERVER_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "[]", r.stdout
+
+
 def test_cors_origins_csv_stripped():
     """M4 (prod4) : CORS_ORIGINS passe par _parse_csv — "a, b" → ["a", "b"]
     (espaces stripés, vides écartés), pas ["a", " b"]."""

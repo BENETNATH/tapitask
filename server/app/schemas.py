@@ -279,10 +279,6 @@ class InviteOut(BaseModel):
     list_id: UUID
 
 
-class InviteAcceptIn(BaseModel):
-    invite_id: UUID
-
-
 class MemberIn(BaseModel):
     email: EmailStr
     role: str = Field(default="viewer", pattern="^(viewer|editor)$")

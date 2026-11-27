@@ -165,6 +165,40 @@ async def test_export_json_scope_all_only_accessible_lists(client):
 
 
 @pytest.mark.asyncio
+async def test_export_scope_all_single_items_query(client):
+    """QUAL-SRV-2 : un export scope=all avec N≥3 listes émet 1 seule requête
+    items (batché), pas N — le contenu reste le même."""
+    from app.db import engine
+    from sqlalchemy import event
+
+    h = auth_headers(await register(client, "expq@example.com"))
+    for t in ("QA1", "QA2", "QA3"):
+        lid = await make_list(client, h, t)
+        await make_item(client, h, lid, f"item-{t}")
+        await make_item(client, h, lid, f"done-{t}")
+
+    items_queries: list[str] = []
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _count(conn, cursor, statement, parameters, context, executemany):
+        if "FROM items" in statement:
+            items_queries.append(statement)
+
+    try:
+        r = await client.get("/export.json?scope=all", headers=h)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _count)
+
+    assert r.status_code == 200, r.text
+    lists = r.json()["lists"]
+    assert {lst["title"] for lst in lists} == {"QA1", "QA2", "QA3"}
+    assert sum(len(lst["items"]) for lst in lists) == 6
+    assert len(items_queries) == 1, (
+        f"1 seule requête items attendue, {len(items_queries)} émises"
+    )
+
+
+@pytest.mark.asyncio
 async def test_export_foreign_list_denied(client):
     ha = auth_headers(await register(client, "own@example.com"))
     hb = auth_headers(await register(client, "other@example.com"))

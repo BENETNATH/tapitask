@@ -70,7 +70,7 @@ def _utc(dt: datetime | None) -> datetime | None:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
-def _parse_uuid(value: Any, field: str) -> uuid.UUID | None:
+def _parse_uuid(value: Any) -> uuid.UUID | None:
     if value is None:
         return None
     if isinstance(value, uuid.UUID):
@@ -83,9 +83,7 @@ def _parse_uuid(value: Any, field: str) -> uuid.UUID | None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_IMPORT) from None
 
 
-def _parse_optional_str(
-    value: Any, field: str, max_len: int | None = None
-) -> str | None:
+def _parse_optional_str(value: Any, max_len: int | None = None) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str) or (value and "\x00" in value):
@@ -232,14 +230,35 @@ async def _accessible_lists(
     return [*owned, *members]
 
 
+async def _items_of_many(
+    session: AsyncSession, list_ids: list[uuid.UUID], include_deleted: bool
+) -> dict[uuid.UUID, list[Item]]:
+    """Variantes batché de _items_of (export global) : une seule requête
+    pour N listes au lieu d'une par liste. _items_of (une liste) reste
+    inchangé pour les exports /lists/{id}/export.*."""
+    if not list_ids:
+        return {}
+    query = (
+        select(Item)
+        .where(Item.list_id.in_(list_ids))
+        .order_by(Item.list_id, Item.position, Item.created_at)
+    )
+    if not include_deleted:
+        query = query.where(Item.deleted.is_(False))
+    by_list: dict[uuid.UUID, list[Item]] = {lid: [] for lid in list_ids}
+    for item in (await session.execute(query)).scalars():
+        by_list[item.list_id].append(item)
+    return by_list
+
+
 async def _export_lists(
     session: AsyncSession, principal: Principal
 ) -> list[tuple[Checklist, list[Item]]]:
-    pairs: list[tuple[Checklist, list[Item]]] = []
-    for checklist in await _accessible_lists(session, principal):
-        items = await _items_of(session, checklist.id, include_deleted=False)
-        pairs.append((checklist, items))
-    return pairs
+    lists = await _accessible_lists(session, principal)
+    items_by_list = await _items_of_many(
+        session, [c.id for c in lists], include_deleted=False
+    )
+    return [(c, items_by_list.get(c.id, [])) for c in lists]
 
 
 def _due_suffix(due: datetime | None) -> str:
@@ -387,11 +406,11 @@ def _validate_json_lists(data: Any) -> list[dict[str, Any]]:
             position = it.get("position", 0)
             if not isinstance(position, int) or isinstance(position, bool):
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_IMPORT)
-            notes = _parse_optional_str(it.get("notes"), "notes")
+            notes = _parse_optional_str(it.get("notes"))
             if notes is not None and len(notes) > 5000:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_IMPORT)
-            _parse_uuid(it.get("parent_id"), "parent_id")
-            _parse_uuid(it.get("recurrence_source_id"), "recurrence_source_id")
+            _parse_uuid(it.get("parent_id"))
+            _parse_uuid(it.get("recurrence_source_id"))
             _parse_due(it.get("due_date"))
     return entries
 
@@ -411,36 +430,34 @@ def _build_items(entries: list[dict[str, Any]], now: datetime) -> list[Item]:
             for raw in raw
             if isinstance(raw.get("id"), str)
         }
-        for raw in raw:
-            parent = _parse_uuid(raw.get("parent_id"), "parent_id")
+        for raw_item in raw:
+            parent = _parse_uuid(raw_item.get("parent_id"))
             if parent is not None and str(parent) not in id_map:
                 # Parent hors de l'import (autre liste / inconnu) :
                 # non conforme (l'export tapitask ne produit jamais ça).
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_IMPORT)
-            source = _parse_uuid(
-                raw.get("recurrence_source_id"), "recurrence_source_id"
-            )
+            source = _parse_uuid(raw_item.get("recurrence_source_id"))
             if source is not None and str(source) not in id_map:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_IMPORT)
             items.append(
                 Item(
-                    id=id_map.get(str(raw.get("id"))) or new_id(),
+                    id=id_map.get(str(raw_item.get("id"))) or new_id(),
                     list_id=None,  # posée après le flush de la liste
                     parent_id=id_map.get(str(parent)) if parent is not None else None,
-                    label=raw["label"],
-                    notes=_parse_optional_str(raw.get("notes"), "notes"),
+                    label=raw_item["label"],
+                    notes=_parse_optional_str(raw_item.get("notes")),
                     assignee_id=None,
-                    done=raw.get("done", False),
-                    position=raw.get("position", 0),
-                    recurrence=raw.get("recurrence", "none"),
-                    due_date=_parse_due(raw.get("due_date")),
+                    done=raw_item.get("done", False),
+                    position=raw_item.get("position", 0),
+                    recurrence=raw_item.get("recurrence", "none"),
+                    due_date=_parse_due(raw_item.get("due_date")),
                     recurrence_source_id=(
                         id_map.get(str(source)) if source is not None else None
                     ),
                     created_by=None,
                     created_at=now,
                     updated_at=now,
-                    deleted=raw.get("deleted", False),
+                    deleted=raw_item.get("deleted", False),
                 )
             )
     return items

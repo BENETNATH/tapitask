@@ -184,26 +184,30 @@ def _due_date_timestamptz_sql(data_type: str | None) -> str | None:
 
 async def _ensure_columns() -> None:
     """Lightweight migration: add missing columns to existing tables.
-    Each statement runs in its own transaction — one failure never aborts
-    the rest (critical with concurrent workers)."""
+    Each statement runs in its own transaction. Postgres: idempotent by
+    nature (ADD COLUMN IF NOT EXISTS) — any failure is a real one and
+    propagates. SQLite: no IF NOT EXISTS, so only the expected « duplicate
+    column » (column already added) is swallowed; every other DDL failure
+    (invalid statement, permissions, connection loss) must propagate."""
     from sqlalchemy import text
 
     for table, column, sqlite_ddl, pg_ddl in MIGRATIONS:
-        ddl = pg_ddl if _is_postgres() else sqlite_ddl
-        try:
+        if _is_postgres():
             async with engine.begin() as conn:
-                if _is_postgres():
-                    await conn.execute(
-                        text(
-                            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}"
-                        )
+                await conn.execute(
+                    text(
+                        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {pg_ddl}"
                     )
-                else:
+                )
+        else:
+            try:
+                async with engine.begin() as conn:
                     await conn.execute(
-                        text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+                        text(f"ALTER TABLE {table} ADD COLUMN {column} {sqlite_ddl}")
                     )
-        except Exception:
-            pass  # column already exists (sqlite has no IF NOT EXISTS)
+            except Exception as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
 
     if _is_postgres():
         # One-shot C2.10 (A4) : ADD COLUMN IF NOT EXISTS ne change pas le
@@ -273,6 +277,11 @@ async def _ensure_indexes() -> None:
         # Recurrence idempotency: at most one occurrence spawned per source.
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_items_recurrence_source "
         "ON items (recurrence_source_id)",
+        # /admin/audit : ORDER BY server_time DESC sans filtre list_id —
+        # l'index composite (list_id en tête) ne sert pas ce tri (bases
+        # déjà déployées : __table_args__ ne joue qu'à create_all).
+        "CREATE INDEX IF NOT EXISTS ix_changelog_server_time "
+        "ON change_log (server_time)",
     ):
         try:
             async with engine.begin() as conn:

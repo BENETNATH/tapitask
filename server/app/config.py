@@ -60,9 +60,9 @@ class Settings:
     # a leading dot for subdomains, e.g. "hooks.example.com" or ".example.com").
     # Hosts in this list bypass the SSRF block (loopback/private/metadata) so
     # self-hosted webhooks can point at private addresses when intended.
-    WEBHOOK_ALLOWED_HOSTS: list[str] = os.environ.get(
-        "WEBHOOK_ALLOWED_HOSTS", ""
-    ).split(",")
+    WEBHOOK_ALLOWED_HOSTS: list[str] = _parse_csv(
+        os.environ.get("WEBHOOK_ALLOWED_HOSTS", "")
+    )
     # Plafond de webhooks par liste (audit lot T) : borne le gather de
     # fire_webhooks contre l'amplification DoS.
     WEBHOOKS_MAX_PER_LIST: int = int(os.environ.get("WEBHOOKS_MAX_PER_LIST", "10"))

@@ -233,7 +233,12 @@ class Webhook(Base):
 
 class ChangeLog(Base):
     __tablename__ = "change_log"
-    __table_args__ = (Index("ix_changelog_list_time", "list_id", "server_time"),)
+    __table_args__ = (
+        Index("ix_changelog_list_time", "list_id", "server_time"),
+        # /admin/audit : ORDER BY server_time DESC sans filtre list_id —
+        # l'index composite (list_id en tête) est inutilisable pour ce tri.
+        Index("ix_changelog_server_time", "server_time"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     list_id: Mapped[uuid.UUID] = mapped_column(
