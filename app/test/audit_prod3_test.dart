@@ -511,4 +511,26 @@ void main() {
     expect(gets, 2, reason: "appel initial + retry unique — pas de boucle");
     expect(refreshes, 1);
   });
+
+  test("3.7 : importFile 401 persistant après refresh → au plus 1 retry",
+      () async {
+    var posts = 0;
+    var refreshes = 0;
+    final api = ApiClient("https://srv", client: MockClient((request) async {
+      if (request.url.path == "/auth/refresh") {
+        refreshes++;
+        return http.Response(
+            jsonEncode({"access_token": "a2", "refresh_token": "r2"}), 200);
+      }
+      if (request.url.path == "/import") posts++;
+      return http.Response(jsonEncode({"detail": "nope"}), 401);
+    }));
+    api.accessToken = "a";
+    api.refreshTokenValue = "r";
+    await expectLater(api.importFile("body"), throwsA(isA<ApiException>()),
+        reason: "importFile : le 2e 401 se propage au lieu de boucler "
+            "(le garde manquait avant l'extraction de _withRetry)");
+    expect(posts, 2, reason: "appel initial + retry unique — pas de boucle");
+    expect(refreshes, 1);
+  });
 }

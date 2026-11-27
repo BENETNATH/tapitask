@@ -2,6 +2,7 @@ import "dart:async";
 import "dart:convert";
 
 import "package:drift/drift.dart";
+import "package:flutter/foundation.dart";
 import "package:shared_preferences/shared_preferences.dart";
 import "package:web_socket_channel/web_socket_channel.dart";
 
@@ -95,7 +96,9 @@ class SyncService {
       if (dirtyItems.isNotEmpty || dirtyLists.isNotEmpty) {
         await fullSync();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("tapitask: sync retry-outbox check failed: $e");
+    }
   }
 
   Future<void> fullSync() async {

@@ -1,5 +1,6 @@
 import "dart:io";
 
+import "package:flutter/foundation.dart";
 import "package:flutter/services.dart";
 import "package:tray_manager/tray_manager.dart";
 import "package:window_manager/window_manager.dart";
@@ -130,7 +131,9 @@ class TrayController {
           if (due > 0) "$due aujourd'hui",
         ].join(" • ");
         trayIcon.setTooltip(badge.isEmpty ? "Tapitask" : "Tapitask — $badge");
-      } catch (_) {}
+      } catch (e) {
+        debugPrint("tapitask: tray tooltip update failed: $e");
+      }
     }();
   }
 
@@ -159,10 +162,14 @@ class TrayController {
     state.removeListener(_updateTooltip);
     try {
       flyout.dispose();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("tapitask: flyout dispose failed: $e");
+    }
     try {
       state.dispose();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("tapitask: state dispose failed: $e");
+    }
     _trayIcon?.dispose();
     _window?.close();
   }

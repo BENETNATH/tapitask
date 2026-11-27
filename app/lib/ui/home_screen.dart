@@ -1,5 +1,5 @@
-import "package:material_ui/material_ui.dart";
 import "package:flutter/services.dart";
+import "package:material_ui/material_ui.dart";
 
 import "../data/database.dart";
 import "../state/app_state.dart";
@@ -546,7 +546,9 @@ class _HomeScreenState extends State<HomeScreen> {
         await state.api
             .post("/lists/${list.id}/members", {"email": result.trim()});
         ok++;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint("tapitask: share list failed: $e");
+      }
     }
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(

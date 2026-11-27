@@ -176,6 +176,26 @@ void main() {
     expect(target.folder, "Perso");
   });
 
+  test("getList: id inconnu → null ; panne DB réelle → erreur propagée",
+      () async {
+    final now = DateTime.now().toUtc();
+    final db2 = AppDb.forTesting(NativeDatabase.memory());
+    await db2.upsertList(LocalListsCompanion.insert(
+      id: "list-gl",
+      title: "Cible",
+      ownerId: "",
+      updatedAt: now,
+    ));
+    expect(await db2.getList("list-gl"), isA<LocalList>(),
+        reason: "getList: une liste existante est trouvée");
+    expect(await db2.getList("inexistant"), isNull,
+        reason: "getList: un id inconnu renvoie null, pas d'exception");
+    await db2.close();
+    await expectLater(db2.getList("list-gl"), throwsA(isA<StateError>()),
+        reason: "panne DB réelle (base fermée) : l'erreur se propage, "
+            "pas avalée en null");
+  });
+
   test("items supprimes sont exclus, dirty suit les changements", () async {
     final now = DateTime.now().toUtc();
     await db.upsertList(LocalListsCompanion.insert(

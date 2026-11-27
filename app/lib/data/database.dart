@@ -210,16 +210,10 @@ class AppDb extends _$AppDb {
     );
   }
 
-  /// Single list by id, or null (try/getSingle/catch → null partagé par
-  /// list/today/todo-all, spec lot T, T9).
-  Future<LocalList?> getList(String id) async {
-    try {
-      return await (select(localLists)..where((l) => l.id.equals(id)))
-          .getSingle();
-    } catch (_) {
-      return null;
-    }
-  }
+  /// Single list by id, or null if not found (getSingleOrNull — une vraie
+  /// panne DB se propage, pas avalée, spec lot T, T9).
+  Future<LocalList?> getList(String id) =>
+      (select(localLists)..where((l) => l.id.equals(id))).getSingleOrNull();
 
   // ---- Items ----
 

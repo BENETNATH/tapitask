@@ -86,7 +86,9 @@ class FlyoutBridge {
     }
     try {
       await _ch.invokeMethod("updateFlyoutData", {"data": buf.toString()});
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("tapitask: flyout data push failed: $e");
+    }
   }
 
   /// W3 : les items du volet selon le réglage hide_done (volet/widget) :

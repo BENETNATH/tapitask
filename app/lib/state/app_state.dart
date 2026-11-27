@@ -325,18 +325,26 @@ class AppState extends ChangeNotifier {
       final ids = await WidgetService.pendingToggles();
       if (ids.isEmpty) return;
       final now = DateTime.now().toUtc();
+      final applied = <String>[];
       for (final id in ids) {
         try {
           final completedAt = await WidgetService.pendingCompletionTime(id);
           await db.setDone(id, true, now, completedAt: Value(completedAt ?? now));
-        } catch (_) {}
+          applied.add(id);
+        } catch (e) {
+          // L'id reste en attente (pas de clear) : rejoué au prochain resume.
+          debugPrint("applyWidgetToggles: setDone failed for $id: $e");
+        }
       }
+      if (applied.isEmpty) return;
       notifyListeners();
-      await WidgetService.clearToggles(ids);
+      await WidgetService.clearToggles(applied);
       if (api.isConfigured && api.accessToken != null) {
         sync.syncSoon();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("applyWidgetToggles: $e");
+    }
   }
 
   Future<String> createList(String title, {bool localOnly = false}) async {
@@ -443,7 +451,9 @@ class AppState extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       defaultListId = prefs.getString(_defaultListPref);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("tapitask: _loadDefaultList failed: $e");
+    }
   }
 
   /// [id] null = aucune liste par défaut.
@@ -457,7 +467,9 @@ class AppState extends ChangeNotifier {
       } else {
         await prefs.setString(_defaultListPref, id);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("tapitask: setDefaultList persist failed: $e");
+    }
   }
 
   /// Liste cible d'un nouvel ajout parmi [lists] : la liste par défaut si
@@ -509,7 +521,9 @@ class AppState extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_cachedSettingsPref, jsonEncode(settings));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("tapitask: _cacheSettings failed: $e");
+    }
   }
 
   Future<void> _loadCachedSettings() async {
@@ -523,7 +537,9 @@ class AppState extends ChangeNotifier {
         }
         S.setLocale(settings["lang"] as String?);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("tapitask: _loadCachedSettings failed: $e");
+    }
   }
 
   void pushUndo(void Function() undo) {
@@ -868,7 +884,9 @@ class AppState extends ChangeNotifier {
     if (api.isConfigured && api.accessToken != null) {
       try {
         await api.delete("/lists/$listId/done-items");
-      } catch (_) {}
+      } catch (e) {
+        debugPrint("tapitask: purgeDone remote delete failed: $e");
+      }
       sync.syncSoon();
     }
     await _refreshWidget();
@@ -878,7 +896,9 @@ class AppState extends ChangeNotifier {
     try {
       final pinned = await db.pinnedLists();
       await WidgetService.update(this, db, pinned);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("tapitask: widget refresh failed: $e");
+    }
   }
 
   String _uuid() {

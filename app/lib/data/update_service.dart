@@ -1,5 +1,6 @@
 import "dart:convert";
 
+import "package:flutter/foundation.dart";
 import "package:http/http.dart" as http;
 
 import "api_client.dart";
@@ -96,7 +97,9 @@ Future<UpdateInfo> checkForUpdates({
           serverVersion = v.trim();
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("tapitask: server version check failed: $e");
+    }
   }
 
   UpdateInfo neutral() => UpdateInfo(

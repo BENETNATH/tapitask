@@ -26,7 +26,9 @@ class AlertService {
           AndroidFlutterLocalNotificationsPlugin>();
       await impl?.requestNotificationsPermission();
       _initialized = true;
-    } catch (_) {}
+    } catch (e) {
+      debugPrint("tapitask: alerts init failed: $e");
+    }
   }
 
   static Future<void> notifyDueToday(List<LocalItem> due) async {
