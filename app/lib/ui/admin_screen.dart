@@ -17,6 +17,10 @@ class AdminScreen extends StatefulWidget {
 class _AdminScreenState extends State<AdminScreen> {
   List<dynamic>? _users;
   String? _error;
+  // S3 (prod4) : pas de double submit sur les dialogues d'action.
+  bool _creating = false;
+  bool _resetting = false;
+  bool _acting = false;
 
   @override
   void initState() {
@@ -27,9 +31,15 @@ class _AdminScreenState extends State<AdminScreen> {
   Future<void> _load() async {
     try {
       final users = await widget.state.api.getList("/admin/users");
+      if (!mounted) return; // S3 (prod4)
       setState(() => _users = users);
     } on ApiException catch (e) {
+      if (!mounted) return;
       setState(() => _error = e.message);
+    } catch (e) {
+      // 3.2 (prod3) : hors-ligne / timeout — message visible.
+      if (!mounted) return;
+      setState(() => _error = '$e');
     }
   }
 
@@ -65,16 +75,24 @@ class _AdminScreenState extends State<AdminScreen> {
         actions: [
           FilledButton(
             onPressed: () async {
+              if (_creating) return; // S3 (prod4) : pas de double submit
+              _creating = true;
               try {
-                await widget.state.api.post("/admin/users", {
-                  "email": email.text.trim(),
-                  "password": password.text,
-                  "is_admin": isAdmin.value,
-                });
-                if (context.mounted) Navigator.pop(context);
-                await _load();
-              } on ApiException catch (e) {
-                setState(() => _error = e.message);
+                try {
+                  await widget.state.api.post("/admin/users", {
+                    "email": email.text.trim(),
+                    "password": password.text,
+                    "is_admin": isAdmin.value,
+                  });
+                  if (context.mounted) Navigator.pop(context);
+                  await _load();
+                } on ApiException catch (e) {
+                  if (mounted) setState(() => _error = e.message);
+                } catch (e) {
+                  if (mounted) setState(() => _error = '$e');
+                }
+              } finally {
+                _creating = false;
               }
             },
             child: Text(S.create),
@@ -97,12 +115,20 @@ class _AdminScreenState extends State<AdminScreen> {
         actions: [
           FilledButton(
             onPressed: () async {
+              if (_resetting) return; // S3 (prod4) : pas de double submit
+              _resetting = true;
               try {
-                await widget.state.api
-                    .patch("/admin/users/$userId", {"password": password.text});
-                if (context.mounted) Navigator.pop(context);
-              } on ApiException catch (e) {
-                setState(() => _error = e.message);
+                try {
+                  await widget.state.api
+                      .patch("/admin/users/$userId", {"password": password.text});
+                  if (context.mounted) Navigator.pop(context);
+                } on ApiException catch (e) {
+                  if (mounted) setState(() => _error = e.message);
+                } catch (e) {
+                  if (mounted) setState(() => _error = '$e');
+                }
+              } finally {
+                _resetting = false;
               }
             },
             child: Text(S.apply),
@@ -137,21 +163,29 @@ class _AdminScreenState extends State<AdminScreen> {
                       "${u["is_admin"] ? "admin · " : ""}${u["is_active"] ? S.active : S.disabled}"),
                   trailing: PopupMenuButton<String>(
                     onSelected: (action) async {
+                      if (_acting) return; // S3 (prod4) : pas de double action
+                      _acting = true;
                       try {
-                        if (action == "toggle") {
-                          await widget.state.api.patch(
-                              "/admin/users/${u["id"]}",
-                              {"is_active": !(u["is_active"] as bool)});
-                        } else if (action == "admin") {
-                          await widget.state.api.patch(
-                              "/admin/users/${u["id"]}",
-                              {"is_admin": !(u["is_admin"] as bool)});
-                        } else if (action == "reset") {
-                          await _resetPassword(u["id"]);
+                        try {
+                          if (action == "toggle") {
+                            await widget.state.api.patch(
+                                "/admin/users/${u["id"]}",
+                                {"is_active": !(u["is_active"] as bool)});
+                          } else if (action == "admin") {
+                            await widget.state.api.patch(
+                                "/admin/users/${u["id"]}",
+                                {"is_admin": !(u["is_admin"] as bool)});
+                          } else if (action == "reset") {
+                            await _resetPassword(u["id"]);
+                          }
+                          await _load();
+                        } on ApiException catch (e) {
+                          if (mounted) setState(() => _error = e.message);
+                        } catch (e) {
+                          if (mounted) setState(() => _error = '$e');
                         }
-                        await _load();
-                      } on ApiException catch (e) {
-                        setState(() => _error = e.message);
+                      } finally {
+                        _acting = false;
                       }
                     },
                     itemBuilder: (context) => [

@@ -15,6 +15,7 @@ Le waiver (.git/hermes-review-waived) est réservé à l'utilisateur
 (scripts/waive-review.sh), valable pour un commit, retiré par
 scripts/post-commit.
 """
+
 import json
 import os
 import subprocess
@@ -85,7 +86,9 @@ def check(cwd):
     if h is None or marker.get("head") != h:
         old = (marker.get("head") or "?")[:8]
         new = (h or "?")[:8]
-        fail(f"marqueur plus ancien que le dernier commit ({old} ≠ HEAD {new}) : réviser et re-`record`")
+        fail(
+            f"marqueur plus ancien que le dernier commit ({old} ≠ HEAD {new}) : réviser et re-`record`"
+        )
     missing = [f for f in staged(cwd) if f not in set(marker.get("files", []))]
     if missing:
         fail("fichier(s) non couverts par la review : " + ", ".join(missing))

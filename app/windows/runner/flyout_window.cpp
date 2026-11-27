@@ -378,6 +378,19 @@ void FlyoutWindow::UpdateData(const std::string& payload) {
 }
 
 void FlyoutWindow::RebuildChips(int width) {
+  // C2.5 : pas de destruction/recréation des chips à chaque WM_SIZE —
+  // seulement si la largeur traitée a changé (ou si le jeu de listes a
+  // changé, via UpdateData).
+  size_t sig = 1469598103934665603ull;
+  for (const auto& l : lists_) {
+    for (unsigned char c : l.id) {
+      sig ^= c;
+      sig *= 1099511628211ull;
+    }
+  }
+  if (width == last_chip_width_ && sig == last_chip_sig_) return;
+  last_chip_width_ = width;
+  last_chip_sig_ = sig;
   for (HWND chip : chips_) {
     hover_.erase(chip);
     DestroyWindow(chip);
@@ -551,12 +564,13 @@ void FlyoutWindow::DrawListItem(const DRAWITEMSTRUCT* dis) {
   HDC dc = dis->hDC;
   RECT rc = dis->rcItem;
   const bool selected = (dis->itemState & ODS_SELECTED) != 0;
-  if (selected) {
-    COLORREF accent = dark_ ? RGB(96, 205, 255) : RGB(0, 120, 212);
-    HBRUSH brush = CreateSolidBrush(accent);
-    FillRect(dc, &rc, brush);
-    DeleteObject(brush);
-  }
+  // C2.5 : le fond est TOUTEFOIS peint (accent quand sélectionné, bg sinon)
+  // — le brush de classe seul laisse des traînées à la désélection.
+  const COLORREF row_bg = selected ? (dark_ ? RGB(96, 205, 255) : RGB(0, 120, 212))
+                                   : c_bg_;
+  HBRUSH brush = CreateSolidBrush(row_bg);
+  FillRect(dc, &rc, brush);
+  DeleteObject(brush);
   const COLORREF text = selected ? RGB(255, 255, 255) : c_text_;
   // Case (check state), à la position d'avant — dessinée par l'owner car
   // le contrôle ne dessine plus rien en mode OWNERDRAWFIXED.
@@ -583,19 +597,23 @@ void FlyoutWindow::DrawListItem(const DRAWITEMSTRUCT* dis) {
     SelectObject(dc, old_font);
     due_w = sz.cx + 4;
   }
+  // C2.5 : le run due ne chevauche JAMAIS la case à cocher, même fenêtre
+  // étroite : drc.left = max(fin de la case + padding, droite - due_w).
+  const int due_left =
+      due_w > 0 ? std::max(rc.right - due_w, brc.right + 2) : rc.right;
   SetBkMode(dc, TRANSPARENT);
   SetTextColor(dc, text);
   // Label : ellipsis-friendly comme avant (DT_PATH_ELLIPSIS), en font_.
   RECT lrc = rc;
   lrc.left = brc.right + 2;
-  if (due_w > 0) lrc.right = rc.right - due_w;
+  if (due_w > 0) lrc.right = due_left;
   HGDIOBJ old_font = SelectObject(dc, font_);
   DrawTextW(dc, ToWide(item.label).c_str(), -1, &lrc,
             DT_SINGLELINE | DT_PATH_ELLIPSIS);
   // Le run due peut être tronqué s'il dépasse la largeur restante.
   if (due_w > 0) {
     RECT drc = rc;
-    drc.left = rc.right - due_w;
+    drc.left = due_left;
     SelectObject(dc, font_bold_);
     DrawTextW(dc, due_run.c_str(), -1, &drc, DT_SINGLELINE | DT_END_ELLIPSIS);
   }

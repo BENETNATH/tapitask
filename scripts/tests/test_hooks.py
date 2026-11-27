@@ -6,6 +6,7 @@ Scénarios (le loop tel qu'il s'exécutera dans n'importe quel repo harnessed) :
 3. nouveau commit sans nouvelle review → bloqué (marqueur stale)
 4. waiver (user) → commit passe, waiver retiré par post-commit
 """
+
 import shutil
 import subprocess
 from pathlib import Path
@@ -72,7 +73,9 @@ def test_review_then_commit_passes(wired):
     git(wired, "add", "x.txt", check=True)
     subprocess.run(
         ["python3", str(wired / "scripts" / "review.py"), "record"],
-        cwd=wired, check=True, capture_output=True,
+        cwd=wired,
+        check=True,
+        capture_output=True,
     )
     git(wired, "commit", "-q", "-m", "feat: x", check=True)
     assert "feat: x" in git(wired, "log", "--oneline").stdout
@@ -83,7 +86,9 @@ def test_second_commit_without_new_review_blocked(wired):
     git(wired, "add", "x.txt", check=True)
     subprocess.run(
         ["python3", str(wired / "scripts" / "review.py"), "record"],
-        cwd=wired, check=True, capture_output=True,
+        cwd=wired,
+        check=True,
+        capture_output=True,
     )
     git(wired, "commit", "-q", "-m", "feat: x", check=True)
     # le prochain commit, sans nouvelle review, doit être bloqué
@@ -97,8 +102,12 @@ def test_waiver_one_commit_then_gone(wired):
     (wired / "x.txt").write_text("x\n")
     git(wired, "add", "x.txt", check=True)
     waiver = wired / ".git" / "hermes-review-waived"
-    subprocess.run(["sh", str(wired / "scripts" / "waive-review.sh")],
-                   cwd=wired, check=True, capture_output=True)
+    subprocess.run(
+        ["sh", str(wired / "scripts" / "waive-review.sh")],
+        cwd=wired,
+        check=True,
+        capture_output=True,
+    )
     assert waiver.exists()
     git(wired, "commit", "-q", "-m", "chore: waived", check=True)
     # post-commit a retiré le waiver

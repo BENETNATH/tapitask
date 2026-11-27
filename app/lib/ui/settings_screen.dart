@@ -7,6 +7,7 @@ import "../data/api_client.dart";
 import "../data/app_version.dart";
 import "../data/update_service.dart";
 import "../data/windows_updater.dart";
+import "../platform/file_service.dart";
 import "../state/app_state.dart";
 import "../l10n/s.dart";
 import "update_dialog.dart";
@@ -39,6 +40,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _toggle(String key, bool value) async {
     widget.state.settings[key] = value;
     await widget.state.saveSettings();
+  }
+
+  /// S2 (prod4) : « Se déconnecter » — logout volontaire : endpoint serveur
+  /// (révocation du refresh token, best effort) puis purge locale (tokens
+  /// null + persist) + état déconnecté (profil effacé, WS fermé) + retour
+  /// LoginScreen. C'est une déconnexion volontaire : pas de
+  /// onSessionExpired (c'est pour l'expiration définitive).
+  bool _loggingOut = false;
+
+  Future<void> _logout() async {
+    if (_loggingOut) return; // S3 (prod4) : pas de double logout
+    _loggingOut = true;
+    final s = widget.state;
+    try {
+      await s.api.logout();
+      s.api.accessToken = null;
+      s.api.refreshTokenValue = null;
+      await s.api.persist();
+      s.handleSessionExpired();
+      if (mounted) {
+        Navigator.pushNamedAndRemoveUntil(context, "/login", (route) => false);
+      }
+    } finally {
+      _loggingOut = false;
+    }
   }
 
   // ---- petits composants compacts (pas de cartes, pas de bordures) ----
@@ -83,8 +109,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       );
 
-  Widget _tapRow(String title, String value, VoidCallback onTap,
-          {String? subtitle}) =>
+  Widget _tapRow(String title, String value, VoidCallback? onTap,
+          {String? subtitle, Widget? trailing}) =>
       SizedBox(
         height: subtitle == null ? 44 : 56,
         child: InkWell(
@@ -110,9 +136,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       fontSize: 13,
                       color: Theme.of(context).colorScheme.outline)),
               const SizedBox(width: 2),
-              Icon(Icons.chevron_right,
-                  size: 18,
-                  color: Theme.of(context).colorScheme.outline),
+              if (trailing != null)
+                trailing
+              else
+                Icon(Icons.chevron_right,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.outline),
             ],
           ),
         ),
@@ -187,8 +216,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ---- Mises à jour (spec §B) ----
 
+  // C1.5 : la row est désactivée pendant le check. L'état du téléchargement
+  // est détenu par UpdateDialog lui-même (1.2 prod3 — source unique).
+  bool _checkingUpdates = false;
+
   Future<void> _showUpdates() async {
     final s = widget.state;
+    if (_checkingUpdates) return;
+    setState(() => _checkingUpdates = true);
     final client = http.Client();
     UpdateInfo info;
     try {
@@ -197,6 +232,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       client.close();
     }
     if (!mounted) return;
+    setState(() => _checkingUpdates = false);
     await showDialog<void>(
       context: context,
       builder: (context) => UpdateDialog(
@@ -204,25 +240,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
         // Le bouton n'existe que si une MAJ client est dispo.
         onUpdate: info.clientAvailable
             ? () async {
-                try {
-                  switch (defaultTargetPlatform) {
-                    case TargetPlatform.windows:
-                      await runSelfUpdate(info);
-                    case TargetPlatform.android:
-                      await installApk(info);
-                    default:
-                      break;
-                  }
-                } catch (e) {
-                  // Spec §B.5 : échec du téléchargement/dépatch → message
-                  // d'erreur (l'ancienne version reste intacte).
-                  if (!mounted) return;
-                  await _showInfo(S.updateError, '$e');
+                switch (defaultTargetPlatform) {
+                  case TargetPlatform.windows:
+                    await runSelfUpdate(info);
+                  case TargetPlatform.android:
+                    await installApk(info);
+                  default:
+                    break;
                 }
               }
             : null,
       ),
     );
+  }
+
+  // ---- Exporter / Importer (spec 2026-11-25, D-7) ----
+  // Site minimal choisi pour l'export/import GLOBAL : les réglages (le
+  // spec laissait le choix réglages/home — ici pas d'écran home dédié,
+  // les réglages sont le seul écran global stable).
+
+  Future<void> _exportAll(String fmt) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final saved = await runExport(
+          widget.state.api, "/export.$fmt?scope=all", "tapitask-all.$fmt");
+      if (saved) {
+        messenger.showSnackBar(SnackBar(content: Text(S.exportedOk)));
+      }
+    } catch (_) {
+      messenger.showSnackBar(SnackBar(content: Text(S.exportFailed)));
+    }
+  }
+
+  Future<void> _importFile() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final count = await runImport(widget.state.api);
+      if (count != null) {
+        messenger.showSnackBar(SnackBar(content: Text(S.importedOk)));
+      }
+    } catch (_) {
+      messenger.showSnackBar(SnackBar(content: Text(S.importFailed)));
+    }
   }
 
   // ---- dialogues ----
@@ -471,14 +530,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _header(S.updates),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _tapRow(S.updates, appVersion, _showUpdates),
+            child: _tapRow(
+                S.updates, appVersion,
+                // C1.5 : row désactivée + spinner pendant le check.
+                _checkingUpdates ? null : _showUpdates,
+                trailing: _checkingUpdates
+                    ? const SizedBox(
+                        width: 16, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : null),
+          ),
+
+          // ---- Exporter / Importer (spec 2026-11-25, D-7) ----
+          _header(S.importExport),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Column(
+              children: [
+                _tapRow(S.exportAllJson, "", () => _exportAll("json")),
+                _divider(),
+                _tapRow(S.exportAllCsv, "", () => _exportAll("csv")),
+                _divider(),
+                _tapRow(S.importFile, "", _importFile,
+                    subtitle: S.importFileHint),
+              ],
+            ),
           ),
 
           // ---- Compte ----
           _header(S.account),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: s.api.accessToken == null
+            // C1.7 : « connecté » exige un token NON VIDE ("" persisté par
+            // l'ancienne version n'est pas une session).
+            child: (s.api.accessToken == null || s.api.accessToken!.isEmpty)
                 ? SizedBox(
                     height: 44,
                     child: ElevatedButton.icon(
@@ -501,6 +586,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ? S.notConfigured
                               : s.api.baseUrl,
                           () => Navigator.pushNamed(context, "/login")),
+                      _divider(),
+                      // S2 (prod4) : « Se déconnecter » — libellé FR en dur
+                      // (pas de clé l10n existante ; D-9 : pas de création
+                      // de clé).
+                      SizedBox(
+                        height: 44,
+                        child: TextButton.icon(
+                          onPressed: _loggingOut ? null : _logout,
+                          icon: const Icon(Icons.logout, size: 18),
+                          label: const Text("Se déconnecter"),
+                        ),
+                      ),
                     ],
                   ),
           ),
@@ -555,6 +652,9 @@ class _EmailDialogState extends State<_EmailDialog> {
   final _totp = TextEditingController();
   final _code = TextEditingController();
   String? _error;
+  // 3.2 (prod3) : action en cours — bouton désactivé, pas de relance
+  // pendant le timeout réseau.
+  bool _busy = false;
 
   @override
   void dispose() {
@@ -566,20 +666,29 @@ class _EmailDialogState extends State<_EmailDialog> {
   }
 
   Future<void> _submit() async {
+    if (_busy) return;
     if (widget.pending) {
       final code = _code.text.trim();
       if (code.isEmpty) return;
+      _busy = true;
       try {
         await widget.state.api.verifyEmail(code);
         await widget.state.reloadProfile();
         if (mounted) Navigator.pop(context);
       } on ApiException catch (e) {
         _error = e.status == 404 ? S.invalidCode : S.loginFailed(e);
+      } catch (e) {
+        // 3.2 (prod3) : hors-ligne / timeout — message visible au lieu
+        // d'une exception non gérée.
+        _error = S.loginFailed(e);
+      } finally {
+        _busy = false;
       }
     } else {
       final email = _email.text.trim();
       final code = _totp.text.trim();
       if (email.isEmpty || _password.text.isEmpty) return;
+      _busy = true;
       try {
         await widget.state.api.changeEmail(
             email, _password.text,
@@ -593,6 +702,10 @@ class _EmailDialogState extends State<_EmailDialog> {
           503 => S.emailVerifyUnavailable,
           _ => S.loginFailed(e),
         };
+      } catch (e) {
+        _error = S.loginFailed(e);
+      } finally {
+        _busy = false;
       }
     }
     if (mounted) setState(() {});
@@ -647,7 +760,8 @@ class _EmailDialogState extends State<_EmailDialog> {
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context), child: Text(S.cancel)),
-        FilledButton(onPressed: _submit, child: Text(S.ok)),
+        FilledButton(
+            onPressed: _busy ? null : _submit, child: Text(S.ok)),
       ],
     );
   }

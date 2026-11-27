@@ -17,9 +17,14 @@ class TodoAllScreen extends StatefulWidget {
 }
 
 class _TodoAllScreenState extends State<TodoAllScreen> {
+  late final Stream<List<LocalItem>> _todoStream;
+
   @override
   void initState() {
     super.initState();
+    // 3.1 (prod3) : le flux watch() est créé une seule fois — recréé à
+    // chaque build, il faisait flasher l'état vide.
+    _todoStream = widget.state.db.watchAllUncheckedItems();
     widget.state.addListener(_onChanged);
   }
 
@@ -41,7 +46,7 @@ class _TodoAllScreenState extends State<TodoAllScreen> {
             style: TextStyle(fontWeight: FontWeight.w600)),
       ),
       body: StreamBuilder<List<LocalItem>>(
-        stream: widget.state.db.watchAllUncheckedItems(),
+        stream: _todoStream,
         initialData: const [],
         builder: (context, snapshot) {
           final items = snapshot.data ?? const [];
@@ -53,7 +58,7 @@ class _TodoAllScreenState extends State<TodoAllScreen> {
                   Icon(Icons.celebration_outlined,
                       size: 64, color: scheme.outline),
                   const SizedBox(height: 12),
-                  Text("Tout est fait !",
+                  Text(S.allDone,
                       style: TextStyle(color: scheme.outline)),
                 ],
               ),
@@ -85,7 +90,7 @@ class _TodoAllScreenState extends State<TodoAllScreen> {
                     builder: (context, snap) => Text(
                       "${snap.data?.title ?? ""}"
                       "${due != null ? "  •  ${dueLabel(due, withTime: false)}" : ""}"
-                      "${overdue ? "  •  en retard" : ""}",
+                      "${overdue ? S.t("overdueSuffix") : ""}",
                       style: TextStyle(
                           fontSize: 12,
                           color: overdue ? scheme.error : scheme.outline),

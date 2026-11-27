@@ -31,6 +31,7 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Future<void> _loadLists() async {
     final lists = await widget.state.db.visibleLists();
+    if (!mounted) return; // S3 (prod4)
     setState(() {
       _listTitles = {for (final l in lists) l.id.toString(): l.title};
     });

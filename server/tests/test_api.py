@@ -8,9 +8,8 @@ os.environ.setdefault("JWT_SECRET", "test-0123456789abcdef0123456789abcdef")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture
@@ -20,10 +19,10 @@ async def client():
         yield c
 
 
-async def register(client: AsyncClient, email: str = "a@example.com", password: str = "LongPassw0rd!x"):
-    r = await client.post(
-        "/auth/register", json={"email": email, "password": password}
-    )
+async def register(
+    client: AsyncClient, email: str = "a@example.com", password: str = "LongPassw0rd!x"
+):
+    r = await client.post("/auth/register", json={"email": email, "password": password})
     assert r.status_code == 201, r.text
     return r.json()
 
@@ -41,7 +40,9 @@ async def test_health(client):
 @pytest.mark.asyncio
 async def test_register_login_me(client):
     tokens = await register(client, "u1@example.com")
-    r = await client.post("/auth/login", json={"email": "u1@example.com", "password": "LongPassw0rd!x"})
+    r = await client.post(
+        "/auth/login", json={"email": "u1@example.com", "password": "LongPassw0rd!x"}
+    )
     assert r.status_code == 200
     r = await client.get("/auth/me", headers=auth_headers(tokens))
     assert r.status_code == 200
@@ -51,7 +52,9 @@ async def test_register_login_me(client):
 @pytest.mark.asyncio
 async def test_bad_login(client):
     await register(client, "u2@example.com")
-    r = await client.post("/auth/login", json={"email": "u2@example.com", "password": "wrongpass123"})
+    r = await client.post(
+        "/auth/login", json={"email": "u2@example.com", "password": "wrongpass123"}
+    )
     assert r.status_code == 401
 
 
@@ -98,7 +101,9 @@ async def test_sharing_and_roles(client):
     h1, h2 = auth_headers(t1), auth_headers(t2)
     r = await client.post("/lists", json={"title": "Voyage"}, headers=h1)
     list_id = r.json()["id"]
-    await client.post(f"/lists/{list_id}/items", json={"label": "passeport"}, headers=h1)
+    await client.post(
+        f"/lists/{list_id}/items", json={"label": "passeport"}, headers=h1
+    )
 
     # guest cannot see the list before sharing
     r = await client.get(f"/lists/{list_id}/items", headers=h2)
@@ -142,7 +147,7 @@ async def test_invite_flow(client):
     r = await client.post(f"/lists/invites/{invite_id}/accept", headers=h2)
     assert r.status_code == 204
     r = await client.get("/lists", headers=h2)
-    assert any(l["id"] == list_id for l in r.json())
+    assert any(x["id"] == list_id for x in r.json())
 
 
 @pytest.mark.asyncio
@@ -184,8 +189,9 @@ async def test_sync_delta(client):
     h = auth_headers(tokens)
     r = await client.post("/lists", json={"title": "Sync"}, headers=h)
     list_id = r.json()["id"]
-    r = await client.post(f"/lists/{list_id}/items/bulk", json={"text": "a\nb"}, headers=h)
-    items = r.json()
+    r = await client.post(
+        f"/lists/{list_id}/items/bulk", json={"text": "a\nb"}, headers=h
+    )
 
     # full sync: the list itself + its 2 items
     r = await client.post("/sync", json={}, headers=h)
@@ -200,7 +206,8 @@ async def test_sync_delta(client):
     import datetime as dt
 
     newer = (
-        dt.datetime.fromisoformat(server_time.replace("Z", "+00:00")) + dt.timedelta(seconds=1)
+        dt.datetime.fromisoformat(server_time.replace("Z", "+00:00"))
+        + dt.timedelta(seconds=1)
     ).isoformat()
     client_item = {
         "kind": "item.upsert",
@@ -234,15 +241,22 @@ async def test_sync_all_day_due_date_and_legacy_updates(client):
     list_id = response.json()["id"]
     stamp = datetime.now(timezone.utc)
     event = {
-        "kind": "item.upsert", "id": str(uuid.uuid4()), "list_id": list_id,
-        "label": "A task", "due_day": "2026-11-23",
-        "due_date": "2026-11-22T23:00:00Z", "notes": "Details",
+        "kind": "item.upsert",
+        "id": str(uuid.uuid4()),
+        "list_id": list_id,
+        "label": "A task",
+        "due_day": "2026-11-23",
+        "due_date": "2026-11-22T23:00:00Z",
+        "notes": "Details",
         "updated_at": stamp.isoformat(),
     }
     response = await client.post("/sync", json={"events": [event]}, headers=headers)
     assert response.status_code == 200, response.text
     response = await client.post("/sync", json={}, headers=headers)
-    assert next(c for c in response.json()["changes"] if c["id"] == event["id"])["due_day"] == "2026-11-23"
+    assert (
+        next(c for c in response.json()["changes"] if c["id"] == event["id"])["due_day"]
+        == "2026-11-23"
+    )
 
     legacy = {k: v for k, v in event.items() if k != "due_day"}
     legacy.update(done=True, updated_at=(stamp + timedelta(seconds=1)).isoformat())
@@ -252,7 +266,11 @@ async def test_sync_all_day_due_date_and_legacy_updates(client):
     assert response.json()[0]["due_day"] == "2026-11-23"
     assert response.json()[0]["done"] is True
 
-    event.update(due_day=None, due_date=None, updated_at=(stamp + timedelta(seconds=2)).isoformat())
+    event.update(
+        due_day=None,
+        due_date=None,
+        updated_at=(stamp + timedelta(seconds=2)).isoformat(),
+    )
     response = await client.post("/sync", json={"events": [event]}, headers=headers)
     assert response.status_code == 200, response.text
     response = await client.get(f"/lists/{list_id}/items", headers=headers)
@@ -270,8 +288,12 @@ async def test_completion_timestamp_survives_edits_and_clears_on_reopen(client):
     stamp = datetime.now(timezone.utc).replace(microsecond=0)
     completed = stamp - timedelta(days=1)
     event = {
-        "kind": "item.upsert", "id": str(uuid.uuid4()), "list_id": response.json()["id"],
-        "label": "Finished task", "done": True, "completed_at": completed.isoformat(),
+        "kind": "item.upsert",
+        "id": str(uuid.uuid4()),
+        "list_id": response.json()["id"],
+        "label": "Finished task",
+        "done": True,
+        "completed_at": completed.isoformat(),
         "updated_at": stamp.isoformat(),
     }
     response = await client.post("/sync", json={"events": [event]}, headers=headers)
@@ -303,9 +325,6 @@ async def test_no_auth_401(client):
 async def test_admin_bootstrap(client):
     from app.config import settings
     from app.main import ensure_admin_user
-    from app.db import SessionLocal
-    from app.models import User
-    from sqlalchemy import select
 
     settings.ADMIN_EMAIL = "admin@tapitask.fr"
     settings.ADMIN_PASSWORD = "AdminLongPass1!"
@@ -329,15 +348,21 @@ async def test_admin_user_management(client):
     # bootstrap an admin
     from app.config import settings
     from app.main import ensure_admin_user
+
     settings.ADMIN_EMAIL = "root@tapitask.fr"
     settings.ADMIN_PASSWORD = "RootLongPass1!"
     assert await ensure_admin_user() is True
-    r = await client.post("/auth/login", json={"email": "root@tapitask.fr", "password": "RootLongPass1!"})
+    r = await client.post(
+        "/auth/login", json={"email": "root@tapitask.fr", "password": "RootLongPass1!"}
+    )
     admin_h = {"Authorization": f"Bearer {r.json()['access_token']}"}
 
     # non-admin gets 403
     await register(client, "plebeian@example.com")
-    r = await client.post("/auth/login", json={"email": "plebeian@example.com", "password": "LongPassw0rd!x"})
+    r = await client.post(
+        "/auth/login",
+        json={"email": "plebeian@example.com", "password": "LongPassw0rd!x"},
+    )
     pleb_h = {"Authorization": f"Bearer {r.json()['access_token']}"}
     r = await client.get("/admin/users", headers=pleb_h)
     assert r.status_code == 403
@@ -348,34 +373,55 @@ async def test_admin_user_management(client):
     assert any(u["email"] == "root@tapitask.fr" and u["is_admin"] for u in r.json())
 
     # admin creates a user
-    r = await client.post("/admin/users", json={"email": "newbie@example.com", "password": "NewbiePass123!"}, headers=admin_h)
+    r = await client.post(
+        "/admin/users",
+        json={"email": "newbie@example.com", "password": "NewbiePass123!"},
+        headers=admin_h,
+    )
     assert r.status_code == 201
     newbie_id = r.json()["id"]
-    r = await client.post("/auth/login", json={"email": "newbie@example.com", "password": "NewbiePass123!"})
+    r = await client.post(
+        "/auth/login",
+        json={"email": "newbie@example.com", "password": "NewbiePass123!"},
+    )
     assert r.status_code == 200
 
     # admin disables the user -> cannot login, existing token rejected
-    r = await client.patch(f"/admin/users/{newbie_id}", json={"is_active": False}, headers=admin_h)
+    r = await client.patch(
+        f"/admin/users/{newbie_id}", json={"is_active": False}, headers=admin_h
+    )
     assert r.status_code == 200 and r.json()["is_active"] is False
-    r = await client.post("/auth/login", json={"email": "newbie@example.com", "password": "NewbiePass123!"})
+    r = await client.post(
+        "/auth/login",
+        json={"email": "newbie@example.com", "password": "NewbiePass123!"},
+    )
     assert r.status_code == 403
-    newbie_tokens = r.json() if False else None
-    r = await client.post("/auth/login", json={"email": "plebeian@example.com", "password": "LongPassw0rd!x"})
+    r = await client.post(
+        "/auth/login",
+        json={"email": "plebeian@example.com", "password": "LongPassw0rd!x"},
+    )
     pleb_h = {"Authorization": f"Bearer {r.json()['access_token']}"}
     r = await client.get("/lists", headers=pleb_h)
     assert r.status_code == 200
     # disabled user's fresh tokens are refused at the door
-    r = await client.post("/auth/login", json={"email": "newbie@example.com", "password": "NewbiePass123!"})
+    r = await client.post(
+        "/auth/login",
+        json={"email": "newbie@example.com", "password": "NewbiePass123!"},
+    )
     assert r.status_code == 403
 
     # admin cannot disable themselves
     r = await client.get("/admin/users", headers=admin_h)
     admin_id = [u["id"] for u in r.json() if u["email"] == "root@tapitask.fr"][0]
-    r = await client.patch(f"/admin/users/{admin_id}", json={"is_active": False}, headers=admin_h)
+    r = await client.patch(
+        f"/admin/users/{admin_id}", json={"is_active": False}, headers=admin_h
+    )
     assert r.status_code == 400
 
     # re-enable works
-    r = await client.patch(f"/admin/users/{newbie_id}", json={"is_active": True}, headers=admin_h)
+    r = await client.patch(
+        f"/admin/users/{newbie_id}", json={"is_active": True}, headers=admin_h
+    )
     assert r.status_code == 200 and r.json()["is_active"] is True
     settings.ADMIN_EMAIL = ""
     settings.ADMIN_PASSWORD = ""
@@ -391,22 +437,29 @@ async def test_refresh_rejects_disabled_user(client):
     settings.ADMIN_EMAIL = "disadmin@tapitask.fr"
     settings.ADMIN_PASSWORD = "DisAdminPass1!"
     assert await ensure_admin_user() is True
-    r = await client.post("/auth/login",
-                          json={"email": "disadmin@tapitask.fr", "password": "DisAdminPass1!"})
+    r = await client.post(
+        "/auth/login",
+        json={"email": "disadmin@tapitask.fr", "password": "DisAdminPass1!"},
+    )
     admin_h = {"Authorization": f"Bearer {r.json()['access_token']}"}
 
-    r = await client.post("/admin/users",
-                          json={"email": "doomed@example.com", "password": "DoomedPass123!"},
-                          headers=admin_h)
+    r = await client.post(
+        "/admin/users",
+        json={"email": "doomed@example.com", "password": "DoomedPass123!"},
+        headers=admin_h,
+    )
     assert r.status_code == 201
     doomed_id = r.json()["id"]
-    r = await client.post("/auth/login",
-                          json={"email": "doomed@example.com", "password": "DoomedPass123!"})
+    r = await client.post(
+        "/auth/login",
+        json={"email": "doomed@example.com", "password": "DoomedPass123!"},
+    )
     assert r.status_code == 200
     refresh_token = r.json()["refresh_token"]
 
-    r = await client.patch(f"/admin/users/{doomed_id}",
-                           json={"is_active": False}, headers=admin_h)
+    r = await client.patch(
+        f"/admin/users/{doomed_id}", json={"is_active": False}, headers=admin_h
+    )
     assert r.status_code == 200 and r.json()["is_active"] is False
 
     r = await client.post("/auth/refresh", json={"refresh_token": refresh_token})
@@ -420,21 +473,32 @@ async def test_subtasks_two_levels_max(client):
     tokens = await register(client, "sub@example.com")
     h = auth_headers(tokens)
     list_id = (await client.post("/lists", json={"title": "T"}, headers=h)).json()["id"]
-    parent = (await client.post(
-        f"/lists/{list_id}/items", json={"label": "parent"}, headers=h)).json()[0]
+    parent = (
+        await client.post(
+            f"/lists/{list_id}/items", json={"label": "parent"}, headers=h
+        )
+    ).json()[0]
     r = await client.post(
         f"/lists/{list_id}/items",
-        json={"label": "child", "parent_id": parent["id"]}, headers=h)
+        json={"label": "child", "parent_id": parent["id"]},
+        headers=h,
+    )
     assert r.status_code == 201
     child = r.json()[0]
     # a sub-task cannot have a sub-task
     r = await client.post(
         f"/lists/{list_id}/items",
-        json={"label": "grandchild", "parent_id": child["id"]}, headers=h)
+        json={"label": "grandchild", "parent_id": child["id"]},
+        headers=h,
+    )
     assert r.status_code == 400
     # parent_id from another list is rejected
     other = (await client.post("/lists", json={"title": "U"}, headers=h)).json()["id"]
-    r = await client.post(f"/lists/{other}/items", json={"label": "x", "parent_id": parent["id"]}, headers=h)
+    r = await client.post(
+        f"/lists/{other}/items",
+        json={"label": "x", "parent_id": parent["id"]},
+        headers=h,
+    )
     assert r.status_code == 404
 
 
@@ -445,10 +509,13 @@ async def test_recurrence_spawns_next(client):
     list_id = (await client.post("/lists", json={"title": "R"}, headers=h)).json()["id"]
     r = await client.post(
         f"/lists/{list_id}/items",
-        json={"label": "Sortir les poubelles", "recurrence": "weekly"}, headers=h)
+        json={"label": "Sortir les poubelles", "recurrence": "weekly"},
+        headers=h,
+    )
     item = r.json()[0]
     r = await client.patch(
-        f"/lists/{list_id}/items/{item['id']}", json={"done": True}, headers=h)
+        f"/lists/{list_id}/items/{item['id']}", json={"done": True}, headers=h
+    )
     body = r.json()
     assert len(body) == 2
     assert body[0]["done"] is True
@@ -465,9 +532,13 @@ async def test_recurrence_repeated_completion_is_idempotent(client):
     tokens = await register(client, "recidem@example.com")
     h = auth_headers(tokens)
     list_id = (await client.post("/lists", json={"title": "R"}, headers=h)).json()["id"]
-    item = (await client.post(
-        f"/lists/{list_id}/items",
-        json={"label": "Arroser", "recurrence": "daily"}, headers=h)).json()[0]
+    item = (
+        await client.post(
+            f"/lists/{list_id}/items",
+            json={"label": "Arroser", "recurrence": "daily"},
+            headers=h,
+        )
+    ).json()[0]
     url = f"/lists/{list_id}/items/{item['id']}"
 
     first = (await client.patch(url, json={"done": True}, headers=h)).json()
@@ -486,9 +557,11 @@ async def test_recurrence_repeated_completion_is_idempotent(client):
     assert pending[0]["id"] == first[1]["id"]
 
     # the spawned occurrence still recurs normally when completed
-    nxt = (await client.patch(
-        f"/lists/{list_id}/items/{pending[0]['id']}", json={"done": True},
-        headers=h)).json()
+    nxt = (
+        await client.patch(
+            f"/lists/{list_id}/items/{pending[0]['id']}", json={"done": True}, headers=h
+        )
+    ).json()
     assert len(nxt) == 2
 
 
@@ -500,17 +573,30 @@ async def test_sync_recurrence_repeated_completion_is_idempotent(client):
 
     t = await register(client, "recsyncidem@example.com")
     h = auth_headers(t)
-    list_id = (await client.post("/lists", json={"title": "Rec"}, headers=h)).json()["id"]
-    item_id = (await client.post(f"/lists/{list_id}/items",
-               json={"label": "Sport", "recurrence": "daily"}, headers=h)).json()[0]["id"]
+    list_id = (await client.post("/lists", json={"title": "Rec"}, headers=h)).json()[
+        "id"
+    ]
+    item_id = (
+        await client.post(
+            f"/lists/{list_id}/items",
+            json={"label": "Sport", "recurrence": "daily"},
+            headers=h,
+        )
+    ).json()[0]["id"]
 
     now = datetime.now(timezone.utc)
 
     def ev(done: bool, ms: int) -> dict:
-        return {"kind": "item.upsert", "id": item_id, "list_id": list_id,
-                "label": "Sport", "done": done, "position": 0,
-                "recurrence": "daily",
-                "updated_at": (now + timedelta(milliseconds=ms)).isoformat()}
+        return {
+            "kind": "item.upsert",
+            "id": item_id,
+            "list_id": list_id,
+            "label": "Sport",
+            "done": done,
+            "position": 0,
+            "recurrence": "daily",
+            "updated_at": (now + timedelta(milliseconds=ms)).isoformat(),
+        }
 
     for done, ms in ((True, 100), (True, 200), (False, 300), (True, 400)):
         r = await client.post("/sync", json={"events": [ev(done, ms)]}, headers=h)
@@ -534,19 +620,27 @@ async def test_recurrence_spawn_race_backstop(client, monkeypatch):
     tokens = await register(client, "recrace@example.com")
     h = auth_headers(tokens)
     list_id = (await client.post("/lists", json={"title": "R"}, headers=h)).json()["id"]
-    item = (await client.post(
-        f"/lists/{list_id}/items",
-        json={"label": "Course", "recurrence": "weekly"}, headers=h)).json()[0]
-    await client.patch(f"/lists/{list_id}/items/{item['id']}",
-                       json={"done": True}, headers=h)  # spawns occurrence #1
+    item = (
+        await client.post(
+            f"/lists/{list_id}/items",
+            json={"label": "Course", "recurrence": "weekly"},
+            headers=h,
+        )
+    ).json()[0]
+    await client.patch(
+        f"/lists/{list_id}/items/{item['id']}", json={"done": True}, headers=h
+    )  # spawns occurrence #1
 
     class _NoRow:
         def scalar_one_or_none(self):
             return None
 
     async with SessionLocal() as session:
-        source = (await session.execute(
-            select(Item).where(Item.label == "Course", Item.done.is_(True)))).scalar_one()
+        source = (
+            await session.execute(
+                select(Item).where(Item.label == "Course", Item.done.is_(True))
+            )
+        ).scalar_one()
         real_execute = session.execute
         calls = {"n": 0}
 
@@ -560,9 +654,13 @@ async def test_recurrence_spawn_race_backstop(client, monkeypatch):
         assert await _spawn_next(session, source, source.created_by) is None
         assert source.label == "Course"  # reloaded after rollback, not expired
         monkeypatch.undo()
-        count = (await session.execute(
-            select(func.count()).select_from(Item)
-            .where(Item.recurrence_source_id == source.id))).scalar_one()
+        count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Item)
+                .where(Item.recurrence_source_id == source.id)
+            )
+        ).scalar_one()
     assert count == 1
 
 
@@ -570,10 +668,16 @@ async def test_recurrence_spawn_race_backstop(client, monkeypatch):
 async def test_summary_and_purge(client):
     tokens = await register(client, "sum@example.com")
     h = auth_headers(tokens)
-    list_id = (await client.post("/lists", json={"title": "Courses"}, headers=h)).json()["id"]
-    await client.post(f"/lists/{list_id}/items/bulk", json={"text": "lait\npain"}, headers=h)
+    list_id = (
+        await client.post("/lists", json={"title": "Courses"}, headers=h)
+    ).json()["id"]
+    await client.post(
+        f"/lists/{list_id}/items/bulk", json={"text": "lait\npain"}, headers=h
+    )
     items = (await client.get(f"/lists/{list_id}/items", headers=h)).json()
-    await client.patch(f"/lists/{list_id}/items/{items[0]['id']}", json={"done": True}, headers=h)
+    await client.patch(
+        f"/lists/{list_id}/items/{items[0]['id']}", json={"done": True}, headers=h
+    )
 
     r = await client.get(f"/lists/{list_id}/summary", headers=h)
     assert r.status_code == 200
@@ -592,10 +696,11 @@ async def test_webhooks_crud(client):
     tokens = await register(client, "hook@example.com")
     h = auth_headers(tokens)
     list_id = (await client.post("/lists", json={"title": "H"}, headers=h)).json()["id"]
-    r = await client.post(f"/lists/{list_id}/hooks",
-                          json={"url": "https://example.com/hook"}, headers=h)
+    r = await client.post(
+        f"/lists/{list_id}/hooks", json={"url": "https://example.com/hook"}, headers=h
+    )
     assert r.status_code == 201
-    hook_id, secret = r.json()["id"], r.json()["secret"]
+    hook_id = r.json()["id"]
     r = await client.get(f"/lists/{list_id}/hooks", headers=h)
     assert len(r.json()) == 1
     # firing path is best-effort; verify hooks are stored per list
@@ -613,9 +718,12 @@ async def test_hooks_secret_visibility(client):
 
     owner = await register(client, "hookowner@example.com")
     oh = auth_headers(owner)
-    list_id = (await client.post("/lists", json={"title": "Hooks"}, headers=oh)).json()["id"]
-    r = await client.post(f"/lists/{list_id}/hooks",
-                          json={"url": "https://example.com/hook"}, headers=oh)
+    list_id = (await client.post("/lists", json={"title": "Hooks"}, headers=oh)).json()[
+        "id"
+    ]
+    r = await client.post(
+        f"/lists/{list_id}/hooks", json={"url": "https://example.com/hook"}, headers=oh
+    )
     assert r.status_code == 201
     hook_id, secret = r.json()["id"], r.json()["secret"]
 
@@ -628,9 +736,11 @@ async def test_hooks_secret_visibility(client):
     # viewer member: secret hidden, URL still visible
     guest = await register(client, "hookguest@example.com")
     gh = auth_headers(guest)
-    r = await client.post(f"/lists/{list_id}/members",
-                          json={"email": "hookguest@example.com", "role": "viewer"},
-                          headers=oh)
+    r = await client.post(
+        f"/lists/{list_id}/members",
+        json={"email": "hookguest@example.com", "role": "viewer"},
+        headers=oh,
+    )
     assert r.status_code == 201
     r = await client.get(f"/lists/{list_id}/hooks", headers=gh)
     assert r.status_code == 200
@@ -641,12 +751,16 @@ async def test_hooks_secret_visibility(client):
     settings.ADMIN_EMAIL = "hookadmin@tapitask.fr"
     settings.ADMIN_PASSWORD = "HookAdminPass1!"
     assert await ensure_admin_user() is True
-    r = await client.post("/auth/login",
-                          json={"email": "hookadmin@tapitask.fr", "password": "HookAdminPass1!"})
+    r = await client.post(
+        "/auth/login",
+        json={"email": "hookadmin@tapitask.fr", "password": "HookAdminPass1!"},
+    )
     admin_h = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    await client.post(f"/lists/{list_id}/members",
-                      json={"email": "hookadmin@tapitask.fr", "role": "viewer"},
-                      headers=oh)
+    await client.post(
+        f"/lists/{list_id}/members",
+        json={"email": "hookadmin@tapitask.fr", "role": "viewer"},
+        headers=oh,
+    )
     r = await client.get(f"/lists/{list_id}/hooks", headers=admin_h)
     assert r.status_code == 200
     entry = [h for h in r.json() if h["id"] == hook_id][0]
@@ -655,9 +769,11 @@ async def test_hooks_secret_visibility(client):
     settings.ADMIN_PASSWORD = ""
 
     # scoped API key (even on its own list): secret hidden
-    r = await client.post("/api-keys",
-                          json={"name": "scoped", "read_only": True, "list_scope": list_id},
-                          headers=oh)
+    r = await client.post(
+        "/api-keys",
+        json={"name": "scoped", "read_only": True, "list_scope": list_id},
+        headers=oh,
+    )
     kh = {"Authorization": f"Bearer {r.json()['key']}"}
     r = await client.get(f"/lists/{list_id}/hooks", headers=kh)
     assert r.status_code == 200
@@ -671,7 +787,11 @@ async def test_api_key_list_scope(client):
     h = auth_headers(tokens)
     l1 = (await client.post("/lists", json={"title": "L1"}, headers=h)).json()["id"]
     l2 = (await client.post("/lists", json={"title": "L2"}, headers=h)).json()["id"]
-    r = await client.post("/api-keys", json={"name": "scoped", "read_only": True, "list_scope": l1}, headers=h)
+    r = await client.post(
+        "/api-keys",
+        json={"name": "scoped", "read_only": True, "list_scope": l1},
+        headers=h,
+    )
     key = r.json()["key"]
     kh = {"Authorization": f"Bearer {key}"}
     assert (await client.get(f"/lists/{l1}/items", headers=kh)).status_code == 200
@@ -683,23 +803,46 @@ async def test_totp_flow(client):
     tokens = await register(client, "totp@example.com")
     h = auth_headers(tokens)
     import pyotp
+
     r = await client.post("/auth/totp/setup", headers=h)
     assert r.status_code == 200
     secret = r.json()["secret"]
+    token = r.json()["token"]
     code = pyotp.TOTP(secret).now()
-    r = await client.post("/auth/totp/enable", json={"code": code}, headers=h)
+    r = await client.post(
+        "/auth/totp/enable", json={"code": code, "token": token}, headers=h
+    )
     assert r.status_code == 204
     # login without code -> 401
-    r = await client.post("/auth/login", json={"email": "totp@example.com", "password": "LongPassw0rd!x"})
+    r = await client.post(
+        "/auth/login", json={"email": "totp@example.com", "password": "LongPassw0rd!x"}
+    )
     assert r.status_code == 401
     # login with valid code -> 200
-    r = await client.post("/auth/login", json={
-        "email": "totp@example.com", "password": "LongPassw0rd!x", "totp_code": pyotp.TOTP(secret).now()})
+    r = await client.post(
+        "/auth/login",
+        json={
+            "email": "totp@example.com",
+            "password": "LongPassw0rd!x",
+            "totp_code": pyotp.TOTP(secret).now(),
+        },
+    )
     assert r.status_code == 200
-    # disable
-    r = await client.post("/auth/totp/enable", json={"code": "000000", "disable": True}, headers=h)
+    # MD-2 : disable exige un code TOTP VALIDE (le "000000" d'avant le fix
+    # ne passait plus)
+    r = await client.post(
+        "/auth/totp/enable", json={"code": "000000", "disable": True}, headers=h
+    )
+    assert r.status_code == 400
+    r = await client.post(
+        "/auth/totp/enable",
+        json={"code": pyotp.TOTP(secret).now(), "disable": True},
+        headers=h,
+    )
     assert r.status_code == 204
-    r = await client.post("/auth/login", json={"email": "totp@example.com", "password": "LongPassw0rd!x"})
+    r = await client.post(
+        "/auth/login", json={"email": "totp@example.com", "password": "LongPassw0rd!x"}
+    )
     assert r.status_code == 200
 
 
@@ -716,9 +859,9 @@ async def test_sync_delta_respects_list_scope(client):
     a2 = (await client.post("/lists", json={"title": "A2"}, headers=h)).json()["id"]
     await client.post(f"/lists/{a1}/items", json={"label": "a1-item"}, headers=h)
     await client.post(f"/lists/{a2}/items", json={"label": "a2-item"}, headers=h)
-    r = await client.post("/api-keys",
-                          json={"name": "scoped-sync", "list_scope": a1},
-                          headers=h)
+    r = await client.post(
+        "/api-keys", json={"name": "scoped-sync", "list_scope": a1}, headers=h
+    )
     kh = {"Authorization": f"Bearer {r.json()['key']}"}
 
     # first sync (since=null): only A1 materialises
@@ -729,17 +872,30 @@ async def test_sync_delta_respects_list_scope(client):
 
     # delta (since=past): only A1 events
     r = await client.post(
-        "/sync", json={"since": "2000-01-01T00:00:00+00:00"}, headers=kh)
+        "/sync", json={"since": "2000-01-01T00:00:00+00:00"}, headers=kh
+    )
     assert all(str(c["list_id"]) == a1 for c in r.json()["changes"]), r.json()
 
     # a forged item.upsert targeting A2 is rejected and not created
     bad_id = str(uuid.uuid4())
     now = dt.datetime.now(dt.timezone.utc).isoformat()
-    r = await client.post("/sync", json={"events": [
-        {"kind": "item.upsert", "id": bad_id, "list_id": a2,
-         "label": "pirate", "done": False, "position": 0,
-         "updated_at": now},
-    ]}, headers=kh)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "item.upsert",
+                    "id": bad_id,
+                    "list_id": a2,
+                    "label": "pirate",
+                    "done": False,
+                    "position": 0,
+                    "updated_at": now,
+                },
+            ]
+        },
+        headers=kh,
+    )
     assert r.status_code == 200
     assert bad_id in r.json()["rejected"]
     r = await client.get(f"/lists/{a2}/items", headers=h)
@@ -751,6 +907,7 @@ async def test_sync_list_create_event(client):
     tokens = await register(client, "synclist@example.com")
     h = auth_headers(tokens)
     import datetime as dt
+
     new_id = str(uuid.uuid4())
     event = {
         "kind": "list.create",
@@ -762,21 +919,25 @@ async def test_sync_list_create_event(client):
     r = await client.post("/sync", json={"events": [event]}, headers=h)
     assert r.status_code == 200, r.text
     r = await client.get("/lists", headers=h)
-    assert any(l["id"] == new_id and l["title"] == "Liste offline" for l in r.json())
+    assert any(x["id"] == new_id and x["title"] == "Liste offline" for x in r.json())
     # idempotent: pushing it again does not duplicate
     r = await client.post("/sync", json={"events": [event]}, headers=h)
     r = await client.get("/lists", headers=h)
-    assert len([l for l in r.json() if l["id"] == new_id]) == 1
+    assert len([x for x in r.json() if x["id"] == new_id]) == 1
 
 
 @pytest.mark.asyncio
 async def test_admin_audit(client):
     from app.config import settings
     from app.main import ensure_admin_user
+
     settings.ADMIN_EMAIL = "audit@tapitask.fr"
     settings.ADMIN_PASSWORD = "AuditLongPass1!"
     await ensure_admin_user()
-    r = await client.post("/auth/login", json={"email": "audit@tapitask.fr", "password": "AuditLongPass1!"})
+    r = await client.post(
+        "/auth/login",
+        json={"email": "audit@tapitask.fr", "password": "AuditLongPass1!"},
+    )
     h = {"Authorization": f"Bearer {r.json()['access_token']}"}
     r = await client.get("/admin/audit?limit=10", headers=h)
     assert r.status_code == 200
@@ -789,15 +950,18 @@ async def test_admin_audit(client):
 async def test_webhook_fires_with_hmac_signature(client):
     """Real delivery: local HTTP server receives the signed POST."""
     import asyncio
+
     from aiohttp import web
 
     received = []
 
     async def handler(request):
-        received.append({
-            "body": await request.json(),
-            "signature": request.headers.get("X-Tapitask-Signature", ""),
-        })
+        received.append(
+            {
+                "body": await request.json(),
+                "signature": request.headers.get("X-Tapitask-Signature", ""),
+            }
+        )
         return web.Response(text="ok")
 
     app = web.Application()
@@ -810,15 +974,24 @@ async def test_webhook_fires_with_hmac_signature(client):
     try:
         tokens = await register(client, "whfire@example.com")
         h = auth_headers(tokens)
-        list_id = (await client.post("/lists", json={"title": "W"}, headers=h)).json()["id"]
-        r = await client.post(f"/lists/{list_id}/hooks",
-                              json={"url": "http://127.0.0.1:8765/hook"}, headers=h)
+        list_id = (await client.post("/lists", json={"title": "W"}, headers=h)).json()[
+            "id"
+        ]
+        r = await client.post(
+            f"/lists/{list_id}/hooks",
+            json={"url": "http://127.0.0.1:8765/hook"},
+            headers=h,
+        )
         assert r.status_code == 201
 
-        item = (await client.post(
-            f"/lists/{list_id}/items", json={"label": "lait"}, headers=h)).json()[0]
+        item = (
+            await client.post(
+                f"/lists/{list_id}/items", json={"label": "lait"}, headers=h
+            )
+        ).json()[0]
         r = await client.patch(
-            f"/lists/{list_id}/items/{item['id']}", json={"done": True}, headers=h)
+            f"/lists/{list_id}/items/{item['id']}", json={"done": True}, headers=h
+        )
         assert r.status_code == 200
 
         for _ in range(50):  # delivery is async: poll briefly
@@ -830,11 +1003,15 @@ async def test_webhook_fires_with_hmac_signature(client):
         assert payload["event"] == "item.checked"
         assert payload["item_id"] == item["id"]
         # HMAC signature is verifiable
-        import hashlib, hmac as hmac_mod
-        secret = (await client.get(f"/lists/{list_id}/hooks", headers=h)).json()[0]["secret"]
-        expected = hmac_mod.new(secret.encode(),
-                                __import__("json").dumps(payload).encode(),
-                                hashlib.sha256).hexdigest()
+        import hashlib
+        import hmac as hmac_mod
+
+        secret = (await client.get(f"/lists/{list_id}/hooks", headers=h)).json()[0][
+            "secret"
+        ]
+        expected = hmac_mod.new(
+            secret.encode(), __import__("json").dumps(payload).encode(), hashlib.sha256
+        ).hexdigest()
         assert received[0]["signature"] == f"sha256={expected}"
     finally:
         await runner.cleanup()
@@ -875,12 +1052,15 @@ async def test_mcp_http_bridge(client):
     Replies are pushed on the per-user queue (what /mcp/sse streams)."""
     import asyncio
 
-    from app import mcp_http
     from app.events import hub  # noqa: F401
+
+    from app import mcp_http
 
     tokens = await register(client, "mcp@example.com")
     h = auth_headers(tokens)
-    list_id = (await client.post("/lists", json={"title": "MCP"}, headers=h)).json()["id"]
+    list_id = (await client.post("/lists", json={"title": "MCP"}, headers=h)).json()[
+        "id"
+    ]
     await client.post(f"/lists/{list_id}/items", json={"label": "café"}, headers=h)
 
     # capture what would be streamed over SSE: peek the internal session queue
@@ -888,40 +1068,60 @@ async def test_mcp_http_bridge(client):
     from app.db import SessionLocal
     from app.models import User
     from sqlalchemy import select
+
     async with SessionLocal() as session:
         result = await session.execute(
-            select(User).where(User.email == "mcp@example.com"))
+            select(User).where(User.email == "mcp@example.com")
+        )
         user_id = result.scalar_one().id
 
     q = asyncio.Queue()
     mcp_http._sessions["bridge"] = mcp_http._Session(user_id=str(user_id), queue=q)
     try:
-        r = await client.post("/mcp/messages",
-                              json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
-                              headers=h)
+        r = await client.post(
+            "/mcp/messages",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            headers=h,
+        )
         assert r.status_code == 200
-        r = await client.post("/mcp/messages",
-                              json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-                              headers=h)
+        r = await client.post(
+            "/mcp/messages",
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            headers=h,
+        )
         assert r.status_code == 200
         # drain the two first replies (initialize, tools/list)
         await asyncio.wait_for(q.get(), timeout=2.0)
         await asyncio.wait_for(q.get(), timeout=2.0)
         # real tool call: summary
-        r = await client.post("/mcp/messages", json={
-            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
-            "params": {"name": "get_summary", "arguments": {"list_id": list_id}},
-        }, headers=h)
+        r = await client.post(
+            "/mcp/messages",
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "get_summary", "arguments": {"list_id": list_id}},
+            },
+            headers=h,
+        )
         assert r.status_code == 200
         reply = await asyncio.wait_for(q.get(), timeout=2.0)
         text = reply["result"]["content"][0]["text"]
         assert "café" in text
         # real tool call: add_items
-        r = await client.post("/mcp/messages", json={
-            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
-            "params": {"name": "add_items",
-                       "arguments": {"list_id": list_id, "text": "thé\nsucre"}},
-        }, headers=h)
+        r = await client.post(
+            "/mcp/messages",
+            json={
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "add_items",
+                    "arguments": {"list_id": list_id, "text": "thé\nsucre"},
+                },
+            },
+            headers=h,
+        )
         assert r.status_code == 200
         items = (await client.get(f"/lists/{list_id}/items", headers=h)).json()
         labels = {i["label"] for i in items}
@@ -937,8 +1137,11 @@ async def _mcp_user(client, email):
 
     tokens = await register(client, email)
     async with SessionLocal() as session:
-        uid = str((await session.execute(
-            select(User).where(User.email == email))).scalar_one().id)
+        uid = str(
+            (await session.execute(select(User).where(User.email == email)))
+            .scalar_one()
+            .id
+        )
     return auth_headers(tokens), uid
 
 
@@ -947,9 +1150,10 @@ async def test_mcp_sse_announces_endpoint_per_connection(client):
     """GET /mcp/sse follows the MCP 2024-11-05 transport: the first event is
     `endpoint` with a per-connection sessionId; closing the stream removes
     only that session."""
-    from app import mcp_http
     from app.deps import Principal
     from starlette.requests import Request
+
+    from app import mcp_http
 
     _, uid = await _mcp_user(client, "mcpsse@example.com")
 
@@ -957,9 +1161,17 @@ async def test_mcp_sse_announces_endpoint_per_connection(client):
         return {"type": "http.request", "body": b"", "more_body": False}
 
     async def open_stream():
-        request = Request({"type": "http", "method": "GET", "path": "/mcp/sse",
-                           "root_path": "", "headers": [], "query_string": b""},
-                          receive)
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/mcp/sse",
+                "root_path": "",
+                "headers": [],
+                "query_string": b"",
+            },
+            receive,
+        )
         response = await mcp_http.sse(request, Principal(user_id=uid))
         stream = response.body_iterator
         endpoint = await stream.__anext__()
@@ -995,20 +1207,32 @@ async def test_mcp_replies_routed_to_the_requesting_session(client):
     mcp_http._sessions["sess-a"] = mcp_http._Session(user_id=uid, queue=qa)
     mcp_http._sessions["sess-b"] = mcp_http._Session(user_id=uid, queue=qb)
     try:
-        await client.post("/mcp/messages?sessionId=sess-a", headers=h,
-                          json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
-        await client.post("/mcp/messages?sessionId=sess-b", headers=h,
-                          json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        await client.post(
+            "/mcp/messages?sessionId=sess-a",
+            headers=h,
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+        await client.post(
+            "/mcp/messages?sessionId=sess-b",
+            headers=h,
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        )
         assert (await asyncio.wait_for(qa.get(), 2.0))["id"] == 1
         assert (await asyncio.wait_for(qb.get(), 2.0))["id"] == 2
         assert qa.empty() and qb.empty()
 
         mcp_http._sessions.pop("sess-a")  # agent A disconnected
-        r = await client.post("/mcp/messages?sessionId=sess-a", headers=h,
-                              json={"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
+        r = await client.post(
+            "/mcp/messages?sessionId=sess-a",
+            headers=h,
+            json={"jsonrpc": "2.0", "id": 3, "method": "tools/list"},
+        )
         assert r.status_code == 404
-        r = await client.post("/mcp/messages?sessionId=sess-b", headers=h,
-                              json={"jsonrpc": "2.0", "id": 4, "method": "tools/list"})
+        r = await client.post(
+            "/mcp/messages?sessionId=sess-b",
+            headers=h,
+            json={"jsonrpc": "2.0", "id": 4, "method": "tools/list"},
+        )
         assert r.status_code == 200
         assert (await asyncio.wait_for(qb.get(), 2.0))["id"] == 4
     finally:
@@ -1029,29 +1253,40 @@ async def test_mcp_undeliverable_request_fails_fast_without_side_effects(client)
     list_id = (await client.post("/lists", json={"title": "F"}, headers=h)).json()["id"]
 
     def add(text):
-        return {"jsonrpc": "2.0", "id": text, "method": "tools/call",
-                "params": {"name": "add_items",
-                           "arguments": {"list_id": list_id, "text": text}}}
+        return {
+            "jsonrpc": "2.0",
+            "id": text,
+            "method": "tools/call",
+            "params": {
+                "name": "add_items",
+                "arguments": {"list_id": list_id, "text": text},
+            },
+        }
 
     async def labels():
-        return {i["label"] for i in
-                (await client.get(f"/lists/{list_id}/items", headers=h)).json()}
+        return {
+            i["label"]
+            for i in (await client.get(f"/lists/{list_id}/items", headers=h)).json()
+        }
 
     r = await client.post("/mcp/messages", json=add("no-stream"), headers=h)
     assert r.status_code == 404
 
     mcp_http._sessions["foreign"] = mcp_http._Session(
-        user_id=other_uid, queue=asyncio.Queue())
+        user_id=other_uid, queue=asyncio.Queue()
+    )
     full = asyncio.Queue(maxsize=1)
     full.put_nowait({"filler": True})
     mcp_http._sessions["full"] = mcp_http._Session(user_id=uid, queue=full)
     try:
-        r = await client.post("/mcp/messages?sessionId=foreign",
-                              json=add("foreign"), headers=h)
+        r = await client.post(
+            "/mcp/messages?sessionId=foreign", json=add("foreign"), headers=h
+        )
         assert r.status_code == 404
         assert mcp_http._sessions["foreign"].queue.empty()
-        r = await client.post("/mcp/messages?sessionId=full",
-                              json=add("saturated"), headers=h)
+        r = await client.post(
+            "/mcp/messages?sessionId=full", json=add("saturated"), headers=h
+        )
         assert r.status_code == 503
     finally:
         mcp_http._sessions.pop("foreign", None)
@@ -1071,29 +1306,47 @@ async def test_mcp_http_errors_keep_request_id(client):
     mcp_http._sessions["ids"] = mcp_http._Session(user_id=uid, queue=q)
     url = "/mcp/messages?sessionId=ids"
     try:
-        await client.post(url, headers=h, json={
-            "jsonrpc": "2.0", "id": "req-9", "method": "tools/call",
-            "params": {"name": "check_item",
-                       "arguments": {"list_id": "x",
-                                     "item_id": "00000000-0000-0000-0000-000000000000"}}})
+        await client.post(
+            url,
+            headers=h,
+            json={
+                "jsonrpc": "2.0",
+                "id": "req-9",
+                "method": "tools/call",
+                "params": {
+                    "name": "check_item",
+                    "arguments": {
+                        "list_id": "x",
+                        "item_id": "00000000-0000-0000-0000-000000000000",
+                    },
+                },
+            },
+        )
         reply = await asyncio.wait_for(q.get(), 2.0)
         # A tool that ran and failed is a tool result, not a JSON-RPC error.
         assert reply["id"] == "req-9" and "error" not in reply
         assert reply["result"]["isError"] is True
 
-        await client.post(url, headers=h,
-                          json={"jsonrpc": "2.0", "id": 0, "method": "tools/call"})
+        await client.post(
+            url, headers=h, json={"jsonrpc": "2.0", "id": 0, "method": "tools/call"}
+        )
         reply = await asyncio.wait_for(q.get(), 2.0)
         assert reply["id"] == 0 and reply["error"]["code"] == -32602
 
-        await client.post(url, headers=h,
-                          json={"jsonrpc": "2.0", "id": 5, "method": "bogus"})
+        await client.post(
+            url, headers=h, json={"jsonrpc": "2.0", "id": 5, "method": "bogus"}
+        )
         reply = await asyncio.wait_for(q.get(), 2.0)
         assert reply["id"] == 5 and reply["error"]["code"] == -32601
 
-        for note in ({"jsonrpc": "2.0", "method": "notifications/initialized"},
-                     {"jsonrpc": "2.0", "method": "notifications/cancelled",
-                      "params": {"requestId": 1}}):
+        for note in (
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": 1},
+            },
+        ):
             r = await client.post(url, headers=h, json=note)
             assert r.status_code == 200
         assert q.empty()
@@ -1111,19 +1364,30 @@ async def test_mcp_http_tool_failures_are_iserror_results(client):
     from app import mcp_http
 
     h, uid = await _mcp_user(client, "mcpiserror@example.com")
-    list_id = (await client.post("/lists", json={"title": "Groceries"},
-                                 headers=h)).json()["id"]
-    ro_key = (await client.post("/api-keys", json={"name": "ro", "read_only": True},
-                                headers=h)).json()["key"]
+    list_id = (
+        await client.post("/lists", json={"title": "Groceries"}, headers=h)
+    ).json()["id"]
+    ro_key = (
+        await client.post(
+            "/api-keys", json={"name": "ro", "read_only": True}, headers=h
+        )
+    ).json()["key"]
     ro = {"Authorization": f"Bearer {ro_key}"}
     q = asyncio.Queue()
     mcp_http._sessions["iserr"] = mcp_http._Session(user_id=uid, queue=q)
     url = "/mcp/messages?sessionId=iserr"
 
     async def call(headers, req_id, name, arguments):
-        await client.post(url, headers=headers, json={
-            "jsonrpc": "2.0", "id": req_id, "method": "tools/call",
-            "params": {"name": name, "arguments": arguments}})
+        await client.post(
+            url,
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            },
+        )
         reply = await asyncio.wait_for(q.get(), 2.0)
         assert reply["id"] == req_id
         return reply
@@ -1132,7 +1396,9 @@ async def test_mcp_http_tool_failures_are_iserror_results(client):
         # Read-only key writing: refused with the REST wording, as a result.
         reply = await call(ro, 1, "add_items", {"list_id": list_id, "text": "milk"})
         assert reply["result"]["isError"] is True
-        assert reply["result"]["content"][0]["text"] == "HTTP 403: Read-only credentials"
+        assert (
+            reply["result"]["content"][0]["text"] == "HTTP 403: Read-only credentials"
+        )
         assert (await client.get(f"/lists/{list_id}/items", headers=h)).json() == []
 
         # Bad id value: invalid input data, reported as a tool failure.
@@ -1169,18 +1435,37 @@ async def test_mcp_check_item_spawns_recurrence(client):
     tokens = await register(client, "mcprec@example.com")
     h = auth_headers(tokens)
     list_id = (await client.post("/lists", json={"title": "R"}, headers=h)).json()["id"]
-    item = (await client.post(
-        f"/lists/{list_id}/items",
-        json={"label": "Backup", "recurrence": "weekly",
-              "due_date": "2030-01-07T09:00:00"}, headers=h)).json()[0]
+    item = (
+        await client.post(
+            f"/lists/{list_id}/items",
+            json={
+                "label": "Backup",
+                "recurrence": "weekly",
+                "due_date": "2030-01-07T09:00:00",
+            },
+            headers=h,
+        )
+    ).json()[0]
     async with SessionLocal() as session:
-        uid = (await session.execute(
-            select(User).where(User.email == "mcprec@example.com"))).scalar_one().id
+        uid = (
+            (
+                await session.execute(
+                    select(User).where(User.email == "mcprec@example.com")
+                )
+            )
+            .scalar_one()
+            .id
+        )
     principal = Principal(user_id=uid)
 
     async def check(done=True):
-        return _json.loads(await _call_tool(principal, "check_item", {
-            "list_id": list_id, "item_id": item["id"], "done": done}))
+        return _json.loads(
+            await _call_tool(
+                principal,
+                "check_item",
+                {"list_id": list_id, "item_id": item["id"], "done": done},
+            )
+        )
 
     out = await check()
     assert out["done"] is True
@@ -1205,46 +1490,66 @@ async def test_mcp_cross_tenant_isolation(client):
     21 checks manuels sans couverture permanente)."""
     import asyncio
 
-    from app import mcp_http
     from app.db import SessionLocal
     from app.models import User
     from sqlalchemy import select
+
+    from app import mcp_http
 
     ta = await register(client, "mcpatt@example.com")
     tv = await register(client, "mcpvic@example.com")
     tm = await register(client, "mcpmem@example.com")
     ha, hv, hm = auth_headers(ta), auth_headers(tv), auth_headers(tm)
 
-    v1 = (await client.post("/lists", json={"title": "VictimSecret"},
-                            headers=hv)).json()["id"]
-    i1 = (await client.post(f"/lists/{v1}/items", json={"label": "v1-item"},
-                            headers=hv)).json()[0]
-    a1 = (await client.post("/lists", json={"title": "AttackerList"},
-                            headers=ha)).json()["id"]
+    v1 = (
+        await client.post("/lists", json={"title": "VictimSecret"}, headers=hv)
+    ).json()["id"]
+    i1 = (
+        await client.post(f"/lists/{v1}/items", json={"label": "v1-item"}, headers=hv)
+    ).json()[0]
+    a1 = (
+        await client.post("/lists", json={"title": "AttackerList"}, headers=ha)
+    ).json()["id"]
     # contrôle positif : viewer de V1
-    r = await client.post(f"/lists/{v1}/members",
-                          json={"email": "mcpmem@example.com", "role": "viewer"},
-                          headers=hv)
+    r = await client.post(
+        f"/lists/{v1}/members",
+        json={"email": "mcpmem@example.com", "role": "viewer"},
+        headers=hv,
+    )
     assert r.status_code == 201, r.text
 
     async def user_id(email: str) -> str:
         async with SessionLocal() as session:
-            return str((await session.execute(
-                select(User.id).where(User.email == email))).scalar_one())
+            return str(
+                (
+                    await session.execute(select(User.id).where(User.email == email))
+                ).scalar_one()
+            )
 
     queues = {}
-    for email, hdr in (("mcpatt@example.com", ha), ("mcpvic@example.com", hv),
-                       ("mcpmem@example.com", hm)):
+    for email, hdr in (
+        ("mcpatt@example.com", ha),
+        ("mcpvic@example.com", hv),
+        ("mcpmem@example.com", hm),
+    ):
         q = asyncio.Queue()
         mcp_http._sessions[email] = mcp_http._Session(
-            user_id=await user_id(email), queue=q)
+            user_id=await user_id(email), queue=q
+        )
         queues[email] = q
     try:
+
         async def call(hdr, q, name, args, mid):
-            r = await client.post("/mcp/messages", json={
-                "jsonrpc": "2.0", "id": mid, "method": "tools/call",
-                "params": {"name": name, "arguments": args},
-            }, headers=hdr)
+            r = await client.post(
+                "/mcp/messages",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": mid,
+                    "method": "tools/call",
+                    "params": {"name": name, "arguments": args},
+                },
+                headers=hdr,
+            )
             assert r.status_code == 200, r.text
             reply = await asyncio.wait_for(q.get(), timeout=2.0)
             assert reply["id"] == mid
@@ -1259,8 +1564,11 @@ async def test_mcp_cross_tenant_isolation(client):
             assert "result" in reply and not reply["result"].get("isError"), reply
             return reply["result"]["content"][0]["text"]
 
-        qa, qv, qm = queues["mcpatt@example.com"], queues["mcpvic@example.com"], \
-            queues["mcpmem@example.com"]
+        qa, _, qm = (
+            queues["mcpatt@example.com"],
+            queues["mcpvic@example.com"],
+            queues["mcpmem@example.com"],
+        )
 
         # --- A (JWT) sur V1 : erreurs, pas de fuite du titre ---
         reply = await call(ha, qa, "get_list", {"list_id": v1}, 1)
@@ -1276,8 +1584,9 @@ async def test_mcp_cross_tenant_isolation(client):
         assert [i["label"] for i in r.json()] == ["v1-item"]
 
         # check_item avec le list_id d'A mais l'item de V
-        reply = await call(ha, qa, "check_item",
-                           {"list_id": a1, "item_id": i1["id"], "done": True}, 4)
+        reply = await call(
+            ha, qa, "check_item", {"list_id": a1, "item_id": i1["id"], "done": True}, 4
+        )
         assert "List not found" in error_of(reply)
         r = await client.get(f"/lists/{v1}/items", headers=hv)
         assert r.json()[0]["done"] is False
@@ -1287,16 +1596,18 @@ async def test_mcp_cross_tenant_isolation(client):
         assert "AttackerList" in text_of(reply)
 
         # --- clé API scopée de A (list_scope=A1) : V1 hors scope ---
-        r = await client.post("/api-keys",
-                              json={"name": "scoped", "list_scope": a1}, headers=ha)
+        r = await client.post(
+            "/api-keys", json={"name": "scoped", "list_scope": a1}, headers=ha
+        )
         assert r.status_code == 201
         kh = {"Authorization": f"Bearer {r.json()['key']}"}
         reply = await call(kh, qa, "get_list", {"list_id": v1}, 6)
         assert "scoped" in error_of(reply)
 
         # --- clé API read-only de A (sans scope) : écriture refusée ---
-        r = await client.post("/api-keys",
-                              json={"name": "ro", "read_only": True}, headers=ha)
+        r = await client.post(
+            "/api-keys", json={"name": "ro", "read_only": True}, headers=ha
+        )
         assert r.status_code == 201
         kr = {"Authorization": f"Bearer {r.json()['key']}"}
         reply = await call(kr, qa, "add_items", {"list_id": a1, "text": "nope"}, 7)
@@ -1319,7 +1630,6 @@ async def test_mcp_cross_tenant_isolation(client):
 
 @pytest.mark.asyncio
 async def test_rate_limiter_blocks_after_threshold(client):
-    from app.routers import auth as auth_router
     from app.deps import RateLimiter
 
     limiter = RateLimiter(max_requests=3, window_seconds=60)
@@ -1338,39 +1648,50 @@ async def test_rate_limiter_blocks_after_threshold(client):
 @pytest.mark.asyncio
 async def test_migration_adds_columns_on_v1_schema():
     """Simulate a v1 production database, then run the migration helper."""
-    from app.main import MIGRATIONS
     from app.db import engine
-    from sqlalchemy import text, inspect
+    from app.main import MIGRATIONS
+    from sqlalchemy import inspect, text
 
     async with engine.begin() as conn:
         # v1 users table, without the new columns
-        await conn.execute(text(
-            "CREATE TABLE mig_users_v1 ("
-            " id VARCHAR(36) PRIMARY KEY,"
-            " email VARCHAR(320),"
-            " password_hash VARCHAR(255))"))
+        await conn.execute(
+            text(
+                "CREATE TABLE mig_users_v1 ("
+                " id VARCHAR(36) PRIMARY KEY,"
+                " email VARCHAR(320),"
+                " password_hash VARCHAR(255))"
+            )
+        )
     try:
         async with engine.begin() as conn:
             for table, column, _sqlite_ddl, ddl in MIGRATIONS:
                 try:
                     await conn.execute(
-                        text(f"ALTER TABLE mig_users_v1 ADD COLUMN {column} {ddl}"))
+                        text(f"ALTER TABLE mig_users_v1 ADD COLUMN {column} {ddl}")
+                    )
                 except Exception:
                     pass
         async with engine.connect() as conn:
+
             def has_col(sync_conn):
                 insp = inspect(sync_conn)
                 cols = [c["name"] for c in insp.get_columns("mig_users_v1")]
                 return cols
-            cols = (await conn.run_sync(has_col))
+
+            cols = await conn.run_sync(has_col)
         assert "is_admin" in cols and "is_active" in cols
         # defaults applied
         async with engine.begin() as conn:
-            await conn.execute(text(
-                "INSERT INTO mig_users_v1 (id, email, password_hash) "
-                "VALUES ('u1', 'a@b.fr', 'x')"))
+            await conn.execute(
+                text(
+                    "INSERT INTO mig_users_v1 (id, email, password_hash) "
+                    "VALUES ('u1', 'a@b.fr', 'x')"
+                )
+            )
         async with engine.connect() as conn:
-            result = await conn.execute(text("SELECT is_admin, is_active FROM mig_users_v1"))
+            result = await conn.execute(
+                text("SELECT is_admin, is_active FROM mig_users_v1")
+            )
             row = result.first()
         assert row[0] in (False, 0) and row[1] in (True, 1)
     finally:
@@ -1382,11 +1703,13 @@ async def test_migration_adds_columns_on_v1_schema():
 async def test_concurrent_startup_survives(client):
     """Two 'workers' initializing the schema at the same time must not crash
     (the fresh-database race that killed one uvicorn worker in production)."""
+    import asyncio
+
     from app.main import _init_schema
 
-    import asyncio
     results = await asyncio.gather(
-        _init_schema(), _init_schema(), return_exceptions=True)
+        _init_schema(), _init_schema(), return_exceptions=True
+    )
     assert all(r is None for r in results), results
 
 
@@ -1447,25 +1770,53 @@ async def test_sync_list_delete(client):
         json={"email": "del-guest@example.com", "role": "editor"},
         headers=h1,
     )
-    now = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()
+    now = (
+        __import__("datetime")
+        .datetime.now(__import__("datetime").timezone.utc)
+        .isoformat()
+    )
 
     # guest cannot delete via sync
-    r = await client.post("/sync", json={"events": [
-        {"kind": "list.delete", "id": list_id, "list_id": list_id, "updated_at": now}
-    ]}, headers=h2)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "list.delete",
+                    "id": list_id,
+                    "list_id": list_id,
+                    "updated_at": now,
+                }
+            ]
+        },
+        headers=h2,
+    )
     r = await client.get("/lists", headers=h1)
-    assert any(l["id"] == list_id for l in r.json())
+    assert any(x["id"] == list_id for x in r.json())
 
     # owner deletes via sync
-    r = await client.post("/sync", json={"events": [
-        {"kind": "list.delete", "id": list_id, "list_id": list_id, "updated_at": now}
-    ]}, headers=h1)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "list.delete",
+                    "id": list_id,
+                    "list_id": list_id,
+                    "updated_at": now,
+                }
+            ]
+        },
+        headers=h1,
+    )
     assert r.status_code == 200
     r = await client.get("/lists", headers=h1)
-    assert not any(l["id"] == list_id for l in r.json())
+    assert not any(x["id"] == list_id for x in r.json())
 
     # pull returns the deletion so other members remove it locally
-    r = await client.post("/sync", json={"since": "2000-01-01T00:00:00+00:00"}, headers=h2)
+    r = await client.post(
+        "/sync", json={"since": "2000-01-01T00:00:00+00:00"}, headers=h2
+    )
     kinds = [c["kind"] for c in r.json()["changes"]]
     assert "list.delete" in kinds
 
@@ -1474,28 +1825,46 @@ async def test_sync_list_delete(client):
 async def test_list_color_roundtrip(client):
     t = await register(client, "color@example.com")
     h = auth_headers(t)
-    r = await client.post("/lists", json={"title": "Coloree", "color": "#00897B"}, headers=h)
+    r = await client.post(
+        "/lists", json={"title": "Coloree", "color": "#00897B"}, headers=h
+    )
     assert r.status_code == 201
     assert r.json()["color"] == "#00897B"
     list_id = r.json()["id"]
 
     # patch color
-    r = await client.patch(f"/lists/{list_id}", json={"title": "Coloree", "color": "#D32F2F"}, headers=h)
+    r = await client.patch(
+        f"/lists/{list_id}", json={"title": "Coloree", "color": "#D32F2F"}, headers=h
+    )
     assert r.json()["color"] == "#D32F2F"
 
     # sync pull carries the color
-    r = await client.post("/sync", json={"since": "2000-01-01T00:00:00+00:00"}, headers=h)
+    r = await client.post(
+        "/sync", json={"since": "2000-01-01T00:00:00+00:00"}, headers=h
+    )
     entry = [c for c in r.json()["changes"] if c["id"] == list_id][0]
     assert entry["color"] == "#D32F2F"
 
     # offline list.create with color via sync
     new_id = str(uuid.uuid4())
-    r = await client.post("/sync", json={"events": [
-        {"kind": "list.create", "id": new_id, "list_id": new_id,
-         "label": "Offline", "color": "#7B1FA2", "updated_at": "2026-01-01T00:00:00+00:00"}
-    ]}, headers=h)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "list.create",
+                    "id": new_id,
+                    "list_id": new_id,
+                    "label": "Offline",
+                    "color": "#7B1FA2",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                }
+            ]
+        },
+        headers=h,
+    )
     r = await client.get("/lists", headers=h)
-    entry = [l for l in r.json() if l["id"] == new_id][0]
+    entry = [x for x in r.json() if x["id"] == new_id][0]
     assert entry["color"] == "#7B1FA2"
 
 
@@ -1505,9 +1874,18 @@ async def test_user_settings_roundtrip(client):
     h = auth_headers(t)
     r = await client.get("/auth/me", headers=h)
     assert r.json()["settings"] == {}
-    r = await client.patch("/auth/me", json={"settings": {
-        "due_dates": True, "folders": False, "alerts": True, "templates": False
-    }}, headers=h)
+    r = await client.patch(
+        "/auth/me",
+        json={
+            "settings": {
+                "due_dates": True,
+                "folders": False,
+                "alerts": True,
+                "templates": False,
+            }
+        },
+        headers=h,
+    )
     assert r.status_code == 200
     r = await client.get("/auth/me", headers=h)
     assert r.json()["settings"]["due_dates"] is True
@@ -1522,25 +1900,45 @@ async def test_item_notes_assignee_and_folder_sync(client):
     assert r.json()["folder"] == "Perso"
     list_id = r.json()["id"]
 
-    r = await client.post(f"/lists/{list_id}/items",
-                          json={"label": "Tache", "notes": "ma note"}, headers=h)
+    r = await client.post(
+        f"/lists/{list_id}/items",
+        json={"label": "Tache", "notes": "ma note"},
+        headers=h,
+    )
     assert r.json()[0]["notes"] == "ma note"
     item_id = r.json()[0]["id"]
 
     # patch notes + due date via API
-    r = await client.patch(f"/lists/{list_id}/items/{item_id}",
-                           json={"notes": "note 2", "due_date": "2026-12-24T00:00:00+00:00"},
-                           headers=h)
+    r = await client.patch(
+        f"/lists/{list_id}/items/{item_id}",
+        json={"notes": "note 2", "due_date": "2026-12-24T00:00:00+00:00"},
+        headers=h,
+    )
     assert r.json()[0]["notes"] == "note 2"
 
     # sync carries notes/assignee/folder
-    r = await client.post("/sync", json={"events": [
-        {"kind": "item.upsert", "id": item_id, "list_id": list_id,
-         "label": "Tache", "done": False, "position": 0,
-         "notes": "note sync", "updated_at": "2026-12-25T00:00:00+00:00"}
-    ]}, headers=h)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "item.upsert",
+                    "id": item_id,
+                    "list_id": list_id,
+                    "label": "Tache",
+                    "done": False,
+                    "position": 0,
+                    "notes": "note sync",
+                    "updated_at": "2026-12-25T00:00:00+00:00",
+                }
+            ]
+        },
+        headers=h,
+    )
     assert r.status_code == 200
-    r = await client.post("/sync", json={"since": "2000-01-01T00:00:00+00:00"}, headers=h)
+    r = await client.post(
+        "/sync", json={"since": "2000-01-01T00:00:00+00:00"}, headers=h
+    )
     item_change = [c for c in r.json()["changes"] if c["id"] == item_id][0]
     assert item_change["notes"] == "note sync"
     list_change = [c for c in r.json()["changes"] if c["id"] == list_id][0]
@@ -1552,7 +1950,9 @@ async def test_first_sync_returns_lists(client):
     """A fresh device (no `since`) must receive its lists, not only items."""
     t = await register(client, "fresh@example.com")
     h = auth_headers(t)
-    r = await client.post("/lists", json={"title": "Ma liste", "color": "#1E88E5"}, headers=h)
+    r = await client.post(
+        "/lists", json={"title": "Ma liste", "color": "#1E88E5"}, headers=h
+    )
     list_id = r.json()["id"]
     await client.post(f"/lists/{list_id}/items", json={"label": "item1"}, headers=h)
 
@@ -1569,40 +1969,67 @@ async def test_first_sync_returns_lists(client):
 async def test_email_preference_and_mailer(client, monkeypatch):
     """Emails respect the recipient's notify_email preference; the mailer
     itself is best-effort (never blocks the request)."""
+    import asyncio
+
+    from app.routers import sharing
+
     from app import mailer
 
     sent = []
-    monkeypatch.setattr(mailer, "_sync_send", lambda to, subj, body: sent.append((to, subj)))
+    monkeypatch.setattr(
+        mailer, "_sync_send", lambda to, subj, body: sent.append((to, subj))
+    )
     monkeypatch.setattr(mailer, "SMTP_TLS", None, raising=False)
+
+    async def _drain_emails() -> None:
+        # 3.4 (prod3) : l'email part en fire-and-forget — observer `sent`
+        # après la réponse exige d'attendre les tâches en vol. Le `sleep(0)`
+        # APRÈS le gather est indispensable : une tâche déjà terminée fait
+        # revenir gather sans yield, et le done-callback (discard, planifié en
+        # call_soon) n'aurait jamais l'occasion de s'exécuter → boucle infinie.
+        while sharing._in_flight_emails:
+            await asyncio.gather(*list(sharing._in_flight_emails))
+            await asyncio.sleep(0)
 
     # recipient with email notifications disabled -> no email on share
     t2 = await register(client, "quiet@example.com")
-    await client.patch("/auth/me", json={"settings": {"notify_email": False}},
-                       headers=auth_headers(t2))
+    await client.patch(
+        "/auth/me", json={"settings": {"notify_email": False}}, headers=auth_headers(t2)
+    )
 
     t1 = await register(client, "mailer-owner@example.com")
     h1 = auth_headers(t1)
     r = await client.post("/lists", json={"title": "Mail"}, headers=h1)
     list_id = r.json()["id"]
 
-    r = await client.post(f"/lists/{list_id}/members",
-                          json={"email": "quiet@example.com", "role": "viewer"},
-                          headers=h1)
+    r = await client.post(
+        f"/lists/{list_id}/members",
+        json={"email": "quiet@example.com", "role": "viewer"},
+        headers=h1,
+    )
     assert r.status_code == 201
+    await _drain_emails()
     assert sent == []
 
     # invite with an email address -> email attempted
-    r = await client.post(f"/lists/{list_id}/invites",
-                          json={"hours": 24, "email": "friend@example.com"}, headers=h1)
+    r = await client.post(
+        f"/lists/{list_id}/invites",
+        json={"hours": 24, "email": "friend@example.com"},
+        headers=h1,
+    )
     assert r.status_code == 201
+    await _drain_emails()
     assert any(to == "friend@example.com" for to, _ in sent)
 
     # default preference (no settings) -> email enabled
-    t3 = await register(client, "default@example.com")
-    r = await client.post(f"/lists/{list_id}/members",
-                          json={"email": "default@example.com", "role": "viewer"},
-                          headers=h1)
+    await register(client, "default@example.com")
+    r = await client.post(
+        f"/lists/{list_id}/members",
+        json={"email": "default@example.com", "role": "viewer"},
+        headers=h1,
+    )
     assert r.status_code == 201
+    await _drain_emails()
     assert any(to == "default@example.com" for to, _ in sent)
 
 
@@ -1619,11 +2046,23 @@ async def test_sync_rejects_event_on_deleted_list(client):
     # push an item event still referencing that list
     await client.delete(f"/lists/{list_id}", headers=h)
     bad_id = str(uuid.uuid4())
-    r = await client.post("/sync", json={"events": [
-        {"kind": "item.upsert", "id": bad_id, "list_id": list_id,
-         "label": "orphelin", "done": False, "position": 0,
-         "updated_at": "2026-01-01T00:00:00"},
-    ]}, headers=h)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "item.upsert",
+                    "id": bad_id,
+                    "list_id": list_id,
+                    "label": "orphelin",
+                    "done": False,
+                    "position": 0,
+                    "updated_at": "2026-01-01T00:00:00",
+                },
+            ]
+        },
+        headers=h,
+    )
     assert r.status_code == 200
     assert bad_id in r.json()["rejected"]
 
@@ -1636,24 +2075,43 @@ async def test_sync_recurrence_spawns_next(client):
     h = auth_headers(t)
     r = await client.post("/lists", json={"title": "Rec"}, headers=h)
     list_id = r.json()["id"]
-    r = await client.post(f"/lists/{list_id}/items",
-                         json={"label": "Sport", "recurrence": "daily"}, headers=h)
+    r = await client.post(
+        f"/lists/{list_id}/items",
+        json={"label": "Sport", "recurrence": "daily"},
+        headers=h,
+    )
     item_id = r.json()[0]["id"]
 
     from datetime import datetime, timedelta, timezone
+
     now = datetime.now(timezone.utc)
-    r = await client.post("/sync", json={"events": [
-        {"kind": "item.upsert", "id": item_id, "list_id": list_id,
-         "label": "Sport", "done": True, "position": 0,
-         "recurrence": "daily",
-         "due_date": (now - timedelta(days=1)).isoformat(),
-         "updated_at": (now + timedelta(seconds=1)).isoformat()},
-    ]}, headers=h)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "item.upsert",
+                    "id": item_id,
+                    "list_id": list_id,
+                    "label": "Sport",
+                    "done": True,
+                    "position": 0,
+                    "recurrence": "daily",
+                    "due_date": (now - timedelta(days=1)).isoformat(),
+                    "updated_at": (now + timedelta(seconds=1)).isoformat(),
+                },
+            ]
+        },
+        headers=h,
+    )
     assert r.status_code == 200
 
     r = await client.post("/sync", json={}, headers=h)
-    items = [c for c in r.json()["changes"]
-             if c["kind"] == "item.upsert" and c["list_id"] == list_id]
+    items = [
+        c
+        for c in r.json()["changes"]
+        if c["kind"] == "item.upsert" and c["list_id"] == list_id
+    ]
     # the original (done) + the spawned occurrence (unchecked, +1 day)
     labels = [(c["label"], c["done"]) for c in items]
     assert ("Sport", True) in labels
@@ -1673,24 +2131,37 @@ async def test_sync_viewer_cannot_write(client):
 
     r = await client.post("/lists", json={"title": "S1"}, headers=h1)
     list_id = r.json()["id"]
-    r = await client.post(f"/lists/{list_id}/members",
-                          json={"email": "viewer-s1@example.com", "role": "viewer"},
-                          headers=h1)
+    r = await client.post(
+        f"/lists/{list_id}/members",
+        json={"email": "viewer-s1@example.com", "role": "viewer"},
+        headers=h1,
+    )
     assert r.status_code == 201
 
     bad_id = str(uuid.uuid4())
-    r = await client.post("/sync", json={"events": [
-        {"kind": "item.upsert", "id": bad_id, "list_id": list_id,
-         "label": "pirate", "done": False, "position": 0,
-         "updated_at": "2030-01-01T00:00:00"},
-    ]}, headers=h2)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "item.upsert",
+                    "id": bad_id,
+                    "list_id": list_id,
+                    "label": "pirate",
+                    "done": False,
+                    "position": 0,
+                    "updated_at": "2030-01-01T00:00:00",
+                },
+            ]
+        },
+        headers=h2,
+    )
     assert r.status_code == 200
     assert bad_id in r.json()["rejected"]
 
     # and the item was really NOT applied
     r = await client.post("/sync", json={}, headers=h1)
-    labels = [c["label"] for c in r.json()["changes"]
-              if c["kind"] == "item.upsert"]
+    labels = [c["label"] for c in r.json()["changes"] if c["kind"] == "item.upsert"]
     assert "pirate" not in labels
 
 
@@ -1705,23 +2176,39 @@ async def test_sync_list_create_ownership(client):
 
     r = await client.post("/lists", json={"title": "Original"}, headers=h1)
     list_id = r.json()["id"]
-    r = await client.post(f"/lists/{list_id}/members",
-                          json={"email": "member-s2@example.com", "role": "editor"},
-                          headers=h1)
+    r = await client.post(
+        f"/lists/{list_id}/members",
+        json={"email": "member-s2@example.com", "role": "editor"},
+        headers=h1,
+    )
     assert r.status_code == 201
 
-    r = await client.post("/sync", json={"events": [
-        {"kind": "list.create", "id": list_id, "list_id": list_id,
-         "label": "Pirate", "color": "#FF0000",
-         "updated_at": "2030-01-01T00:00:00"},
-    ]}, headers=h2)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "list.create",
+                    "id": list_id,
+                    "list_id": list_id,
+                    "label": "Pirate",
+                    "color": "#FF0000",
+                    "updated_at": "2030-01-01T00:00:00",
+                },
+            ]
+        },
+        headers=h2,
+    )
     assert r.status_code == 200
     assert list_id in r.json()["rejected"]
 
     # the owner's list is untouched
     r = await client.post("/sync", json={}, headers=h1)
-    entry = [c for c in r.json()["changes"]
-             if c["kind"] == "list.sync" and str(c["id"]) == list_id][0]
+    entry = [
+        c
+        for c in r.json()["changes"]
+        if c["kind"] == "list.sync" and str(c["id"]) == list_id
+    ][0]
     assert entry["label"] == "Original"
     assert entry["color"] is None
 
@@ -1731,7 +2218,9 @@ async def test_monthly_recurrence_calendar_months(client):
     """La récurrence mensuelle suit les mois du calendrier, pas un +30 jours :
     31 janvier -> 28/29 février."""
     from datetime import datetime
+
     from app.routers.lists import _add_months
+
     assert _add_months(datetime(2030, 1, 31), 1) == datetime(2030, 2, 28)
     assert _add_months(datetime(2028, 1, 31), 1) == datetime(2028, 2, 29)  # bissextile
     assert _add_months(datetime(2030, 3, 31), 1) == datetime(2030, 4, 30)
@@ -1742,11 +2231,17 @@ async def test_monthly_recurrence_calendar_months(client):
     list_id = (await client.post("/lists", json={"title": "M"}, headers=h)).json()["id"]
     r = await client.post(
         f"/lists/{list_id}/items",
-        json={"label": "Facture", "recurrence": "monthly",
-              "due_date": "2030-01-31T09:00:00"}, headers=h)
+        json={
+            "label": "Facture",
+            "recurrence": "monthly",
+            "due_date": "2030-01-31T09:00:00",
+        },
+        headers=h,
+    )
     item = r.json()[0]
     r = await client.patch(
-        f"/lists/{list_id}/items/{item['id']}", json={"done": True}, headers=h)
+        f"/lists/{list_id}/items/{item['id']}", json={"done": True}, headers=h
+    )
     spawned = r.json()[1]
     assert spawned["due_date"].startswith("2030-02-28")
 
@@ -1764,29 +2259,56 @@ async def test_sync_clamps_future_client_clock(client):
     tokens = await register(client, "clockpoison@example.com")
     h = auth_headers(tokens)
     list_id = (await client.post("/lists", json={"title": "C"}, headers=h)).json()["id"]
-    item = (await client.post(f"/lists/{list_id}/items", json={"label": "base"},
-                              headers=h)).json()[0]
+    item = (
+        await client.post(f"/lists/{list_id}/items", json={"label": "base"}, headers=h)
+    ).json()[0]
 
     # upsert à +2h : appliqué, mais le stored updated_at est clampé
-    r = await client.post("/sync", json={"events": [
-        {"kind": "item.upsert", "id": item["id"], "list_id": list_id,
-         "label": "poison", "done": False,
-         "updated_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=2)).isoformat()},
-    ]}, headers=h)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "item.upsert",
+                    "id": item["id"],
+                    "list_id": list_id,
+                    "label": "poison",
+                    "done": False,
+                    "updated_at": (
+                        dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=2)
+                    ).isoformat(),
+                },
+            ]
+        },
+        headers=h,
+    )
     assert r.status_code == 200, r.text
     assert r.json()["rejected"] == []
 
     r = await client.get(f"/lists/{list_id}/items", headers=h)
     stored = [i for i in r.json() if i["id"] == item["id"]][0]
     assert stored["label"] == "poison"
-    assert aware(stored["updated_at"]) <= dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=6)
+    assert aware(stored["updated_at"]) <= dt.datetime.now(
+        dt.timezone.utc
+    ) + dt.timedelta(seconds=6)
 
     # un événement ultérieur à horloge saine doit toujours gagner (LWW)
-    r = await client.post("/sync", json={"events": [
-        {"kind": "item.upsert", "id": item["id"], "list_id": list_id,
-         "label": "after", "done": False,
-         "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()},
-    ]}, headers=h)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "item.upsert",
+                    "id": item["id"],
+                    "list_id": list_id,
+                    "label": "after",
+                    "done": False,
+                    "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                },
+            ]
+        },
+        headers=h,
+    )
     assert r.status_code == 200, r.text
     r = await client.get(f"/lists/{list_id}/items", headers=h)
     stored = [i for i in r.json() if i["id"] == item["id"]][0]
@@ -1822,25 +2344,32 @@ async def test_sync_delta_scoped_key_revoked_membership(client):
     ha, hb = auth_headers(ta), auth_headers(tb)
     l9 = (await client.post("/lists", json={"title": "L9"}, headers=hb)).json()["id"]
     await client.post(f"/lists/{l9}/items", json={"label": "b-item"}, headers=hb)
-    r = await client.post(f"/lists/{l9}/members",
-                          json={"email": "scoperev-a@example.com", "role": "editor"},
-                          headers=hb)
+    r = await client.post(
+        f"/lists/{l9}/members",
+        json={"email": "scoperev-a@example.com", "role": "editor"},
+        headers=hb,
+    )
     assert r.status_code == 201, r.text
     user_a = r.json()["user_id"]
-    key = (await client.post("/api-keys",
-                             json={"name": "scoped", "list_scope": l9},
-                             headers=ha)).json()["key"]
+    key = (
+        await client.post(
+            "/api-keys", json={"name": "scoped", "list_scope": l9}, headers=ha
+        )
+    ).json()["key"]
     kh = {"Authorization": f"Bearer {key}"}
     # positive control before revocation: the delta contains b-item
-    r = await client.post("/sync",
-                          json={"since": "2000-01-01T00:00:00+00:00"}, headers=kh)
+    r = await client.post(
+        "/sync", json={"since": "2000-01-01T00:00:00+00:00"}, headers=kh
+    )
     assert any(c["label"] == "b-item" for c in r.json()["changes"]), r.json()
     # owner revokes the membership
-    assert (await client.delete(f"/lists/{l9}/members/{user_a}",
-                                headers=hb)).status_code == 204
+    assert (
+        await client.delete(f"/lists/{l9}/members/{user_a}", headers=hb)
+    ).status_code == 204
     # the same scoped key must now get an empty delta
-    r = await client.post("/sync",
-                          json={"since": "2000-01-01T00:00:00+00:00"}, headers=kh)
+    r = await client.post(
+        "/sync", json={"since": "2000-01-01T00:00:00+00:00"}, headers=kh
+    )
     assert r.json()["changes"] == []
 
 
@@ -1852,13 +2381,16 @@ async def test_sync_delta_scoped_key_deleted_list(client):
     h = auth_headers(tokens)
     l1 = (await client.post("/lists", json={"title": "L1"}, headers=h)).json()["id"]
     await client.post(f"/lists/{l1}/items", json={"label": "a1-item"}, headers=h)
-    key = (await client.post("/api-keys",
-                             json={"name": "scoped", "list_scope": l1},
-                             headers=h)).json()["key"]
+    key = (
+        await client.post(
+            "/api-keys", json={"name": "scoped", "list_scope": l1}, headers=h
+        )
+    ).json()["key"]
     kh = {"Authorization": f"Bearer {key}"}
     assert (await client.delete(f"/lists/{l1}", headers=h)).status_code == 204
-    r = await client.post("/sync",
-                          json={"since": "2000-01-01T00:00:00+00:00"}, headers=kh)
+    r = await client.post(
+        "/sync", json={"since": "2000-01-01T00:00:00+00:00"}, headers=kh
+    )
     assert r.json()["changes"] == []
 
 
@@ -1870,32 +2402,35 @@ async def test_scoped_key_creation_requires_access(client):
     tb = await register(client, "keyguard-b@example.com")
     ha, hb = auth_headers(ta), auth_headers(tb)
     # unknown list -> 404
-    r = await client.post("/api-keys",
-                          json={"name": "k", "list_scope": str(uuid.uuid4())},
-                          headers=ha)
+    r = await client.post(
+        "/api-keys", json={"name": "k", "list_scope": str(uuid.uuid4())}, headers=ha
+    )
     assert r.status_code == 404, r.text
     # real list the caller does not belong to -> 404
     l9 = (await client.post("/lists", json={"title": "L9"}, headers=hb)).json()["id"]
-    r = await client.post("/api-keys",
-                          json={"name": "k", "list_scope": l9}, headers=ha)
+    r = await client.post("/api-keys", json={"name": "k", "list_scope": l9}, headers=ha)
     assert r.status_code == 404, r.text
     # viewer membership -> 201
-    r = await client.post(f"/lists/{l9}/members",
-                          json={"email": "keyguard-a@example.com", "role": "viewer"},
-                          headers=hb)
+    r = await client.post(
+        f"/lists/{l9}/members",
+        json={"email": "keyguard-a@example.com", "role": "viewer"},
+        headers=hb,
+    )
     assert r.status_code == 201, r.text
-    r = await client.post("/api-keys",
-                          json={"name": "k", "list_scope": l9}, headers=ha)
+    r = await client.post("/api-keys", json={"name": "k", "list_scope": l9}, headers=ha)
     assert r.status_code == 201, r.text
     # a principal already scoped to another list -> 403
     l1 = (await client.post("/lists", json={"title": "L1"}, headers=ha)).json()["id"]
     l2 = (await client.post("/lists", json={"title": "L2"}, headers=ha)).json()["id"]
-    k1 = (await client.post("/api-keys",
-                            json={"name": "k1", "list_scope": l1},
-                            headers=ha)).json()["key"]
+    k1 = (
+        await client.post(
+            "/api-keys", json={"name": "k1", "list_scope": l1}, headers=ha
+        )
+    ).json()["key"]
     k1h = {"Authorization": f"Bearer {k1}"}
-    r = await client.post("/api-keys",
-                          json={"name": "k2", "list_scope": l2}, headers=k1h)
+    r = await client.post(
+        "/api-keys", json={"name": "k2", "list_scope": l2}, headers=k1h
+    )
     assert r.status_code == 403, r.text
 
 
@@ -1906,14 +2441,18 @@ async def test_scoped_key_cannot_mint_unscoped_key(client):
     ta = await register(client, "mint-a@example.com")
     ha = auth_headers(ta)
     l1 = (await client.post("/lists", json={"title": "L1"}, headers=ha)).json()["id"]
-    k1 = (await client.post("/api-keys", json={"name": "k1", "list_scope": l1},
-                            headers=ha)).json()["key"]
+    k1 = (
+        await client.post(
+            "/api-keys", json={"name": "k1", "list_scope": l1}, headers=ha
+        )
+    ).json()["key"]
     k1h = {"Authorization": f"Bearer {k1}"}
     r = await client.post("/api-keys", json={"name": "wide"}, headers=k1h)
     assert r.status_code == 403, r.text
     # same scope is still allowed
-    r = await client.post("/api-keys", json={"name": "same", "list_scope": l1},
-                          headers=k1h)
+    r = await client.post(
+        "/api-keys", json={"name": "same", "list_scope": l1}, headers=k1h
+    )
     assert r.status_code == 201, r.text
 
 
@@ -1922,24 +2461,31 @@ async def test_api_key_listing_exposes_scope(client):
     ta = await register(client, "keyscope@example.com")
     ha = auth_headers(ta)
     l1 = (await client.post("/lists", json={"title": "L1"}, headers=ha)).json()["id"]
-    await client.post("/api-keys", json={"name": "scoped", "list_scope": l1}, headers=ha)
+    await client.post(
+        "/api-keys", json={"name": "scoped", "list_scope": l1}, headers=ha
+    )
     await client.post("/api-keys", json={"name": "all"}, headers=ha)
     rows = {k["name"]: k for k in (await client.get("/api-keys", headers=ha)).json()}
     assert rows["scoped"]["list_scope"] == l1
     assert rows["all"]["list_scope"] is None
+
+
 async def test_readonly_key_write_probe_is_403_not_422(client):
     """mcp_setup.py verifies a read-only key by POSTing an EMPTY body to
     /lists: a read-only key must get 403 (and a write key a validation error),
     so the probe can never create anything."""
     ta = await register(client, "probe@example.com")
     ha = auth_headers(ta)
-    ro = (await client.post("/api-keys", json={"name": "ro", "read_only": True},
-                            headers=ha)).json()["key"]
+    ro = (
+        await client.post(
+            "/api-keys", json={"name": "ro", "read_only": True}, headers=ha
+        )
+    ).json()["key"]
     rw = (await client.post("/api-keys", json={"name": "rw"}, headers=ha)).json()["key"]
     r = await client.post("/lists", json={}, headers={"Authorization": f"Bearer {ro}"})
     assert r.status_code == 403, r.text
     r = await client.post("/lists", json={}, headers={"Authorization": f"Bearer {rw}"})
-    assert r.status_code in (400, 422), r.text   # validation error, not created
+    assert r.status_code in (400, 422), r.text  # validation error, not created
     assert (await client.get("/lists", headers=ha)).json() == []
 
 
@@ -1956,34 +2502,50 @@ async def test_rest_patch_clamps_future_updated_at(client):
     tokens = await register(client, "patchclock@example.com")
     h = auth_headers(tokens)
     list_id = (await client.post("/lists", json={"title": "C"}, headers=h)).json()["id"]
-    item = (await client.post(f"/lists/{list_id}/items", json={"label": "base"},
-                              headers=h)).json()[0]
+    item = (
+        await client.post(f"/lists/{list_id}/items", json={"label": "base"}, headers=h)
+    ).json()[0]
 
     # naive +30d payload: label applied, stored updated_at clamped
-    future_naive = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=30)).replace(tzinfo=None).isoformat()
-    r = await client.patch(f"/lists/{list_id}/items/{item['id']}",
-                           json={"label": "poison", "updated_at": future_naive},
-                           headers=h)
+    future_naive = (
+        (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=30))
+        .replace(tzinfo=None)
+        .isoformat()
+    )
+    r = await client.patch(
+        f"/lists/{list_id}/items/{item['id']}",
+        json={"label": "poison", "updated_at": future_naive},
+        headers=h,
+    )
     assert r.status_code == 200, r.text
     r = await client.get(f"/lists/{list_id}/items", headers=h)
     stored = [i for i in r.json() if i["id"] == item["id"]][0]
     assert stored["label"] == "poison"
-    assert aware(stored["updated_at"]) <= dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=6)
+    assert aware(stored["updated_at"]) <= dt.datetime.now(
+        dt.timezone.utc
+    ) + dt.timedelta(seconds=6)
 
     # aware +30d payload: handled the same way, no round-trip parity needed
-    future_aware = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=30)).isoformat()
-    r = await client.patch(f"/lists/{list_id}/items/{item['id']}",
-                           json={"label": "poison-aware", "updated_at": future_aware},
-                           headers=h)
+    future_aware = (
+        dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=30)
+    ).isoformat()
+    r = await client.patch(
+        f"/lists/{list_id}/items/{item['id']}",
+        json={"label": "poison-aware", "updated_at": future_aware},
+        headers=h,
+    )
     assert r.status_code == 200, r.text
     r = await client.get(f"/lists/{list_id}/items", headers=h)
     stored = [i for i in r.json() if i["id"] == item["id"]][0]
     assert stored["label"] == "poison-aware"
-    assert aware(stored["updated_at"]) <= dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=6)
+    assert aware(stored["updated_at"]) <= dt.datetime.now(
+        dt.timezone.utc
+    ) + dt.timedelta(seconds=6)
 
     # legit update without updated_at: label applied
-    r = await client.patch(f"/lists/{list_id}/items/{item['id']}",
-                           json={"label": "legit"}, headers=h)
+    r = await client.patch(
+        f"/lists/{list_id}/items/{item['id']}", json={"label": "legit"}, headers=h
+    )
     assert r.status_code == 200, r.text
     r = await client.get(f"/lists/{list_id}/items", headers=h)
     stored = [i for i in r.json() if i["id"] == item["id"]][0]
@@ -2000,13 +2562,17 @@ async def test_my_lists_scoped_key_sees_only_scoped_list(client):
     l1 = (await client.post("/lists", json={"title": "L1"}, headers=ha)).json()["id"]
     l2 = (await client.post("/lists", json={"title": "L2"}, headers=ha)).json()["id"]
     l9 = (await client.post("/lists", json={"title": "L9"}, headers=hb)).json()["id"]
-    r = await client.post(f"/lists/{l9}/members",
-                          json={"email": "mylists-a@example.com", "role": "viewer"},
-                          headers=hb)
+    r = await client.post(
+        f"/lists/{l9}/members",
+        json={"email": "mylists-a@example.com", "role": "viewer"},
+        headers=hb,
+    )
     assert r.status_code == 201, r.text
-    key = (await client.post("/api-keys",
-                             json={"name": "scoped", "list_scope": l1},
-                             headers=ha)).json()["key"]
+    key = (
+        await client.post(
+            "/api-keys", json={"name": "scoped", "list_scope": l1}, headers=ha
+        )
+    ).json()["key"]
     kh = {"Authorization": f"Bearer {key}"}
     r = await client.get("/lists", headers=kh)
     assert r.status_code == 200
@@ -2050,7 +2616,9 @@ async def test_bulk_add_items_single_changelog_commit(client, monkeypatch):
     counts = _spy_session_local(monkeypatch)
     tokens = await register(client, "bulkbatch@example.com")
     h = auth_headers(tokens)
-    list_id = (await client.post("/lists", json={"title": "Bulk"}, headers=h)).json()["id"]
+    list_id = (await client.post("/lists", json={"title": "Bulk"}, headers=h)).json()[
+        "id"
+    ]
     before = counts["n"]
 
     r = await client.post(
@@ -2064,11 +2632,18 @@ async def test_bulk_add_items_single_changelog_commit(client, monkeypatch):
     from uuid import UUID
 
     async with SessionLocal() as s:
-        rows = (await s.execute(
-            select(ChangeLog).where(
-                ChangeLog.list_id == UUID(list_id), ChangeLog.kind == "item.upsert"
+        rows = (
+            (
+                await s.execute(
+                    select(ChangeLog).where(
+                        ChangeLog.list_id == UUID(list_id),
+                        ChangeLog.kind == "item.upsert",
+                    )
+                )
             )
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
     assert len(rows) == 3
     assert {str(row.item_id) for row in rows} == {i["id"] for i in out}
 
@@ -2084,22 +2659,53 @@ async def test_sync_batch_savepoint_isolation(client):
     t2 = await register(client, "sp-other@example.com")
     h1, h2 = auth_headers(t1), auth_headers(t2)
     own = (await client.post("/lists", json={"title": "Own"}, headers=h1)).json()["id"]
-    other = (await client.post("/lists", json={"title": "Other"}, headers=h2)).json()["id"]
-    r = await client.post(f"/lists/{other}/members",
-                          json={"email": "sp-owner@example.com", "role": "viewer"},
-                          headers=h2)
+    other = (await client.post("/lists", json={"title": "Other"}, headers=h2)).json()[
+        "id"
+    ]
+    r = await client.post(
+        f"/lists/{other}/members",
+        json={"email": "sp-owner@example.com", "role": "viewer"},
+        headers=h2,
+    )
     assert r.status_code == 201, r.text
 
     now = dt.datetime.now(dt.UTC).isoformat()
     id1, id2, id3 = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
-    r = await client.post("/sync", json={"events": [
-        {"kind": "item.upsert", "id": id1, "list_id": own,
-         "label": "e1", "done": False, "position": 0, "updated_at": now},
-        {"kind": "item.upsert", "id": id2, "list_id": other,
-         "label": "e2", "done": False, "position": 0, "updated_at": now},
-        {"kind": "item.upsert", "id": id3, "list_id": own,
-         "label": "e3", "done": False, "position": 1, "updated_at": now},
-    ]}, headers=h1)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "item.upsert",
+                    "id": id1,
+                    "list_id": own,
+                    "label": "e1",
+                    "done": False,
+                    "position": 0,
+                    "updated_at": now,
+                },
+                {
+                    "kind": "item.upsert",
+                    "id": id2,
+                    "list_id": other,
+                    "label": "e2",
+                    "done": False,
+                    "position": 0,
+                    "updated_at": now,
+                },
+                {
+                    "kind": "item.upsert",
+                    "id": id3,
+                    "list_id": own,
+                    "label": "e3",
+                    "done": False,
+                    "position": 1,
+                    "updated_at": now,
+                },
+            ]
+        },
+        headers=h1,
+    )
     assert r.status_code == 200, r.text
     assert r.json()["rejected"] == [id2]
 
@@ -2133,12 +2739,30 @@ async def test_sync_single_commit_and_notifications_after_commit(client, monkeyp
     now = dt.datetime.now(dt.UTC).isoformat()
     new_list = str(uuid.uuid4())
     before = counts["n"]
-    r = await client.post("/sync", json={"events": [
-        {"kind": "list.create", "id": new_list, "list_id": new_list,
-         "label": "L", "updated_at": now},
-        {"kind": "item.upsert", "id": str(uuid.uuid4()), "list_id": new_list,
-         "label": "x", "done": False, "position": 0, "updated_at": now},
-    ]}, headers=h)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "list.create",
+                    "id": new_list,
+                    "list_id": new_list,
+                    "label": "L",
+                    "updated_at": now,
+                },
+                {
+                    "kind": "item.upsert",
+                    "id": str(uuid.uuid4()),
+                    "list_id": new_list,
+                    "label": "x",
+                    "done": False,
+                    "position": 0,
+                    "updated_at": now,
+                },
+            ]
+        },
+        headers=h,
+    )
     assert r.status_code == 200, r.text
 
     assert counts["n"] - before == 1
@@ -2168,7 +2792,9 @@ async def test_sync_infra_error_500_no_partial_commit(client, monkeypatch):
         calls["n"] += 1
         if calls["n"] == 2:
             raise RuntimeError("DB dead")
-        await orig(session, event, principal, *args, **kwargs)
+        # prod4 M1 : _apply_event renvoie les notifications de l'événement —
+        # le mock doit les retourner (pas juste les exécuter).
+        return await orig(session, event, principal, *args, **kwargs)
 
     monkeypatch.setattr(sync_mod, "_apply_event", flaky)
 
@@ -2176,10 +2802,24 @@ async def test_sync_infra_error_500_no_partial_commit(client, monkeypatch):
 
     now = dt.datetime.now(dt.UTC).isoformat()
     events = [
-        {"kind": "item.upsert", "id": str(uuid.uuid4()), "list_id": list_id,
-         "label": "e1", "done": False, "position": 0, "updated_at": now},
-        {"kind": "item.upsert", "id": str(uuid.uuid4()), "list_id": list_id,
-         "label": "e2", "done": False, "position": 1, "updated_at": now},
+        {
+            "kind": "item.upsert",
+            "id": str(uuid.uuid4()),
+            "list_id": list_id,
+            "label": "e1",
+            "done": False,
+            "position": 0,
+            "updated_at": now,
+        },
+        {
+            "kind": "item.upsert",
+            "id": str(uuid.uuid4()),
+            "list_id": list_id,
+            "label": "e2",
+            "done": False,
+            "position": 1,
+            "updated_at": now,
+        },
     ]
     # Starlette envoie la 500 puis re-lève (logging serveur) : sous
     # ASGITransport, l'exception non gérée remonte au lieu du 500.
@@ -2216,12 +2856,30 @@ async def test_sync_notifications_delivered_in_order(client):
 
         now = dt.datetime.now(dt.UTC).isoformat()
         new_list = str(uuid.uuid4())
-        r = await client.post("/sync", json={"events": [
-            {"kind": "list.create", "id": new_list, "list_id": new_list,
-             "label": "N", "updated_at": now},
-            {"kind": "item.upsert", "id": str(uuid.uuid4()), "list_id": new_list,
-             "label": "x", "done": False, "position": 0, "updated_at": now},
-        ]}, headers=h)
+        r = await client.post(
+            "/sync",
+            json={
+                "events": [
+                    {
+                        "kind": "list.create",
+                        "id": new_list,
+                        "list_id": new_list,
+                        "label": "N",
+                        "updated_at": now,
+                    },
+                    {
+                        "kind": "item.upsert",
+                        "id": str(uuid.uuid4()),
+                        "list_id": new_list,
+                        "label": "x",
+                        "done": False,
+                        "position": 0,
+                        "updated_at": now,
+                    },
+                ]
+            },
+            headers=h,
+        )
         assert r.status_code == 200, r.text
 
         msgs = [await asyncio.wait_for(queue.get(), timeout=2.0) for _ in range(2)]
@@ -2237,14 +2895,31 @@ async def test_sync_lww_older_timestamp_writes_nothing(client):
     n'écrit rien."""
     tokens = await register(client, "lwwpin@example.com")
     h = auth_headers(tokens)
-    list_id = (await client.post("/lists", json={"title": "LWW"}, headers=h)).json()["id"]
-    item = (await client.post(
-        f"/lists/{list_id}/items", json={"label": "current"}, headers=h)).json()[0]
+    list_id = (await client.post("/lists", json={"title": "LWW"}, headers=h)).json()[
+        "id"
+    ]
+    item = (
+        await client.post(
+            f"/lists/{list_id}/items", json={"label": "current"}, headers=h
+        )
+    ).json()[0]
 
-    r = await client.post("/sync", json={"events": [
-        {"kind": "item.upsert", "id": item["id"], "list_id": list_id,
-         "label": "stale", "done": True, "updated_at": "2000-01-01T00:00:00"},
-    ]}, headers=h)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "item.upsert",
+                    "id": item["id"],
+                    "list_id": list_id,
+                    "label": "stale",
+                    "done": True,
+                    "updated_at": "2000-01-01T00:00:00",
+                },
+            ]
+        },
+        headers=h,
+    )
     assert r.status_code == 200, r.text
     assert r.json()["rejected"] == []
 
@@ -2263,25 +2938,32 @@ async def test_my_lists_scoped_key_no_access(client):
     ha, hb = auth_headers(ta), auth_headers(tb)
     # (a) scoped list deleted -> []
     l1 = (await client.post("/lists", json={"title": "L1"}, headers=ha)).json()["id"]
-    k1 = (await client.post("/api-keys",
-                            json={"name": "scoped", "list_scope": l1},
-                            headers=ha)).json()["key"]
+    k1 = (
+        await client.post(
+            "/api-keys", json={"name": "scoped", "list_scope": l1}, headers=ha
+        )
+    ).json()["key"]
     k1h = {"Authorization": f"Bearer {k1}"}
     assert (await client.delete(f"/lists/{l1}", headers=ha)).status_code == 204
     assert (await client.get("/lists", headers=k1h)).json() == []
     # (b) membership revoked -> []
     l9 = (await client.post("/lists", json={"title": "L9"}, headers=hb)).json()["id"]
-    r = await client.post(f"/lists/{l9}/members",
-                          json={"email": "mylists2-a@example.com", "role": "viewer"},
-                          headers=hb)
+    r = await client.post(
+        f"/lists/{l9}/members",
+        json={"email": "mylists2-a@example.com", "role": "viewer"},
+        headers=hb,
+    )
     assert r.status_code == 201, r.text
     user_a = r.json()["user_id"]
-    k2 = (await client.post("/api-keys",
-                            json={"name": "scoped2", "list_scope": l9},
-                            headers=ha)).json()["key"]
+    k2 = (
+        await client.post(
+            "/api-keys", json={"name": "scoped2", "list_scope": l9}, headers=ha
+        )
+    ).json()["key"]
     k2h = {"Authorization": f"Bearer {k2}"}
-    assert (await client.delete(f"/lists/{l9}/members/{user_a}",
-                                headers=hb)).status_code == 204
+    assert (
+        await client.delete(f"/lists/{l9}/members/{user_a}", headers=hb)
+    ).status_code == 204
     assert (await client.get("/lists", headers=k2h)).json() == []
 
 
@@ -2304,40 +2986,61 @@ async def test_sync_recurrence_spawn_uses_real_item_id(client, monkeypatch):
     h = auth_headers(t)
     r = await client.post("/lists", json={"title": "Rec"}, headers=h)
     list_id = r.json()["id"]
-    r = await client.post(f"/lists/{list_id}/items",
-                          json={"label": "Sport", "recurrence": "daily"}, headers=h)
+    r = await client.post(
+        f"/lists/{list_id}/items",
+        json={"label": "Sport", "recurrence": "daily"},
+        headers=h,
+    )
     item_id = r.json()[0]["id"]
     item_uuid = uuid.UUID(item_id)
 
     from datetime import datetime, timedelta, timezone
+
     now = datetime.now(timezone.utc)
-    r = await client.post("/sync", json={"events": [
-        {"kind": "item.upsert", "id": item_id, "list_id": list_id,
-         "label": "Sport", "done": True, "position": 0,
-         "recurrence": "daily",
-         "due_date": (now - timedelta(days=1)).isoformat(),
-         "updated_at": (now + timedelta(seconds=1)).isoformat()},
-    ]}, headers=h)
+    r = await client.post(
+        "/sync",
+        json={
+            "events": [
+                {
+                    "kind": "item.upsert",
+                    "id": item_id,
+                    "list_id": list_id,
+                    "label": "Sport",
+                    "done": True,
+                    "position": 0,
+                    "recurrence": "daily",
+                    "due_date": (now - timedelta(days=1)).isoformat(),
+                    "updated_at": (now + timedelta(seconds=1)).isoformat(),
+                },
+            ]
+        },
+        headers=h,
+    )
     assert r.status_code == 200, r.text
 
-    from sqlalchemy import select
     from app.db import SessionLocal
     from app.models import ChangeLog, Item
+    from sqlalchemy import select
 
     async with SessionLocal() as session:
         res = await session.execute(
-            select(Item).where(Item.recurrence_source_id == item_uuid))
+            select(Item).where(Item.recurrence_source_id == item_uuid)
+        )
         spawned = res.scalar_one()
         assert spawned.id is not None and str(spawned.id) != "None"
         res = await session.execute(
-            select(ChangeLog).where(ChangeLog.item_id == spawned.id))
+            select(ChangeLog).where(ChangeLog.item_id == spawned.id)
+        )
         changelog_rows = res.scalars().all()
         assert any(row.item_id == spawned.id for row in changelog_rows)
         # aucune ligne item.upsert de cette liste sans item_id
-        res = await session.execute(select(ChangeLog).where(
-            ChangeLog.list_id == uuid.UUID(list_id),
-            ChangeLog.kind == "item.upsert",
-            ChangeLog.item_id.is_(None)))
+        res = await session.execute(
+            select(ChangeLog).where(
+                ChangeLog.list_id == uuid.UUID(list_id),
+                ChangeLog.kind == "item.upsert",
+                ChangeLog.item_id.is_(None),
+            )
+        )
         assert res.scalars().all() == []
 
     upserts = [c for c in calls if c.get("kind") == "item.upsert"]
@@ -2351,8 +3054,9 @@ async def _user_by_email(email: str):
     from sqlalchemy import select
 
     async with SessionLocal() as session:
-        return (await session.execute(
-            select(User).where(User.email == email))).scalar_one_or_none()
+        return (
+            await session.execute(select(User).where(User.email == email))
+        ).scalar_one_or_none()
 
 
 # ---- spec 2026-11-22 change-email (§§2-5) ----
@@ -2364,19 +3068,23 @@ async def test_change_email_happy_path(client, monkeypatch):
     un email part vers la NOUVELLE adresse et son corps porte le code."""
     import asyncio
 
-    from app import mailer
     from app.config import settings
 
+    from app import mailer
+
     sent = []
-    monkeypatch.setattr(mailer, "_sync_send",
-                        lambda to, subj, body: sent.append((to, subj, body)))
+    monkeypatch.setattr(
+        mailer, "_sync_send", lambda to, subj, body: sent.append((to, subj, body))
+    )
     # SMTP activé APRÈS l'inscription (avec SMTP on, register renvoie 202)
     tokens = await register(client, "chmail@example.com")
     monkeypatch.setattr(settings, "SMTP_ENABLED", True)
     h = auth_headers(tokens)
-    r = await client.post("/auth/change-email",
-                          json={"new_email": "chmail-new@example.com",
-                                "password": "LongPassw0rd!x"}, headers=h)
+    r = await client.post(
+        "/auth/change-email",
+        json={"new_email": "chmail-new@example.com", "password": "LongPassw0rd!x"},
+        headers=h,
+    )
     assert r.status_code == 202, r.text
 
     user = await _user_by_email("chmail@example.com")
@@ -2398,49 +3106,62 @@ async def test_change_email_error_responses(client, monkeypatch):
     409 email pris, 503 SMTP non configuré — rien n'est enregistré."""
     import asyncio
 
-    from app import mailer
     from app.config import settings
 
+    from app import mailer
+
     sent = []
-    monkeypatch.setattr(mailer, "_sync_send",
-                        lambda to, subj, body: sent.append((to, subj, body)))
+    monkeypatch.setattr(
+        mailer, "_sync_send", lambda to, subj, body: sent.append((to, subj, body))
+    )
 
     await register(client, "cmerr@example.com")
-    r = await client.post("/auth/login",
-                          json={"email": "cmerr@example.com", "password": "LongPassw0rd!x"})
+    r = await client.post(
+        "/auth/login", json={"email": "cmerr@example.com", "password": "LongPassw0rd!x"}
+    )
     h = auth_headers(r.json())
 
     # mauvais mot de passe -> 401 uniforme (comme login)
-    r = await client.post("/auth/change-email",
-                          json={"new_email": "cmerr-new@example.com",
-                                "password": "wrongpass123"}, headers=h)
+    r = await client.post(
+        "/auth/change-email",
+        json={"new_email": "cmerr-new@example.com", "password": "wrongpass123"},
+        headers=h,
+    )
     assert r.status_code == 401
     assert r.json()["detail"] == "Invalid credentials"
 
     # même email (insensible à la casse) -> 400
-    r = await client.post("/auth/change-email",
-                          json={"new_email": "CMERR@example.com",
-                                "password": "LongPassw0rd!x"}, headers=h)
+    r = await client.post(
+        "/auth/change-email",
+        json={"new_email": "CMERR@example.com", "password": "LongPassw0rd!x"},
+        headers=h,
+    )
     assert r.status_code == 400
 
     # email déjà porté par un autre compte -> 409
     await register(client, "cmerr-taken@example.com")
-    r = await client.post("/auth/change-email",
-                          json={"new_email": "cmerr-taken@example.com",
-                                "password": "LongPassw0rd!x"}, headers=h)
+    r = await client.post(
+        "/auth/change-email",
+        json={"new_email": "cmerr-taken@example.com", "password": "LongPassw0rd!x"},
+        headers=h,
+    )
     assert r.status_code == 409
 
     # format invalide -> 400 (validation pydantic)
-    r = await client.post("/auth/change-email",
-                          json={"new_email": "pas-un-email",
-                                "password": "LongPassw0rd!x"}, headers=h)
+    r = await client.post(
+        "/auth/change-email",
+        json={"new_email": "pas-un-email", "password": "LongPassw0rd!x"},
+        headers=h,
+    )
     assert r.status_code == 400
 
     # SMTP non configuré -> 503
     monkeypatch.setattr(settings, "SMTP_ENABLED", False)
-    r = await client.post("/auth/change-email",
-                          json={"new_email": "cmerr-new@example.com",
-                                "password": "LongPassw0rd!x"}, headers=h)
+    r = await client.post(
+        "/auth/change-email",
+        json={"new_email": "cmerr-new@example.com", "password": "LongPassw0rd!x"},
+        headers=h,
+    )
     assert r.status_code == 503
 
     await asyncio.sleep(0.1)
@@ -2453,26 +3174,36 @@ async def test_change_email_error_responses(client, monkeypatch):
 async def test_change_email_requires_totp(client, monkeypatch):
     """§2 : 2FA activé -> code manquant 401, code valide 202."""
     import pyotp
-
     from app.config import settings
 
     tokens = await register(client, "cmtotp@example.com")
     h = auth_headers(tokens)
     monkeypatch.setattr(settings, "SMTP_ENABLED", True)
-    secret = (await client.post("/auth/totp/setup", headers=h)).json()["secret"]
-    await client.post("/auth/totp/enable",
-                      json={"code": pyotp.TOTP(secret).now()}, headers=h)
+    setup = (await client.post("/auth/totp/setup", headers=h)).json()
+    secret = setup["secret"]
+    await client.post(
+        "/auth/totp/enable",
+        json={"code": pyotp.TOTP(secret).now(), "token": setup["token"]},
+        headers=h,
+    )
 
-    r = await client.post("/auth/change-email",
-                          json={"new_email": "cmtotp-new@example.com",
-                                "password": "LongPassw0rd!x"}, headers=h)
+    r = await client.post(
+        "/auth/change-email",
+        json={"new_email": "cmtotp-new@example.com", "password": "LongPassw0rd!x"},
+        headers=h,
+    )
     assert r.status_code == 401
     assert r.json()["detail"] == "Code 2FA requis ou invalide"
 
-    r = await client.post("/auth/change-email",
-                          json={"new_email": "cmtotp-new@example.com",
-                                "password": "LongPassw0rd!x",
-                                "totp_code": pyotp.TOTP(secret).now()}, headers=h)
+    r = await client.post(
+        "/auth/change-email",
+        json={
+            "new_email": "cmtotp-new@example.com",
+            "password": "LongPassw0rd!x",
+            "totp_code": pyotp.TOTP(secret).now(),
+        },
+        headers=h,
+    )
     assert r.status_code == 202, r.text
     user = await _user_by_email("cmtotp@example.com")
     assert user.pending_email == "cmtotp-new@example.com"
@@ -2487,12 +3218,15 @@ async def test_verify_email_switches_pending_email(client, monkeypatch):
 
     await register(client, "vea@example.com")
     monkeypatch.setattr(settings, "SMTP_ENABLED", True)
-    r = await client.post("/auth/login",
-                          json={"email": "vea@example.com", "password": "LongPassw0rd!x"})
+    r = await client.post(
+        "/auth/login", json={"email": "vea@example.com", "password": "LongPassw0rd!x"}
+    )
     h = auth_headers(r.json())
-    r = await client.post("/auth/change-email",
-                          json={"new_email": "vea-new@example.com",
-                                "password": "LongPassw0rd!x"}, headers=h)
+    r = await client.post(
+        "/auth/change-email",
+        json={"new_email": "vea-new@example.com", "password": "LongPassw0rd!x"},
+        headers=h,
+    )
     assert r.status_code == 202, r.text
     token = (await _user_by_email("vea@example.com")).email_token
 
@@ -2505,8 +3239,10 @@ async def test_verify_email_switches_pending_email(client, monkeypatch):
     assert user.email_token is None
 
     # cas 2 : token sans pending (flux d'inscription, SMTP on -> 202 + token)
-    r = await client.post("/auth/register",
-                          json={"email": "veb@example.com", "password": "LongPassw0rd!x"})
+    r = await client.post(
+        "/auth/register",
+        json={"email": "veb@example.com", "password": "LongPassw0rd!x"},
+    )
     assert r.status_code == 202, r.text
     token = (await _user_by_email("veb@example.com")).email_token
     r = await client.post("/auth/verify-email", json={"token": token})
@@ -2523,36 +3259,45 @@ async def test_resend_verification_with_pending_email(client, monkeypatch):
     l'email EN ATTENTE (pas le courant). Vérifié sans pending -> rien."""
     import asyncio
 
-    from app import mailer
     from app.config import settings
 
+    from app import mailer
+
     sent = []
-    monkeypatch.setattr(mailer, "_sync_send",
-                        lambda to, subj, body: sent.append((to, subj, body)))
+    monkeypatch.setattr(
+        mailer, "_sync_send", lambda to, subj, body: sent.append((to, subj, body))
+    )
 
     await register(client, "rsa@example.com")
     await register(client, "rsb@example.com")
     monkeypatch.setattr(settings, "SMTP_ENABLED", True)
-    r = await client.post("/auth/login",
-                          json={"email": "rsa@example.com", "password": "LongPassw0rd!x"})
+    r = await client.post(
+        "/auth/login", json={"email": "rsa@example.com", "password": "LongPassw0rd!x"}
+    )
     h = auth_headers(r.json())
-    r = await client.post("/auth/change-email",
-                          json={"new_email": "rsa-new@example.com",
-                                "password": "LongPassw0rd!x"}, headers=h)
+    r = await client.post(
+        "/auth/change-email",
+        json={"new_email": "rsa-new@example.com", "password": "LongPassw0rd!x"},
+        headers=h,
+    )
     assert r.status_code == 202, r.text
     await asyncio.sleep(0.1)
     sent.clear()
 
-    r = await client.post("/auth/resend-verification",
-                          json={"email": "rsa@example.com", "password": "LongPassw0rd!x"})
+    r = await client.post(
+        "/auth/resend-verification",
+        json={"email": "rsa@example.com", "password": "LongPassw0rd!x"},
+    )
     assert r.status_code == 204
     await asyncio.sleep(0.1)
     assert [to for to, _, _ in sent] == ["rsa-new@example.com"]
 
     # compte vérifié sans pending : rien n'est renvoyé
     sent.clear()
-    r = await client.post("/auth/resend-verification",
-                          json={"email": "rsb@example.com", "password": "LongPassw0rd!x"})
+    r = await client.post(
+        "/auth/resend-verification",
+        json={"email": "rsb@example.com", "password": "LongPassw0rd!x"},
+    )
     assert r.status_code == 204
     await asyncio.sleep(0.1)
     assert sent == []
@@ -2563,7 +3308,6 @@ async def test_me_exposes_pending_email_and_totp(client, monkeypatch):
     """§5 : /auth/me expose pending_email (None / valeur) et totp
     (bool = secret set)."""
     import pyotp
-
     from app.config import settings
 
     tokens = await register(client, "mea@example.com")
@@ -2574,15 +3318,21 @@ async def test_me_exposes_pending_email_and_totp(client, monkeypatch):
     assert me["pending_email"] is None
     assert me["totp"] is False
 
-    r = await client.post("/auth/change-email",
-                          json={"new_email": "mea-new@example.com",
-                                "password": "LongPassw0rd!x"}, headers=h)
+    r = await client.post(
+        "/auth/change-email",
+        json={"new_email": "mea-new@example.com", "password": "LongPassw0rd!x"},
+        headers=h,
+    )
     assert r.status_code == 202, r.text
     me = (await client.get("/auth/me", headers=h)).json()
     assert me["pending_email"] == "mea-new@example.com"
 
-    secret = (await client.post("/auth/totp/setup", headers=h)).json()["secret"]
-    await client.post("/auth/totp/enable",
-                      json={"code": pyotp.TOTP(secret).now()}, headers=h)
+    setup = (await client.post("/auth/totp/setup", headers=h)).json()
+    secret = setup["secret"]
+    await client.post(
+        "/auth/totp/enable",
+        json={"code": pyotp.TOTP(secret).now(), "token": setup["token"]},
+        headers=h,
+    )
     me = (await client.get("/auth/me", headers=h)).json()
     assert me["totp"] is True

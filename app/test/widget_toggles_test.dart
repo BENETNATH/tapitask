@@ -4,6 +4,7 @@ import "package:flutter/services.dart";
 import "package:flutter_test/flutter_test.dart";
 import "package:tapitask/data/api_client.dart";
 import "package:tapitask/data/database.dart";
+import "package:flutter_secure_storage/flutter_secure_storage.dart";
 import "package:shared_preferences/shared_preferences.dart";
 import "package:tapitask/state/app_state.dart";
 
@@ -43,6 +44,7 @@ void main() {
     if (toggled.isNotEmpty) store["widget_toggled"] = toggled;
     mockChannel();
     SharedPreferences.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({});
     final db = AppDb.forTesting(NativeDatabase.memory());
     final state = AppState(db: db);
     state.api = await ApiClient.load();

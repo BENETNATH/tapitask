@@ -28,11 +28,23 @@ void main() {
         bat,
         contains(
             '"C:\\apps\\tapitask\\update-tmp\\*" "C:\\apps\\tapitask"'));
-    // Nettoyage du tmp + relance de l'app.
     // La copie du bat laissée dans le répertoire de l'app est aussi effacée.
     expect(bat, contains(r'del "C:\apps\tapitask\run_update.bat"'));
-    expect(bat, contains("rmdir /S /Q"));
     expect(bat, contains(r'start "" "C:\apps\tapitask\tapitask.exe"'));
+    // C1.5 : `del %~f0` STRICTEMENT en dernière ligne non vide — une ligne
+    // exécutée après l'effacement du bat n'est jamais exécutée (« Le fichier
+    // de commandes est introuvable »).
+    final lines = bat
+        .split("\n")
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+    expect(lines.last, 'del "%~f0"',
+        reason: "C1.5 : del du bat courant strictement en dernier");
+    final startIdx = lines.indexWhere((l) => l.startsWith("start "));
+    final delIdx = lines.length - 1;
+    expect(startIdx, lessThan(delIdx),
+        reason: "C1.5 : l'app est relancée AVANT l'effacement du bat");
   });
 
   test(

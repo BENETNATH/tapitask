@@ -14,6 +14,7 @@ import "../l10n/s.dart";
 import "../data/database.dart";
 import "../data/google_tasks_api.dart";
 import "../data/sync_service.dart";
+import "../data/update_service.dart";
 import "../ui/due_format.dart";
 
 import "../platform/alert_service.dart";
@@ -24,7 +25,9 @@ import "widget_intent.dart";
 class AppState extends ChangeNotifier {
   final AppDb db;
   AppState({AppDb? db}) : db = db ?? AppDb();
-  late final ApiClient api;
+  /// Seam test (D-7, spec 2026-11-25) : posé par [init] (ApiClient.load),
+  /// assignable pour que les widget tests injectent un client espion.
+  late ApiClient api;
   late final SyncService sync;
 
   bool isAdmin = false;
@@ -38,6 +41,16 @@ class AppState extends ChangeNotifier {
   String? quickAddListId;
   StreamSubscription<Uri?>? _widgetClickSub;
   final MethodChannel _widgetChannel = MethodChannel("com.tapitask/tapitask/widget");
+
+  /// A2 : MAJ trouvée par le check de boot (main.dart) — présentée par
+  /// ChecklistsApp en post-frameCallback, desktop uniquement.
+  UpdateInfo? pendingBootUpdate;
+
+  /// Seam : posé par main() (le check de boot est hors de la classe).
+  void setPendingBootUpdate(UpdateInfo info) {
+    pendingBootUpdate = info;
+    notifyListeners();
+  }
 
   /// Per-user feature toggles (server-side, synced between devices).
   Map<String, dynamic> settings = {
@@ -92,22 +105,23 @@ class AppState extends ChangeNotifier {
     await _loadDefaultList();
     sync = SyncService(
         api: api, db: db, onChanged: notifyListeners, onSynced: _refreshWidget);
+    // 1.4 (prod3) : session expirée (refresh 401) → état déconnecté.
+    api.onSessionExpired = handleSessionExpired;
+    // C1.6 : les réglages en cache sont TOUJOURS appliqués au démarrage
+    // (et non seulement en mode lightweight) : theme/lang/folders/…
+    // survivent à un démarrage hors-ligne.
+    await _loadCachedSettings();
     if (lightweight) {
       // The flyout reads the locally cached settings (written by the main
       // window on every profile reload / settings save) — no network needed.
-      await _loadCachedSettings();
       notifyListeners();
       return;
     }
+    // C1.6 : init ne bloque que sur la partie locale — la partie réseau
+    // (fullSync, profil, realtime, alertes) tourne en tâche de fond
+    // non fatale ; runApp n'attend plus un serveur muet.
+    unawaited(_initNetwork());
     await applyWidgetToggles();
-    await sync.init();
-    await reloadProfile();
-    await _refreshWidget();
-    if (featureAlerts && settings["notify_app"] != false) {
-      await AlertService.ensureInitialized();
-      final due = await db.dueItems();
-      await AlertService.notifyDueToday(due);
-    }
     // Sur web : pas de widget, rien à rejouer (defaultTargetPlatform est
     // android sur web, d'où le garde kIsWeb au-dessus du bloc widget).
     if (!kIsWeb) {
@@ -119,8 +133,12 @@ class AppState extends ChangeNotifier {
         // dans les Flutter récents : équivalent = handler de méthode pour le
         // push natif « widgetLaunch ».
         _widgetChannel.setMethodCallHandler(_onWidgetLaunch);
-        final cold =
-            await _widgetChannel.invokeMethod<String>("getLaunchUri");
+        // C1.6 : le canal d'widget est optionnel — son absence ne doit pas
+        // faire crasher le démarrage (URI de lancement perdue, pas l'app).
+        String? cold;
+        try {
+          cold = await _widgetChannel.invokeMethod<String>("getLaunchUri");
+        } catch (_) {}
         await _applyWidgetUri(cold == null ? null : Uri.parse(cold));
       } else {
         try {
@@ -135,9 +153,48 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// C1.6 : partie réseau du démarrage — fond, non fatale (erreurs
+  /// loguées, jamais de crash).
+  Future<void> _initNetwork() async {
+    // B1 (D-1, prod4) : le profil D'ABORD (required), puis onAccountSwitch
+    // (purge éventuelle du compte précédent), PUIS le sync — un échec de
+    // reloadProfile avant le sync conduit à l'état déconnecté, jamais à un
+    // sync avec les données du compte précédent.
+    try {
+      await reloadProfile(required: true);
+    } catch (e) {
+      debugPrint("tapitask: background init failed: $e");
+      if (api.accessToken != null || api.refreshTokenValue != null) {
+        api.accessToken = null;
+        api.refreshTokenValue = null;
+        await api.persist();
+      }
+      handleSessionExpired();
+      return;
+    }
+    try {
+      await onAccountSwitch();
+      await sync.init();
+      await _refreshWidget();
+      if (featureAlerts && settings["notify_app"] != false) {
+        await AlertService.ensureInitialized();
+        final due = await db.dueItems();
+        await AlertService.notifyDueToday(due);
+      }
+    } catch (e) {
+      debugPrint("tapitask: background init failed: $e");
+    }
+  }
+
   /// Seam test : _applyWidgetUri est private (scopée à ce library).
   @visibleForTesting
   Future<void> applyWidgetUriForTesting(Uri? uri) => _applyWidgetUri(uri);
+
+  /// Seam test : _initNetwork est private (scopée à ce library) — le test
+  /// B1 (prod4) pilote l'ordre reloadProfile → onAccountSwitch → sync.init
+  /// et l'échec de reloadProfile (état déconnecté, pas de sync).
+  @visibleForTesting
+  Future<void> initNetworkForTesting() => _initNetwork();
 
   /// Push natif « widgetLaunch » (relance depuis le widget, app déjà ouverte).
   Future<void> _onWidgetLaunch(MethodCall call) async {
@@ -188,7 +245,12 @@ class AppState extends ChangeNotifier {
 
   /// (Re)load the user profile: admin flag + per-user feature settings.
   /// Called at startup and after every login.
-  Future<void> reloadProfile() async {
+  ///
+  /// 1.4 (prod3) : [required] = l'échec est FATAL pour l'appelant —
+  /// rethrow au lieu d'être avalé. Au login, un profil non chargé laisse
+  /// `email` sur le compte PRÉCÉDENT → onAccountSwitch() ne purgerait pas
+  /// → données du compte A poussées dans le sync du compte B.
+  Future<void> reloadProfile({bool required = false}) async {
     if (api.isConfigured && api.accessToken != null) {
       try {
         final me = await api.get("/auth/me");
@@ -202,7 +264,13 @@ class AppState extends ChangeNotifier {
         }
         S.setLocale(settings["lang"] as String?);
         await _cacheSettings();
-      } catch (_) {}
+      } catch (e) {
+        if (required) rethrow;
+        debugPrint("tapitask: reloadProfile failed: $e");
+      }
+    } else if (required) {
+      throw StateError(
+          "session non prête (serveur non configuré ou token absent)");
     }
     // Apply the synced parameters (polling delay).
     final poll = settings["poll_interval"];
@@ -212,10 +280,40 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 1.4 (prod3) : session définitivement expirée (refresh 401, branché par
+  /// [init] sur [ApiClient.onSessionExpired]) — retour à l'état déconnecté :
+  /// profil effacé + WebSocket fermé.
+  void handleSessionExpired() {
+    email = null;
+    pendingEmail = null;
+    isAdmin = false;
+    totp = false;
+    sync.stopRealtime();
+    notifyListeners();
+  }
+
   /// Called after a successful login: refresh UI, widgets and badge.
   Future<void> refreshAfterLogin() async {
     await _refreshWidget();
     notifyListeners();
+  }
+
+  /// C2.8 : compte différent du dernier → les tables locales
+  /// (LocalLists/LocalItems) sont vidées et last_sync réinitialisé AVANT le
+  /// premier fullSync du nouveau compte (sinon : mélangement de données +
+  /// pull incrémental qui rate l'historique).
+  static const _accountEmailPref = "account_email";
+
+  Future<void> onAccountSwitch() async {
+    final emailNow = email;
+    if (emailNow == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final previous = prefs.getString(_accountEmailPref);
+    if (previous != null && previous != emailNow) {
+      await db.wipeLocalData();
+      await prefs.remove("last_sync");
+    }
+    await prefs.setString(_accountEmailPref, emailNow);
   }
 
   /// Items checked from the home-screen widget: apply them to the local DB
@@ -272,9 +370,12 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     if (api.isConfigured && api.accessToken != null) {
       sync.syncSoon();
-      await _refreshWidget();
-      notifyListeners();
     }
+    // 2.2 (prod3) : le widget suit le renommage en LOCAL — avant le fix,
+    // _refreshWidget était DANS le if : hors-ligne, une liste épinglée
+    // renommée ne mettait pas le widget à jour.
+    await _refreshWidget();
+    notifyListeners();
   }
 
   Future<void> setListColor(String id, String? color) async {
@@ -387,9 +488,10 @@ class AppState extends ChangeNotifier {
 
   Future<void> saveSettings() async {
     S.setLocale(settings["lang"] as String?);
-    try {
-      await api.patch("/auth/me", {"settings": settings});
-    } catch (_) {}
+    // 1.3 (prod3) : d'abord local (cache + notification + widget), puis le
+    // PATCH serveur en fond — hors-ligne, plus de gel de 15 s et le
+    // réglage n'est pas perdu ; l'échec réseau est silencieux (le réglage
+    // est déjà local, il partira au prochain sync).
     await _cacheSettings();
     notifyListeners();
     // W1 : les surfaces compactes (widget, flyout) suivent IMMÉDIATEMENT
@@ -397,6 +499,8 @@ class AppState extends ChangeNotifier {
     // mutations d'items (bug W0 : le toggle hide_done n'avait aucun effet).
     await _refreshWidget();
     onSettingsChanged?.call();
+    unawaited(api.patch("/auth/me", {"settings": settings})
+        .catchError((Object _) => <String, dynamic>{}));
   }
 
   static const _cachedSettingsPref = "cached_settings";
@@ -675,6 +779,10 @@ class AppState extends ChangeNotifier {
         label = label.replaceFirst(hashMatch.group(0)!, "").trim();
       }
     }
+
+    // C1.1a (A1) : plus de libellé après les mots-clés → pas d'item (ni
+    // local, ni outbox) ; le reste de la saisie est ignoré avec elle.
+    if (label.trim().isEmpty) return;
 
     final targets = {listId, if (extraListId != null) extraListId};
     if (!explicitDue && dueDate != null) dueDay = calendarDay(dueDate);

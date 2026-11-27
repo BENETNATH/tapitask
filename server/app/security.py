@@ -29,7 +29,9 @@ def verify_password(password_hash: str, password: str) -> bool:
         return False
 
 
-def _create_token(sub: str, kind: str, ttl: int, extra: dict[str, Any] | None = None) -> str:
+def _create_token(
+    sub: str, kind: str, ttl: int, extra: dict[str, Any] | None = None
+) -> str:
     now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
         "sub": sub,
@@ -70,6 +72,14 @@ def hash_api_key(raw: str) -> str:
 
 def new_totp_secret() -> str:
     return pyotp.random_base32()
+
+
+def create_totp_setup_token(user_id: uuid.UUID, secret: str, ttl: int = 600) -> str:
+    """MD-2 (prod3) : token court signé (~10 min) portant le secret TOTP
+    en attente — réutilise l'infra _create_token/decode_token (même
+    schéma que email/access/refresh), au lieu d'une colonne
+    pending_totp_secret : aucune migration, aucun état obsolète en base."""
+    return _create_token(str(user_id), "totp_setup", ttl, {"secret": secret})
 
 
 def totp_uri(secret: str, email: str) -> str:

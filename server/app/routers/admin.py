@@ -3,19 +3,18 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
 from ..deps import Principal, require_admin
-from ..models import User
+from ..models import ChangeLog, RefreshToken, User
 from ..schemas import (
     AdminUserCreateIn,
     AdminUserOut,
     AdminUserPatch,
 )
-from ..models import ChangeLog
 from ..security import hash_password
 
 router = APIRouter(prefix="/admin/users", tags=["admin"])
@@ -30,8 +29,12 @@ async def list_users(
     result = await session.execute(select(User).order_by(User.created_at))
     return [
         AdminUserOut(
-            id=u.id, email=u.email, is_admin=u.is_admin, is_active=u.is_active,
-            is_email_verified=u.is_email_verified, created_at=u.created_at,
+            id=u.id,
+            email=u.email,
+            is_admin=u.is_admin,
+            is_active=u.is_active,
+            is_email_verified=u.is_email_verified,
+            created_at=u.created_at,
         )
         for u in result.scalars()
     ]
@@ -54,8 +57,11 @@ async def create_user(
     except IntegrityError:
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
     return AdminUserOut(
-        id=user.id, email=user.email, is_admin=user.is_admin,
-        is_active=user.is_active, is_email_verified=user.is_email_verified,
+        id=user.id,
+        email=user.email,
+        is_admin=user.is_admin,
+        is_active=user.is_active,
+        is_email_verified=user.is_email_verified,
         created_at=user.created_at,
     )
 
@@ -68,8 +74,11 @@ async def audit_log(
 ):
     """Recent change-log entries (who did what, when)."""
     from sqlalchemy import select as sa_select
+
     result = await session.execute(
-        sa_select(ChangeLog).order_by(ChangeLog.server_time.desc()).limit(min(limit, 1000))
+        sa_select(ChangeLog)
+        .order_by(ChangeLog.server_time.desc())
+        .limit(min(limit, 1000))
     )
     return [
         {
@@ -100,14 +109,25 @@ async def patch_user(
         user.is_active = data.is_active
     if data.is_admin is not None:
         if user.id == principal.user_id and data.is_admin is False:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot remove your own admin role")
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "Cannot remove your own admin role"
+            )
         user.is_admin = data.is_admin
     if data.password is not None:
         user.password_hash = hash_password(data.password)
+        # S5 (prod4) : un reset de mdp par admin révoque les RefreshToken de
+        # l'utilisateur — une session déjà ouverte (refresh token en cours)
+        # ne doit plus pouvoir survivre au changement de mot de passe.
+        await session.execute(
+            delete(RefreshToken).where(RefreshToken.user_id == user.id)
+        )
     await session.commit()
     return AdminUserOut(
-        id=user.id, email=user.email, is_admin=user.is_admin,
-        is_active=user.is_active, is_email_verified=user.is_email_verified,
+        id=user.id,
+        email=user.email,
+        is_admin=user.is_admin,
+        is_active=user.is_active,
+        is_email_verified=user.is_email_verified,
         created_at=user.created_at,
     )
 

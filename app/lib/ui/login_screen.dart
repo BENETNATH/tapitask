@@ -67,8 +67,9 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             const SizedBox(height: 16),
             FilledButton(
-              onPressed: _submit,
-              child: Text(_register ? S.createAccount : "Se connecter"),
+              // S3 (prod4) : désactivé pendant le submit (double-tap).
+              onPressed: _busy ? null : () async => _submit(),
+              child: Text(_register ? S.createAccount : S.login),
             ),
             TextButton(
               onPressed: () => setState(() => _register = !_register),
@@ -90,21 +91,52 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  /// Avertissement http:// (audit lot T) : login/register/invitation
+  /// n'avancent qu'après confirmation explicite.
+  Future<bool> _confirmInsecure() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(S.insecureServerTitle),
+        content: Text(S.insecureServerBody),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(S.cancel)),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(S.ok)),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
+  Future<bool> _applyServerUrl() async {
+    final url = _server.text.trim().replaceAll(RegExp(r"/$"), "");
+    if (url.startsWith("http://") && !await _confirmInsecure()) return false;
+    widget.state.api.baseUrl = url;
+    return true;
+  }
+
   Future<void> _acceptInvite() async {
     final code = await _promptInviteCode();
     if (code == null || code.trim().isEmpty) return;
     final api = widget.state.api;
-    api.baseUrl = _server.text.trim().replaceAll(RegExp(r"/$"), "");
+    if (!await _applyServerUrl()) return;
     try {
       if (api.accessToken == null || api.accessToken!.isEmpty) {
-        await _submit(silent: true);
+        // 1.4 (prod3) : sans session le POST part sans token → s'arrêter si
+        // le submit échoue (l'erreur est déjà affichée par _submit).
+        final ok = await _submit(silent: true);
+        if (!ok) return;
       }
       await api.post("/lists/invites/${code.trim()}/accept", {});
       await widget.state.sync.fullSync();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(S.listAdded)));
-        Navigator.pushReplacementNamed(context, "/home");
+        _gotoHome();
       }
     } on ApiException catch (e) {
       setState(() => _error = "Invitation refusée : ${e.message}");
@@ -116,6 +148,10 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _verifyEmail() async {
     final code = await _promptCode(S.codeFromEmail);
     if (code == null || code.trim().isEmpty) return;
+    // C1.7 : l'URL saisie doit être appliquée AVANT le POST (comme _submit)
+    // — sinon le code part vers l'ancienne URL (ou une URL vide → crash
+    // ArgumentError, dorénavant attrapé ci-dessous).
+    if (!await _applyServerUrl()) return;
     try {
       await widget.state.api
           .post("/auth/verify-email", {"token": code.trim()});
@@ -125,6 +161,10 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } on ApiException catch (e) {
       setState(() => _error = "Vérification échouée : ${e.message}");
+    } catch (e) {
+      // C1.7 : non-Apex (ArgumentError, http.ClientException, …) → message,
+      // pas de crash.
+      setState(() => _error = S.loginFailed(e));
     }
   }
 
@@ -167,26 +207,92 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Future<void> _submit({bool silent = false}) async {
-    final api = widget.state.api;
-    api.baseUrl = _server.text.trim().replaceAll(RegExp(r"/$"), "");
+  /// M8 (D-5, prod4) : finaliser sur la pile [Home] — popUntil le premier
+  /// « home » de la pile (route initiale "/" = HomeScreen, ou "/home"),
+  /// puis pushReplacement. Sans ça, un login via Réglages laissait
+  /// [Home, Settings, Home] : Back revenait sur Settings (pile résiduelle).
+  /// Si aucun home n'existe dans la pile, le popUntil est un no-op et le
+  /// pushReplacementNamed seul suffit.
+  void _gotoHome() {
+    final nav = Navigator.of(context);
+    nav.popUntil((route) =>
+        route.settings.name == "/" || route.settings.name == "/home");
+    nav.pushReplacementNamed("/home");
+  }
+
+  /// S3 (prod4) : bouton désactivé pendant le submit — un double-tap ne
+  /// doit pas lancer deux logins parallèles (deux `_auth()`, deux persists).
+  bool _busy = false;
+
+  /// 1.4 (prod3) : renvoie `true` si la session est ouverte et le profil
+  /// chargé. `reloadProfile(required: true)` : un profil non chargé laisse
+  /// `email` sur le compte PRÉCÉDENT → pas de purge → fuite des données A
+  /// dans le sync B. Échec → erreur affichée, ni purge ni fullSync.
+  Future<bool> _submit({bool silent = false}) async {
+    if (_busy) return false;
+    _busy = true;
     try {
-      if (_register) {
-        await api.register(_email.text.trim(), _password.text);
-      } else {
-        await api.login(_email.text.trim(), _password.text,
-            totpCode: _totp.text.trim().isEmpty ? null : _totp.text.trim());
+      final api = widget.state.api;
+      if (!await _applyServerUrl()) return false;
+      try {
+        if (_register) {
+          await api.register(_email.text.trim(), _password.text);
+        } else {
+          await api.login(_email.text.trim(), _password.text,
+              totpCode: _totp.text.trim().isEmpty ? null : _totp.text.trim());
+        }
+      } on EmailVerificationRequired {
+        // C1.7 (A1) : register 202 — on reste sur l'écran, pas de
+        // navigation, pas de fullSync, aucun token persisté.
+        if (mounted) setState(() => _error = S.emailVerificationSent);
+        return false;
+      } catch (e) {
+        if (mounted) setState(() => _error = S.loginFailed(e));
+        return false;
       }
       await api.persist();
-      // Fresh login: pull everything, start realtime, reload the profile
-      // (admin flag + feature settings) instead of waiting for a restart.
-      await widget.state.sync.fullSync();
-      await widget.state.sync.listenRealtime();
-      await widget.state.reloadProfile();
-      await widget.state.refreshAfterLogin();
-      if (mounted && !silent) Navigator.pushReplacementNamed(context, "/home");
-    } catch (e) {
-      setState(() => _error = S.loginFailed(e));
+      try {
+        // Le profil d'abord (C2.8 : c'est lui qui donne l'email du compte
+        // pour détecter un changement de compte), puis purge éventuelle des
+        // données locales du précédent, PUIS le pull.
+        await widget.state.reloadProfile(required: true);
+      } catch (e) {
+        // B1 (D-1, prod4) : le profil n'a pas pu être validé → écraser les
+        // tokens persistés par _auth() AVANT l'affichage d'erreur (sinon le
+        // prochain démarrage sync avec les données du compte précédent). Le
+        // pattern « ne persister qu'après succès » est rejeté : _auth() est
+        // partagé (login + refresh) — le catch est minimal et local.
+        api.accessToken = null;
+        api.refreshTokenValue = null;
+        await api.persist();
+        if (mounted) setState(() => _error = S.loginFailed(e));
+        return false;
+      }
+      try {
+        await widget.state.onAccountSwitch();
+        // Fresh login: pull everything, start realtime, reload the profile
+        // (admin flag + feature settings) instead of waiting for a restart.
+        await widget.state.sync.fullSync();
+        await widget.state.sync.listenRealtime();
+        await widget.state.refreshAfterLogin();
+        if (mounted && !silent) _gotoHome();
+      } catch (e) {
+        if (mounted) setState(() => _error = S.loginFailed(e));
+        return false;
+      }
+      return true;
+    } finally {
+      _busy = false;
     }
+  }
+
+  @override
+  // 3.2 (prod3) : contrôleurs jamais disposés.
+  void dispose() {
+    _email.dispose();
+    _password.dispose();
+    _totp.dispose();
+    _server.dispose();
+    super.dispose();
   }
 }

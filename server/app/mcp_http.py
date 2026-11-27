@@ -5,6 +5,7 @@ session per connection and first sends an `endpoint` event naming the URL to
 POST to (/mcp/messages?sessionId=...); each reply goes back on the stream of
 the session that sent the request.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -15,13 +16,17 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from .db import get_session
-from .deps import Principal, accessible_list, get_principal
+from .deps import Principal, accessible_list, get_principal, rate_limit_principal
 from .models import Role
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
+
+
+class InvalidToolParam(ValueError):
+    """Argument d'outil rejeté AVANT exécution : erreur JSON-RPC -32602.
+    Distinct d'un ValueError simple (= résultat isError après exécution)."""
+
 
 TOOLS = [
     {
@@ -123,7 +128,9 @@ async def sse(request: Request, principal: Principal = Depends(get_principal)):
     session_id = uuid.uuid4().hex
     q: asyncio.Queue = asyncio.Queue(maxsize=100)
     _sessions[session_id] = _Session(user_id=str(principal.user_id), queue=q)
-    endpoint = f"{request.scope.get('root_path', '')}/mcp/messages?sessionId={session_id}"
+    endpoint = (
+        f"{request.scope.get('root_path', '')}/mcp/messages?sessionId={session_id}"
+    )
 
     async def event_stream():
         try:
@@ -150,6 +157,7 @@ async def messages(
     payload: dict[str, Any],
     sessionId: str | None = None,  # noqa: N803 — name fixed by the MCP spec
     principal: Principal = Depends(get_principal),
+    _rate_limited: Principal = Depends(rate_limit_principal),
 ):
     """Handle one JSON-RPC message; the reply goes out on the session's SSE
     stream, tagged with the request's id.
@@ -159,11 +167,15 @@ async def messages(
     at once instead of a tool side effect plus a reply nobody receives."""
     session = _resolve_session(sessionId, principal)
     if session is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND,
-                            "No open MCP session: connect to GET /mcp/sse first")
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "No open MCP session: connect to GET /mcp/sse first",
+        )
     if session.queue.full():
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                            "MCP session backlog full: read the SSE stream")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "MCP session backlog full: read the SSE stream",
+        )
 
     # JSON-RPC notification (no "id" member): never answered — a reply would
     # carry id null and could not be correlated with anything.
@@ -185,24 +197,35 @@ async def messages(
         params = payload.get("params")
         arguments = params.get("arguments") if isinstance(params, dict) else None
         if not isinstance(params, dict) or not isinstance(params.get("name"), str):
-            message["error"] = {"code": -32602,
-                                "message": "Invalid params: 'name' is required"}
+            message["error"] = {
+                "code": -32602,
+                "message": "Invalid params: 'name' is required",
+            }
         elif params["name"] not in TOOL_NAMES:
-            message["error"] = {"code": -32602,
-                                "message": f"Unknown tool: {params['name']}"}
+            message["error"] = {
+                "code": -32602,
+                "message": f"Unknown tool: {params['name']}",
+            }
         elif arguments is not None and not isinstance(arguments, dict):
-            message["error"] = {"code": -32602,
-                                "message": "Invalid params: 'arguments' must be an object"}
+            message["error"] = {
+                "code": -32602,
+                "message": "Invalid params: 'arguments' must be an object",
+            }
         else:
             try:
                 result = await _call_tool(principal, params["name"], arguments or {})
                 message["result"] = _tool_result(result)
             except KeyError as e:
-                message["error"] = {"code": -32602,
-                                    "message": f"Invalid params: missing {e}"}
+                message["error"] = {
+                    "code": -32602,
+                    "message": f"Invalid params: missing {e}",
+                }
+            except InvalidToolParam as e:
+                message["error"] = {"code": -32602, "message": str(e)}
             except HTTPException as e:
                 message["result"] = _tool_result(
-                    f"HTTP {e.status_code}: {e.detail}", is_error=True)
+                    f"HTTP {e.status_code}: {e.detail}", is_error=True
+                )
             except ValueError as e:
                 message["result"] = _tool_result(str(e), is_error=True)
             except Exception as e:
@@ -217,28 +240,66 @@ async def messages(
     try:
         await asyncio.wait_for(session.queue.put(message), timeout=REPLY_TIMEOUT)
     except asyncio.TimeoutError:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                            "MCP session backlog full: reply not delivered")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "MCP session backlog full: reply not delivered",
+        )
     return {"status": "ok"}
 
 
 async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> str:
     from uuid import UUID
 
+    from sqlalchemy import select
+
     from .db import SessionLocal
     from .models import Checklist, Item, ListMember
-    from sqlalchemy import select
 
     def _uuid(value: str) -> UUID:
         return UUID(value)
 
     async with SessionLocal() as session:
         if name == "list_lists":
-            # list_lists is already scoped to owned + shared lists; no per-list
-            # gate needed.
+            if principal.list_scope is not None:
+                # Une clé scopée ne voit QUE sa liste — mêmes sémantiques que
+                # accessible_list (deps.py) et /lists (audit lot T).
+                row = (
+                    await session.execute(
+                        select(Checklist).where(
+                            Checklist.id == principal.list_scope,
+                            Checklist.deleted.is_(False),
+                        )
+                    )
+                ).scalar_one_or_none()
+                rows = []
+                if row is not None:
+                    if row.owner_id == principal.user_id:
+                        rows.append(
+                            {"id": str(row.id), "title": row.title, "role": "owner"}
+                        )
+                    else:
+                        member = (
+                            await session.execute(
+                                select(ListMember).where(
+                                    ListMember.list_id == row.id,
+                                    ListMember.user_id == principal.user_id,
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if member is not None:
+                            rows.append(
+                                {
+                                    "id": str(row.id),
+                                    "title": row.title,
+                                    "role": member.role.value,
+                                }
+                            )
+                return json.dumps(rows)
             owned = await session.execute(
                 select(Checklist).where(
-                    Checklist.owner_id == principal.user_id, Checklist.deleted.is_(False))
+                    Checklist.owner_id == principal.user_id,
+                    Checklist.deleted.is_(False),
+                )
             )
             rows = [
                 {"id": str(c.id), "title": c.title, "role": "owner"}
@@ -247,7 +308,10 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
             shared = await session.execute(
                 select(ListMember, Checklist)
                 .join(Checklist, Checklist.id == ListMember.list_id)
-                .where(ListMember.user_id == principal.user_id, Checklist.deleted.is_(False))
+                .where(
+                    ListMember.user_id == principal.user_id,
+                    Checklist.deleted.is_(False),
+                )
             )
             rows += [
                 {"id": str(c.id), "title": c.title, "role": m.role.value}
@@ -263,10 +327,13 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
             )
             checklist = result.scalar_one_or_none()
             items = await session.execute(
-                select(Item).where(
+                select(Item)
+                .where(
                     Item.list_id == _uuid(args["list_id"]),
-                    Item.deleted.is_(False), Item.done.is_(False),
-                ).order_by(Item.position)
+                    Item.deleted.is_(False),
+                    Item.done.is_(False),
+                )
+                .order_by(Item.position)
             )
             labels = [i.label for i in items.scalars()]
             title = checklist.title if checklist else "?"
@@ -274,16 +341,22 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
         if name == "get_list":
             await accessible_list(_uuid(args["list_id"]), principal, session)
             flag = args.get("unchecked_only", False)
-            query = select(Item).where(
-                Item.list_id == _uuid(args["list_id"]), Item.deleted.is_(False)
-            ).order_by(Item.position)
+            query = (
+                select(Item)
+                .where(Item.list_id == _uuid(args["list_id"]), Item.deleted.is_(False))
+                .order_by(Item.position)
+            )
             if flag:
                 query = query.where(Item.done.is_(False))
             items = await session.execute(query)
             return json.dumps(
                 [
-                    {"id": str(i.id), "label": i.label, "done": i.done,
-                     "recurrence": i.recurrence}
+                    {
+                        "id": str(i.id),
+                        "label": i.label,
+                        "done": i.done,
+                        "recurrence": i.recurrence,
+                    }
                     for i in items.scalars()
                 ]
             )
@@ -292,19 +365,61 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
             # principals (scoped API keys) must be refused.
             if principal.read_only:
                 raise HTTPException(status.HTTP_403_FORBIDDEN, "Read-only credentials")
-            await accessible_list(_uuid(args["list_id"]), principal, session, min_role=Role.editor)
-            from .routers.lists import _add_single
-            from .events import record_change, notify_list
-            lines = [l.strip() for l in args["text"].splitlines() if l.strip()]
-            created = []
+            list_id = _uuid(args["list_id"])
+            await accessible_list(list_id, principal, session, min_role=Role.editor)
+            from sqlalchemy import func
+
+            from .events import notify_list, record_change
+
+            lines = [ln.strip() for ln in args["text"].splitlines() if ln.strip()]
+            # C2.11 : mêmes règles que C1.1b (null bytes, label ≤ 2000) —
+            # validées AVANT tout écrit, le lot est tout ou rien.
             for line in lines[:500]:
-                item = await _add_single(session, _uuid(args["list_id"]), line, principal.user_id)
-                created.append(str(item.id))
-            return json.dumps({"created": created})
+                if "\x00" in line or len(line) > 2000:
+                    raise InvalidToolParam(
+                        f"invalid line: null byte or {len(line)} chars (> 2000)"
+                    )
+            # C2.11 : un seul commit de fin + un seul notify_list par tool
+            # call (et non N commits + N notify par ligne).
+            max_pos = (
+                await session.execute(
+                    select(func.coalesce(func.max(Item.position), -1)).where(
+                        Item.list_id == list_id
+                    )
+                )
+            ).scalar()
+            pos = max_pos if max_pos is not None else -1
+            items = []
+            for line in lines[:500]:
+                pos += 1
+                item = Item(
+                    list_id=list_id,
+                    label=line,
+                    position=pos,
+                    created_by=principal.user_id,
+                )
+                session.add(item)
+                items.append(item)
+            await session.flush()  # ids (default Python-side) avant le changelog
+            for item in items:
+                await record_change(
+                    session,
+                    list_id=list_id,
+                    item_id=item.id,
+                    kind="item.upsert",
+                    commit=False,
+                )
+            await session.commit()
+            await notify_list(
+                list_id,
+                {"kind": "item.upsert", "list_id": str(list_id), "count": len(items)},
+            )
+            return json.dumps({"created": [str(i.id) for i in items]})
         if name == "check_item":
             result = await session.execute(
                 select(Item).where(
-                    Item.id == _uuid(args["item_id"]), Item.deleted.is_(False))
+                    Item.id == _uuid(args["item_id"]), Item.deleted.is_(False)
+                )
             )
             item = result.scalar_one_or_none()
             if item is None:
@@ -314,13 +429,16 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
             # a caller-supplied list_id).
             if principal.read_only:
                 raise HTTPException(status.HTTP_403_FORBIDDEN, "Read-only credentials")
-            await accessible_list(item.list_id, principal, session, min_role=Role.editor)
+            await accessible_list(
+                item.list_id, principal, session, min_role=Role.editor
+            )
             done = args.get("done", True)
             if not isinstance(done, bool):
                 raise ValueError("'done' must be a boolean")
             from .events import notify_list, record_change
             from .models import utcnow
             from .routers.lists import _spawn_next
+
             # Same semantics as REST PATCH and sync: the next occurrence of a
             # recurring item is spawned on the not-done -> done transition,
             # and _spawn_next is idempotent per source item.
@@ -331,16 +449,24 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
             spawned = None
             if newly_done and item.recurrence and item.recurrence != "none":
                 spawned = await _spawn_next(session, item, principal.user_id)
-            await record_change(session, list_id=item.list_id, item_id=item.id,
-                                kind="item.upsert")
-            await notify_list(item.list_id, {"kind": "item.upsert",
-                                             "list_id": str(item.list_id),
-                                             "id": str(item.id)})
+            await record_change(
+                session, list_id=item.list_id, item_id=item.id, kind="item.upsert"
+            )
+            await notify_list(
+                item.list_id,
+                {
+                    "kind": "item.upsert",
+                    "list_id": str(item.list_id),
+                    "id": str(item.id),
+                },
+            )
             out = {"id": str(item.id), "done": item.done}
             if spawned is not None:
                 out["next_occurrence"] = {
                     "id": str(spawned.id),
-                    "due_date": spawned.due_date.isoformat() if spawned.due_date else None,
+                    "due_date": spawned.due_date.isoformat()
+                    if spawned.due_date
+                    else None,
                 }
             return json.dumps(out)
     raise ValueError(f"Unknown tool: {name}")

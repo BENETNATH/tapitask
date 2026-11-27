@@ -193,6 +193,13 @@ class AppDb extends _$AppDb {
     );
   }
 
+  /// C2.8 : changement de compte → tout le local (items puis listes) est
+  /// vidé, avant le premier fullSync du nouveau compte.
+  Future<void> wipeLocalData() async {
+    await (delete(localItems)).go();
+    await (delete(localLists)).go();
+  }
+
   /// Mark a list deleted after a server-side deletion (no outbox echo).
   Future<void> applyRemoteListDeletion(String id, DateTime now) async {
     await (update(localLists)..where((l) => l.id.equals(id))).write(

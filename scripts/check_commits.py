@@ -13,12 +13,21 @@ Règles (arbitrées le 02/11, portées de cardinal) :
 
 Fonction pure check_messages(log) -> list[erreurs] ; exit 1 si erreurs.
 """
+
 import re
 import sys
 
 TYPES = (
-    "feat", "fix", "docs", "refactor", "test",
-    "chore", "perf", "style", "build", "ci",
+    "feat",
+    "fix",
+    "docs",
+    "refactor",
+    "test",
+    "chore",
+    "perf",
+    "style",
+    "build",
+    "ci",
 )
 CONVENTIONAL = re.compile(rf"^({'|'.join(TYPES)})(\([^)]+\))?!?: .+")
 
@@ -34,7 +43,7 @@ AI_PATTERNS = (
     "co-authored-by: opencode",
     "co-authored-by: hermes",
     "co-authored-by: qwen",
-    "\U0001F916",  # 🤖
+    "\U0001f916",  # 🤖
 )
 
 

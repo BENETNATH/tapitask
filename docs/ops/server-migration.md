@@ -6,6 +6,11 @@ projet, documentant l'opération réellement exécutée sur la prod le
 quelle stack docker compose du même type (un conteneur `postgres` avec
 volume de data-dir).
 
+**Depuis le lot 2026-11-25**, le service `db` est sous le profil `pg`
+(défaut PG, mais le profil doit être activé) : toutes les commandes
+`docker compose` ci-dessous portent `--profile pg` — sans, le projet est
+rejeté (« service api depends on undefined service db »).
+
 ## Pourquoi dump/restore et pas un upgrade in-place
 
 Depuis les images Docker Postgres 18+, le data-dir vit dans une **sous-
@@ -35,18 +40,18 @@ les compteurs de contrôle (étape 6) :
 
 ```bash
 # a) dump SQL intégral (extracté du conteneur, nettoyé des lignes pg_ctl)
-docker compose exec -T db pg_dumpall -U checklists \
+docker compose --profile pg exec -T db pg_dumpall -U checklists \
   | grep -v '^-- PostgreSQL database dump complete' > backup-pg16.sql
 # (relever aussi les lignes pg_ctl du data-dir si présentes dans le dump)
 # b) tar intégral du data-dir (filet en cas de bug du dump)
-docker compose exec db tar czf /tmp/pg16-data.tar.gz -C /var/lib/postgresql .
-docker compose cp db:/tmp/pg16-data.tar.gz ~/backups/tapitask-2026-11-22/
+docker compose --profile pg exec db tar czf /tmp/pg16-data.tar.gz -C /var/lib/postgresql .
+docker compose --profile pg cp db:/tmp/pg16-data.tar.gz ~/backups/tapitask-2026-11-22/
 ```
 
 Compteurs de contrôle (avant TOUTE opération, dans la base encore vivante) :
 
 ```bash
-docker compose exec db psql -U checklists -d checklists -tAc \
+docker compose --profile pg exec db psql -U checklists -d checklists -tAc \
   "SELECT 'items '||count(*) FROM items
     UNION ALL SELECT 'list_members '||count(*) FROM list_members
     UNION ALL SELECT 'lists '||count(*) FROM lists
@@ -58,7 +63,7 @@ docker compose exec db psql -U checklists -d checklists -tAc \
 ### 2. Arrêt de l'API
 
 ```bash
-docker compose stop api
+docker compose --profile pg stop api
 ```
 
 Si le restore exige un DROP (voir étape 5), couper les connexions actives
@@ -76,18 +81,18 @@ sous-dossier par version à prévoir dans le path de mount). Le volume ancien
 n'est supprimé **qu'APRÈS** les deux backups de l'étape 1 :
 
 ```bash
-docker compose down
+docker compose --profile pg down
 # supprimer le volume ancien (NE JAMAIS avant étape 1 terminée + vérifiée)
 docker volume rm tapitask_pgdata
-# re-create : docker compose up (le volume neuf est recréé au mount)
+# re-create : docker compose --profile pg up -d (le volume neuf est recréé au mount)
 ```
 
 ### 4. Bring-up + restore
 
 ```bash
-docker compose up -d db        # attendre : healthy
-docker compose cp backup-pg16.sql db:/tmp/backup.sql
-docker compose exec db psql -U checklists -d postgres -f /tmp/backup.sql
+docker compose --profile pg up -d db        # attendre : healthy
+docker compose --profile pg cp backup-pg16.sql db:/tmp/backup.sql
+docker compose --profile pg exec db psql -U checklists -d postgres -f /tmp/backup.sql
 ```
 
 ### 5. Piège : le schéma est créé par l'application au boot
@@ -107,7 +112,7 @@ DROP DATABASE checklists;
 CREATE DATABASE checklists;
 ```
 
-puis re-restore propre du dump (étape 4) — puis `docker compose up -d api`.
+puis re-restore propre du dump (étape 4) — puis `docker compose --profile pg up -d api`.
 
 ### 6. Vérification par compteurs
 
@@ -119,8 +124,9 @@ tar de l'étape 1).
 
 ### 7. Smoke
 
-- API : `curl -s -o /dev/null -w '%{http_code}' https://<host>/` → **302**
-  (redirect login).
+- Racine : `curl -s -o /dev/null -w '%{http_code}' https://<host>/` →
+  **302** (redirect login).
+- API : `curl -s https://<host>/health` → **200** `{"status":"ok"}`.
 - `curl` sans token sur une route protégée → **401** (l'auth fonctionne).
 - Logs : **aucun 500** après les premiers appels.
 - Un **seul** worker uvicorn visible (`/proc` du conteneur) — le hub WS

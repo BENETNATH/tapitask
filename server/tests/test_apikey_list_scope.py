@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from httpx import ASGITransport, AsyncClient
-
 import pytest
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture
@@ -36,7 +34,9 @@ async def test_scoped_key_list_scope(client):
         r = await client.post("/lists", json={"title": title}, headers=h)
         ids.append(r.json()["id"])
 
-    r = await client.post("/api-keys", json={"name": "scoped", "list_scope": ids[0]}, headers=h)
+    r = await client.post(
+        "/api-keys", json={"name": "scoped", "list_scope": ids[0]}, headers=h
+    )
     assert r.status_code == 201, r.text
     kh = {"Authorization": f"Bearer {r.json()['key']}"}
 
@@ -51,5 +51,7 @@ async def test_scoped_key_list_scope(client):
 
     # items of the scoped list remain accessible (read + write)
     assert (await client.get(f"/lists/{ids[0]}/items", headers=kh)).status_code == 200
-    r = await client.post(f"/lists/{ids[0]}/items", json={"label": "in-scope"}, headers=kh)
+    r = await client.post(
+        f"/lists/{ids[0]}/items", json={"label": "in-scope"}, headers=kh
+    )
     assert r.status_code == 201, r.text

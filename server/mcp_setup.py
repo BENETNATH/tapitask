@@ -18,6 +18,7 @@ What it does, and what it never does:
 
 Standard library only, so it runs without the server's virtualenv.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -45,6 +46,7 @@ class SetupError(Exception):
 
 # ---------------------------------------------------------------- console --
 
+
 class Console:
     """Prompt/print wrapper so tests can script the answers."""
 
@@ -64,7 +66,9 @@ class Console:
         try:
             return self._input(prompt).strip()
         except EOFError:
-            raise SetupError("no answer available (stdin closed); pass the matching option") from None
+            raise SetupError(
+                "no answer available (stdin closed); pass the matching option"
+            ) from None
 
     def secret(self, prompt: str) -> str:
         try:
@@ -81,6 +85,7 @@ class Console:
 
 
 # -------------------------------------------------------------------- HTTP --
+
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Never follow a redirect: it would replay the Authorization header (or
@@ -103,8 +108,9 @@ class Api:
         self.base = base_url.rstrip("/")
         self._opener = urllib.request.build_opener(_NoRedirect)
 
-    def call(self, method: str, path: str, body: dict | None = None,
-             token: str | None = None) -> tuple[int, object]:
+    def call(
+        self, method: str, path: str, body: dict | None = None, token: str | None = None
+    ) -> tuple[int, object]:
         """Return (status, parsed JSON or None). HTTP errors are returned, not
         raised; only transport failures raise SetupError."""
         headers = {"Content-Type": "application/json"}
@@ -113,7 +119,9 @@ class Api:
         req = urllib.request.Request(
             f"{self.base}{path}",
             data=json.dumps(body).encode() if body is not None else None,
-            headers=headers, method=method)
+            headers=headers,
+            method=method,
+        )
         try:
             with self._opener.open(req, timeout=TIMEOUT) as resp:
                 status, raw = resp.status, resp.read()
@@ -122,7 +130,8 @@ class Api:
             if 300 <= status < 400:
                 raise SetupError(
                     f"{self.base} answered with a redirect (HTTP {status}); "
-                    "use the final URL (e.g. https://...) with --url") from None
+                    "use the final URL (e.g. https://...) with --url"
+                ) from None
         except (urllib.error.URLError, OSError) as e:
             reason = getattr(e, "reason", e)
             raise SetupError(f"cannot reach {self.base}: {reason}") from None
@@ -136,10 +145,15 @@ def check_url(url: str, allow_insecure_http: bool) -> str:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise SetupError(f"invalid --url {url!r}: expected http(s)://host[:port]")
-    if parsed.scheme == "http" and not allow_insecure_http and not _is_loopback(parsed.hostname):
+    if (
+        parsed.scheme == "http"
+        and not allow_insecure_http
+        and not _is_loopback(parsed.hostname)
+    ):
         raise SetupError(
             "refusing to send a password over plain http to a non-local host; "
-            "use https:// (or --allow-insecure-http if the network is trusted)")
+            "use https:// (or --allow-insecure-http if the network is trusted)"
+        )
     return url.rstrip("/")
 
 
@@ -153,6 +167,7 @@ def _is_loopback(host: str) -> bool:
 
 
 # ------------------------------------------------------------------- login --
+
 
 def login(api: Api, con: Console, email: str) -> str:
     """Prompt for the password (and 2FA code when the server asks) and return
@@ -178,11 +193,14 @@ def login(api: Api, con: Console, email: str) -> str:
             raise SetupError("login failed: invalid credentials")
         if status == 429:
             raise SetupError("login refused: too many attempts, try again later")
-        raise SetupError(f"login failed (HTTP {status}){': ' + detail if detail else ''}")
+        raise SetupError(
+            f"login failed (HTTP {status}){': ' + detail if detail else ''}"
+        )
     raise SetupError("login failed: 2FA code rejected")
 
 
 # ------------------------------------------------------------ list helpers --
+
 
 @dataclass
 class Scope:
@@ -201,7 +219,7 @@ def fetch_lists(api: Api, token: str) -> list[dict]:
 def choose_scope(con: Console, lists: list[dict], wanted: str | None) -> Scope:
     if not lists:
         raise SetupError("this account has no accessible list; create one first")
-    by_id = {l["id"]: l for l in lists}
+    by_id = {x["id"]: x for x in lists}
     if wanted is not None:
         if wanted.lower() == "all":
             return Scope(None, "all lists")
@@ -209,11 +227,13 @@ def choose_scope(con: Console, lists: list[dict], wanted: str | None) -> Scope:
             raise SetupError(f"--list {wanted}: not one of your accessible lists")
         return _scope_of(by_id[wanted])
     con.say("Accessible lists:")
-    for i, l in enumerate(lists, 1):
-        con.say(f"  {i}. {l['title']}  [{l.get('role', '?')}]  {l['id']}")
+    for i, lst in enumerate(lists, 1):
+        con.say(f"  {i}. {lst['title']}  [{lst.get('role', '?')}]  {lst['id']}")
     con.say("  a. ALL lists (including lists shared with you later)")
     while True:
-        answer = con.ask("Give the key access to which list? (number, or 'a' for all) ").lower()
+        answer = con.ask(
+            "Give the key access to which list? (number, or 'a' for all) "
+        ).lower()
         if answer in ("a", "all"):
             return Scope(None, "all lists")
         if answer.isdigit() and 1 <= int(answer) <= len(lists):
@@ -229,7 +249,9 @@ def choose_access(con: Console, wanted: str | None) -> bool:
     """Return read_only. Read-only is the default; write must be spelled out."""
     if wanted is not None:
         return wanted != "write"
-    answer = con.ask("Access: press Enter for READ-ONLY, or type 'write' for read+write: ").lower()
+    answer = con.ask(
+        "Access: press Enter for READ-ONLY, or type 'write' for read+write: "
+    ).lower()
     return answer != "write"
 
 
@@ -238,7 +260,9 @@ def slug(text: str, limit: int = 40) -> str:
 
 
 def default_key_name(scope: Scope, read_only: bool) -> str:
-    return f"agent-{slug(scope.label.removeprefix('list '))}-{'ro' if read_only else 'rw'}"
+    return (
+        f"agent-{slug(scope.label.removeprefix('list '))}-{'ro' if read_only else 'rw'}"
+    )
 
 
 def pick_name(con: Console, wanted: str | None, default: str) -> str:
@@ -252,8 +276,11 @@ def pick_name(con: Console, wanted: str | None, default: str) -> str:
 
 # ---------------------------------------------------------- key file store --
 
+
 def config_dir() -> str:
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+        os.path.expanduser("~"), ".config"
+    )
     return os.path.join(base, "tapitask")
 
 
@@ -284,7 +311,8 @@ def prepare_key_dir(path: str, con: Console) -> None:
         if not is_default:
             raise SetupError(
                 f"{parent} has mode {_mode(parent):04o}, expected 0700; use a dedicated "
-                f"directory (default: {config_dir()}) or run chmod 700 on it")
+                f"directory (default: {config_dir()}) or run chmod 700 on it"
+            )
         os.chmod(parent, 0o700)
         con.warn(f"tightened {parent} to mode 0700")
 
@@ -297,7 +325,8 @@ def preflight_key_file(path: str, con: Console, *, overwrite: bool) -> None:
     if os.path.lexists(path) and not overwrite:
         raise SetupError(
             f"{path} already exists; use `rotate` to replace its key, "
-            "or choose another --key-file")
+            "or choose another --key-file"
+        )
     prepare_key_dir(path, con)
 
 
@@ -336,17 +365,31 @@ def read_key_file(path: str) -> str:
 
 # ------------------------------------------------------------ key lifecycle --
 
-def create_key(api: Api, token: str, name: str, read_only: bool, list_id: str | None) -> dict:
-    status, data = api.call("POST", "/api-keys", token=token, body={
-        "name": name, "read_only": read_only, "list_scope": list_id})
-    if status != 201 or not isinstance(data, dict) or not str(data.get("key", "")).startswith(KEY_PREFIX):
+
+def create_key(
+    api: Api, token: str, name: str, read_only: bool, list_id: str | None
+) -> dict:
+    status, data = api.call(
+        "POST",
+        "/api-keys",
+        token=token,
+        body={"name": name, "read_only": read_only, "list_scope": list_id},
+    )
+    if (
+        status != 201
+        or not isinstance(data, dict)
+        or not str(data.get("key", "")).startswith(KEY_PREFIX)
+    ):
         detail = _detail(data)
-        raise SetupError(f"key creation failed (HTTP {status}){': ' + detail if detail else ''}")
+        raise SetupError(
+            f"key creation failed (HTTP {status}){': ' + detail if detail else ''}"
+        )
     return data
 
 
-def verify_key(api: Api, key: str, *, scope: Scope, read_only: bool,
-               expected_ids: set[str]) -> None:
+def verify_key(
+    api: Api, key: str, *, scope: Scope, read_only: bool, expected_ids: set[str]
+) -> None:
     """Exercise the new key without changing any data; raise SetupError on any
     mismatch. Checks: it authenticates, sees exactly the expected lists, can
     read the first one, and — for a read-only key — is refused a write (an
@@ -354,8 +397,10 @@ def verify_key(api: Api, key: str, *, scope: Scope, read_only: bool,
     problems: list[str] = []
     status, data = api.call("GET", "/lists", token=key)
     if status != 200 or not isinstance(data, list):
-        raise SetupError(f"verification failed: the new key was rejected (HTTP {status})")
-    seen = {l["id"] for l in data}
+        raise SetupError(
+            f"verification failed: the new key was rejected (HTTP {status})"
+        )
+    seen = {x["id"] for x in data}
     if seen != expected_ids:
         problems.append(f"it sees {len(seen)} list(s), expected {len(expected_ids)}")
     if seen:
@@ -372,7 +417,7 @@ def verify_key(api: Api, key: str, *, scope: Scope, read_only: bool,
 
 
 def expected_list_ids(lists: list[dict], scope: Scope) -> set[str]:
-    return {l["id"] for l in lists} if scope.list_id is None else {scope.list_id}
+    return {x["id"] for x in lists} if scope.list_id is None else {scope.list_id}
 
 
 def print_client_block(con: Console, url: str, key_file: str) -> None:
@@ -388,8 +433,10 @@ def print_client_block(con: Console, url: str, key_file: str) -> None:
     con.say(f"    CHECKLISTS_API_KEY_FILE={key_file}")
     con.say()
     con.say("Same thing as one shell line (to try it by hand):")
-    con.say(f"  CHECKLISTS_URL={shlex.quote(url)} "
-            f"CHECKLISTS_API_KEY_FILE={shlex.quote(key_file)} {command}")
+    con.say(
+        f"  CHECKLISTS_URL={shlex.quote(url)} "
+        f"CHECKLISTS_API_KEY_FILE={shlex.quote(key_file)} {command}"
+    )
 
 
 def describe(scope: Scope, read_only: bool) -> str:
@@ -397,6 +444,7 @@ def describe(scope: Scope, read_only: bool) -> str:
 
 
 # ----------------------------------------------------------------- commands --
+
 
 def resolve_login(args, con: Console) -> tuple[Api, str, str]:
     url = check_url(args.url, args.allow_insecure_http)
@@ -413,16 +461,26 @@ def cmd_setup(args, con: Console) -> int:
     scope = choose_scope(con, lists, args.list)
     read_only = choose_access(con, args.access)
     if not read_only:
-        con.warn("this key will be able to add, edit and check items "
-                 + ("on EVERY list you can write to." if scope.list_id is None
-                    else f"on {scope.label} (your role there: {scope.role})."))
+        con.warn(
+            "this key will be able to add, edit and check items "
+            + (
+                "on EVERY list you can write to."
+                if scope.list_id is None
+                else f"on {scope.label} (your role there: {scope.role})."
+            )
+        )
         if scope.role == "viewer":
-            con.warn("you are only a viewer of that list: writes will be refused by the server")
+            con.warn(
+                "you are only a viewer of that list: writes will be refused by the server"
+            )
     elif scope.list_id is None:
         con.warn("an all-lists key also covers lists shared with you in the future")
     name = pick_name(con, args.name, default_key_name(scope, read_only))
-    key_file = os.path.abspath(os.path.expanduser(args.key_file)) if args.key_file \
+    key_file = (
+        os.path.abspath(os.path.expanduser(args.key_file))
+        if args.key_file
         else os.path.join(config_dir(), f"{slug(name)}.key")
+    )
     preflight_key_file(key_file, con, overwrite=False)
 
     created = create_key(api, token, name, read_only, scope.list_id)
@@ -432,14 +490,22 @@ def cmd_setup(args, con: Console) -> int:
     except OSError as e:
         raise SetupError(
             f"the key {created['id']} was created but could not be stored ({e.strerror}); "
-            "revoke it with `mcp_setup.py revoke` and retry") from None
+            "revoke it with `mcp_setup.py revoke` and retry"
+        ) from None
     try:
-        verify_key(api, key, scope=scope, read_only=read_only,
-                   expected_ids=expected_list_ids(lists, scope))
+        verify_key(
+            api,
+            key,
+            scope=scope,
+            read_only=read_only,
+            expected_ids=expected_list_ids(lists, scope),
+        )
     except SetupError as e:
         con.warn(f"{e}. The key file was kept; the key id is {created['id']}.")
         return 1
-    con.say(f"Created API key {name!r} (id {created['id']}; {describe(scope, read_only)}); verified.")
+    con.say(
+        f"Created API key {name!r} (id {created['id']}; {describe(scope, read_only)}); verified."
+    )
     show_file_state(con, key_file)
     print_client_block(con, url, key_file)
     con.say()
@@ -449,20 +515,28 @@ def cmd_setup(args, con: Console) -> int:
 
 def show_file_state(con: Console, key_file: str) -> None:
     if _posix():
-        con.say(f"Key file: {key_file} (mode {_mode(key_file):04o}, "
-                f"directory {_mode(os.path.dirname(key_file)):04o})")
+        con.say(
+            f"Key file: {key_file} (mode {_mode(key_file):04o}, "
+            f"directory {_mode(os.path.dirname(key_file)):04o})"
+        )
     else:
         con.say(f"Key file: {key_file}")
-        con.warn("POSIX file modes are not enforced on Windows; the file relies on "
-                 "your user profile's permissions")
+        con.warn(
+            "POSIX file modes are not enforced on Windows; the file relies on "
+            "your user profile's permissions"
+        )
 
 
-def choose_key(con: Console, keys: list[dict], prompt: str, *, allow_none: bool = False):
+def choose_key(
+    con: Console, keys: list[dict], prompt: str, *, allow_none: bool = False
+):
     con.say("Your active API keys:")
     for i, k in enumerate(keys, 1):
         mode = "read-only" if k.get("read_only") else "read+write"
         scope = k.get("list_scope") or "all lists"
-        con.say(f"  {i}. {k['name']}  ({mode}, scope: {scope}, {k['key_prefix']}…, id {k['id']})")
+        con.say(
+            f"  {i}. {k['name']}  ({mode}, scope: {scope}, {k['key_prefix']}…, id {k['id']})"
+        )
     if allow_none:
         con.say("  0. none of these")
     while True:
@@ -491,7 +565,11 @@ def find_key_file(args, con: Console) -> str:
     if args.key_file:
         return os.path.abspath(os.path.expanduser(args.key_file))
     d = config_dir()
-    found = sorted(f for f in os.listdir(d) if f.endswith(".key")) if os.path.isdir(d) else []
+    found = (
+        sorted(f for f in os.listdir(d) if f.endswith(".key"))
+        if os.path.isdir(d)
+        else []
+    )
     if not found:
         raise SetupError(f"no key file found in {d}; pass --key-file")
     if len(found) == 1:
@@ -509,26 +587,46 @@ def cmd_rotate(args, con: Console) -> int:
     current = read_key_file(key_file)
     api, url, token = resolve_login(args, con)
     keys = fetch_keys(api, token)
-    matches = [k for k in keys if k["key_prefix"] == current[:len(k["key_prefix"])]]
+    matches = [k for k in keys if k["key_prefix"] == current[: len(k["key_prefix"])]]
     if len(matches) == 1:
         old = matches[0]
     else:
-        con.warn("could not tell which of your keys this file holds"
-                 if not matches else "several keys share this file's prefix")
-        old = choose_key(con, keys, "Which key is being replaced? (number, 0 = none) ",
-                         allow_none=True) if keys else None
+        con.warn(
+            "could not tell which of your keys this file holds"
+            if not matches
+            else "several keys share this file's prefix"
+        )
+        old = (
+            choose_key(
+                con,
+                keys,
+                "Which key is being replaced? (number, 0 = none) ",
+                allow_none=True,
+            )
+            if keys
+            else None
+        )
     lists = fetch_lists(api, token)
     # The replacement keeps the old key's access: rotation never widens it.
     if old is not None and "list_scope" in old:
         read_only = bool(old.get("read_only"))
-        scope = Scope(None, "all lists") if old["list_scope"] is None else \
-            next((_scope_of(l) for l in lists if l["id"] == old["list_scope"]), None)
+        scope = (
+            Scope(None, "all lists")
+            if old["list_scope"] is None
+            else next(
+                (_scope_of(x) for x in lists if x["id"] == old["list_scope"]), None
+            )
+        )
         if scope is None:
-            raise SetupError("the old key's list is no longer accessible; run `setup` instead")
+            raise SetupError(
+                "the old key's list is no longer accessible; run `setup` instead"
+            )
     else:
-        con.warn("no old key to copy the access from; choose the new key's access"
-                 if old is None else
-                 "the server does not report the old key's scope; choose it again")
+        con.warn(
+            "no old key to copy the access from; choose the new key's access"
+            if old is None
+            else "the server does not report the old key's scope; choose it again"
+        )
         scope = choose_scope(con, lists, args.list)
         read_only = choose_access(con, args.access)
 
@@ -547,23 +645,35 @@ def cmd_rotate(args, con: Console) -> int:
     except OSError as e:
         raise SetupError(
             f"the new key {created['id']} was created but could not be stored ({e.strerror}); "
-            "the old key file is untouched; revoke the new key with `mcp_setup.py revoke`") from None
+            "the old key file is untouched; revoke the new key with `mcp_setup.py revoke`"
+        ) from None
     try:
-        verify_key(api, key, scope=scope, read_only=read_only,
-                   expected_ids=expected_list_ids(lists, scope))
+        verify_key(
+            api,
+            key,
+            scope=scope,
+            read_only=read_only,
+            expected_ids=expected_list_ids(lists, scope),
+        )
     except SetupError as e:
         os.unlink(staged)
-        con.warn(f"{e}. {key_file} still holds the OLD key, which was not touched. "
-                 f"The unused new key has id {created['id']}; revoke it with `mcp_setup.py revoke`.")
+        con.warn(
+            f"{e}. {key_file} still holds the OLD key, which was not touched. "
+            f"The unused new key has id {created['id']}; revoke it with `mcp_setup.py revoke`."
+        )
         return 1
     os.replace(staged, key_file)
-    con.say(f"Created and verified replacement key {name!r} (id {created['id']}; "
-            f"{describe(scope, read_only)}).")
+    con.say(
+        f"Created and verified replacement key {name!r} (id {created['id']}; "
+        f"{describe(scope, read_only)})."
+    )
     show_file_state(con, key_file)
     print_client_block(con, url, key_file)
     con.say()
-    con.say("mcp_server.py re-reads the key file on each request, so a running server "
-            "picks the new key up without a restart.")
+    con.say(
+        "mcp_server.py re-reads the key file on each request, so a running server "
+        "picks the new key up without a restart."
+    )
     if old is None:
         con.say("No old key was selected, so there is nothing to revoke.")
         return 0
@@ -593,23 +703,44 @@ def cmd_revoke(args, con: Console) -> int:
 
 # --------------------------------------------------------------------- main --
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="mcp_setup.py", description="Set up and rotate the Tapitask MCP API key.")
-    p.add_argument("--url", default=os.environ.get("CHECKLISTS_URL", DEFAULT_URL),
-                   help=f"Tapitask API URL (default: $CHECKLISTS_URL or {DEFAULT_URL})")
+        prog="mcp_setup.py", description="Set up and rotate the Tapitask MCP API key."
+    )
+    p.add_argument(
+        "--url",
+        default=os.environ.get("CHECKLISTS_URL", DEFAULT_URL),
+        help=f"Tapitask API URL (default: $CHECKLISTS_URL or {DEFAULT_URL})",
+    )
     p.add_argument("--email", help="account email (asked if omitted)")
-    p.add_argument("--allow-insecure-http", action="store_true",
-                   help="allow http:// to a non-local host (the password travels in clear)")
+    p.add_argument(
+        "--allow-insecure-http",
+        action="store_true",
+        help="allow http:// to a non-local host (the password travels in clear)",
+    )
     sub = p.add_subparsers(dest="command", required=True)
     s = sub.add_parser("setup", help="create a key and store it in a 0600 file")
-    s.add_argument("--list", metavar="ID|all", help="list id, or 'all' (asked if omitted)")
-    s.add_argument("--access", choices=("read", "write"),
-                   help="read-only or read+write (asked if omitted; default read-only)")
+    s.add_argument(
+        "--list", metavar="ID|all", help="list id, or 'all' (asked if omitted)"
+    )
+    s.add_argument(
+        "--access",
+        choices=("read", "write"),
+        help="read-only or read+write (asked if omitted; default read-only)",
+    )
     s.add_argument("--name", help="key name")
-    s.add_argument("--key-file", help=f"where to store the key (default: {config_dir()}/<name>.key)")
-    r = sub.add_parser("rotate", help="replace a key file's key, verify it, offer to revoke the old one")
-    r.add_argument("--key-file", help="the key file to rotate (default: pick from the config dir)")
+    s.add_argument(
+        "--key-file",
+        help=f"where to store the key (default: {config_dir()}/<name>.key)",
+    )
+    r = sub.add_parser(
+        "rotate",
+        help="replace a key file's key, verify it, offer to revoke the old one",
+    )
+    r.add_argument(
+        "--key-file", help="the key file to rotate (default: pick from the config dir)"
+    )
     r.add_argument("--name", help="name of the new key")
     r.add_argument("--list", metavar="ID|all", help=argparse.SUPPRESS)
     r.add_argument("--access", choices=("read", "write"), help=argparse.SUPPRESS)
@@ -621,7 +752,9 @@ def main(argv: list[str] | None = None, console: Console | None = None) -> int:
     args = build_parser().parse_args(argv)
     con = console or Console()
     try:
-        return {"setup": cmd_setup, "rotate": cmd_rotate, "revoke": cmd_revoke}[args.command](args, con)
+        return {"setup": cmd_setup, "rotate": cmd_rotate, "revoke": cmd_revoke}[
+            args.command
+        ](args, con)
     except SetupError as e:
         print(f"error: {e}", file=con.err)
         return 1

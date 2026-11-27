@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_serializer,
+    field_validator,
+)
 
 from .models import Role as RoleEnum
 
@@ -70,11 +77,15 @@ class VerifyEmailIn(BaseModel):
 class TotpSetupOut(BaseModel):
     secret: str
     uri: str
+    # MD-2 (prod3) : token court signé (~10 min) portant le secret en attente.
+    token: str
 
 
 class TotpEnableIn(BaseModel):
     code: str
     disable: bool = False
+    # MD-2 (prod3) : requis pour activer (pas pour désactiver).
+    token: str | None = None
 
 
 class ChecklistIn(BaseModel):
@@ -84,8 +95,8 @@ class ChecklistIn(BaseModel):
 
     @field_validator("title", "folder")
     @classmethod
-    def _check_null(cls, v: str) -> str:
-        return _no_null_bytes(v)
+    def _check_null(cls, v: str | None) -> str | None:
+        return v if v is None else _no_null_bytes(v)
 
 
 class ChecklistOut(BaseModel):
@@ -144,7 +155,9 @@ class ItemPatch(BaseModel):
     done: bool | None = None
     position: int | None = None
     parent_id: UUID | None = None
-    recurrence: str | None = Field(default=None, pattern="^(none|daily|weekly|monthly)$")
+    recurrence: str | None = Field(
+        default=None, pattern="^(none|daily|weekly|monthly)$"
+    )
     due_date: datetime | None = None
     notes: str | None = None
     assignee_id: UUID | None = None
@@ -168,8 +181,13 @@ class ItemsBulkIn(BaseModel):
 
 
 class SyncEvent(BaseModel):
+    # Structure only: the field checks (null bytes, lengths, recurrence
+    # enum) are applied PER EVENT inside the sync loop via
+    # validate_sync_event — request-level validation would 400 the whole
+    # batch and poison the client's outbox forever (audit C1.1b).
     kind: str = Field(
-        pattern="^(item.upsert|item.delete|list.rename|list.create|list.delete)$")
+        pattern="^(item.upsert|item.delete|list.rename|list.create|list.delete)$"
+    )
     id: UUID
     list_id: UUID
     label: str | None = None
@@ -185,6 +203,32 @@ class SyncEvent(BaseModel):
     due_date: datetime | None = None
     due_day: date | None = None
     updated_at: datetime
+
+
+def validate_sync_event(event: SyncEvent) -> None:
+    """Mêmes contrôles que ItemIn/ChecklistIn sur un event de sync
+    (interdiction \x00, longueurs, enum recurrence). Lève ValueError :
+    l'appelant (sync) le bascule dans `rejected` — un event malformé ne
+    réussira jamais → rejet, pas de retry."""
+    for field, value, max_len in (
+        ("label", event.label, 2000),
+        ("notes", event.notes, None),
+        ("color", event.color, 16),
+        ("folder", event.folder, 100),
+    ):
+        if value is None:
+            continue
+        if "\x00" in value:
+            raise ValueError(f"{field}: null bytes are not allowed")
+        if max_len is not None and len(value) > max_len:
+            raise ValueError(f"{field}: at most {max_len} characters")
+    if event.recurrence is not None and event.recurrence not in (
+        "none",
+        "daily",
+        "weekly",
+        "monthly",
+    ):
+        raise ValueError("recurrence: must be none, daily, weekly or monthly")
 
 
 class SyncIn(BaseModel):
@@ -251,7 +295,6 @@ class MemberIn(BaseModel):
 
 class MemberRoleIn(BaseModel):
     role: RoleEnum
-
 
 
 class AdminUserCreateIn(BaseModel):

@@ -63,6 +63,12 @@ class ListWidgetProvider : AppWidgetProvider() {
                 bindOpen(context, views, null)
                 views.setViewVisibility(R.id.widget_prev, android.view.View.GONE)
                 views.setViewVisibility(R.id.widget_next, android.view.View.GONE)
+                // 2.1 (prod3) : masquer les items ET signaler le changement —
+                // sans notifyAppWidgetViewDataChanged, les anciens items
+                // restent affichés (adapter non rappelé).
+                views.setViewVisibility(R.id.widget_items, android.view.View.GONE)
+                appWidgetManager.notifyAppWidgetViewDataChanged(
+                    appWidgetId, R.id.widget_items)
                 appWidgetManager.updateAppWidget(appWidgetId, views)
             }
             return
@@ -220,6 +226,9 @@ class ListWidgetProvider : AppWidgetProvider() {
             PendingIntent.getBroadcast(context, 0,
                 Intent(context, ListWidgetProvider::class.java),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE))
+        // 2.1 (prod3) : re-afficher si le widget a passé par l'état
+        // « aucune liste » (GONE dans la branche total == 0).
+        views.setViewVisibility(R.id.widget_items, android.view.View.VISIBLE)
         views.setRemoteAdapter(R.id.widget_items,
             Intent(context, WidgetItemsRemoteViewsService::class.java)
                 .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))

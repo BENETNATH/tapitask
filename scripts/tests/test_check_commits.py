@@ -5,6 +5,7 @@ Règles (portées de cardinal, arbitrées 02/11) :
 - pas d'attribution IA dans le message
 Fonction pure check_messages(log) testable sans git.
 """
+
 import subprocess
 import sys
 from pathlib import Path
@@ -72,7 +73,18 @@ def test_scope_and_breaking_allowed():
 
 def test_all_conventional_types():
     m = import_module()
-    for t in ("feat", "fix", "docs", "refactor", "test", "chore", "perf", "style", "build", "ci"):
+    for t in (
+        "feat",
+        "fix",
+        "docs",
+        "refactor",
+        "test",
+        "chore",
+        "perf",
+        "style",
+        "build",
+        "ci",
+    ):
         assert m.check_messages(log_of(f"{t}: ok")) == [], t
 
 
@@ -89,12 +101,13 @@ def test_ai_attribution_coaduthor_claude_fails():
 
 
 def test_generated_with_fails_case_insensitive():
-    m = import_module()
-    assert import_module().check_messages(log_of("fix: ok\n\nGENERATED WITH OpenCode")) != []
+    assert (
+        import_module().check_messages(log_of("fix: ok\n\nGENERATED WITH OpenCode"))
+        != []
+    )
 
 
 def test_robot_emoji_fails():
-    m = import_module()
     assert import_module().check_messages(log_of("fix: ok 🤖")) != []
 
 
@@ -105,9 +118,7 @@ def test_clean_coaduthor_human_passes():
 
 def test_multi_commit_lists_all_failures():
     m = import_module()
-    errors = m.check_messages(
-        log_of("Fix stuff", "feat: ok", "Update README")
-    )
+    errors = m.check_messages(log_of("Fix stuff", "feat: ok", "Update README"))
     assert "deadbeef000000" in errors[0]
     assert "deadbeef000002" in errors[-1]
     assert len(errors) == 2

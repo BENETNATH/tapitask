@@ -20,7 +20,7 @@ Client Windows (icône systray + volet rapide), Android (widgets d'écran d'accu
                      ▼
         ┌─────────────────────────┐
         │  Serveur FastAPI        │
-        │  Postgres + Docker      │
+        │  Postgres / SQLite     │
         │  comptes, partage, 2FA │
         └─────────────────────────┘
 ```
@@ -49,6 +49,7 @@ Client Windows (icône systray + volet rapide), Android (widgets d'écran d'accu
 | Volet Windows | ancré près du tray, ajout rapide en bas, listes épinglées en chips, épingle « toujours visible », redimensionnable/déplaçable |
 | Widgets Android | liste cochable 2×2 (redimensionnable), ◀▶ pour changer de liste, couleur par liste, bouton ＋ qui ouvre l'app sur la liste active (champ d'ajout focalisé), bouton « Ouvrir » en icône, widget 1×1 d'ajout rapide ; le cochage fait dans le widget est appliqué dans l'app au retour au premier plan |
 | Partage | code d'invitation, email (SMTP), rôles, changement de rôle |
+| Export / Import | par liste (menu « Exporter / Importer » : JSON, Markdown Obsidian, CSV) et global dans les réglages (Tout exporter JSON/CSV) ; l'import (JSON ou Markdown) crée toujours de nouvelles listes à nouveaux UUIDs — jamais de merge |
 | Notifications | par appli et/ou par email, au choix de chaque utilisateur |
 | Admin | création/désactivation de comptes, promotion admin, audit |
 | Thème | clair / sombre / système (synchronisé) |
@@ -58,13 +59,13 @@ Client Windows (icône systray + volet rapide), Android (widgets d'écran d'accu
 ```bash
 git clone <votre-repo> tapitask && cd tapitask
 cp .env.example .env
-# éditez .env : DB_PASSWORD, JWT_SECRET (openssl rand -hex 32), ADMIN_EMAIL/PASSWORD…
-docker compose up -d --build
+# éditez .env : DB_PASSWORD (mode PG), JWT_SECRET (openssl rand -hex 32), ADMIN_EMAIL/PASSWORD…
+bash scripts/compose-up.sh --build    # lit DB_BACKEND (défaut postgres) → le bon compose
 curl http://localhost:8000/health     # {"status":"ok"}
 ```
 
-L'API est exposée sur `API_PORT` (défaut 8000) : pointez votre reverse proxy (nginx, Caddy…) dessus pour le TLS.
-Alternative : TLS intégré avec `--profile caddy` (renseignez `DOMAIN`).
+L'API est exposée sur `API_PORT` (défaut 8000, écoute loopback par défaut — `API_BIND`) : pointez votre reverse proxy (nginx, Caddy…) dessus pour le TLS.
+Alternative : TLS intégré avec `bash scripts/compose-up.sh --profile caddy` (renseignez `DOMAIN`).
 
 Docs API : `http://VOTRE_DOMAINE/docs` (Swagger) — spec : `/openapi.json`.
 
@@ -114,7 +115,7 @@ Persistence locale web (SQLite WASM) : servir `sqlite3.wasm` avec `Content-Type:
 La webapp se sert en statique par nginx (profil Docker `web`, port `WEB_PORT` 8080) :
 
 ```bash
-docker compose --profile web up -d      # après transfert de app/build/web sur le serveur
+bash scripts/compose-up.sh --profile web   # après transfert de app/build/web sur le serveur
 ```
 
 Détails et intégration reverse proxy : [DEPLOIEMENT-UBUNTU.md](DEPLOIEMENT-UBUNTU.md).
@@ -122,15 +123,16 @@ Détails et intégration reverse proxy : [DEPLOIEMENT-UBUNTU.md](DEPLOIEMENT-UBU
 ## Structure du monorepo
 
 ```
-├── docker-compose.yml      # db (Postgres) + api + web (webapp) + caddy (optionnel)
+├── docker-compose.yml      # db (Postgres, profil `pg`) + api + web (webapp) + caddy (optionnel)
+├── docker-compose.sqlite.yml # mode SQLite : api seul, fichier de base sur le volume `data`
 ├── .env.example            # configuration documentée
 ├── Caddyfile               # TLS intégré (optionnel)
 ├── DEPLOIEMENT-UBUNTU.md   # guide de déploiement pas à pas
 ├── SECURITY.md             # modèle de menace + bonnes pratiques
 ├── docs/screenshots/       # captures d'écran de l'interface (README)
-├── server/                 # backend FastAPI (async) + 63 tests
-│   ├── app/                # auth, listes, partage, sync, admin, clés API, MCP HTTP
-│   ├── tests/              # pytest (SQLite), couverture auth/sync/partage/smtp
+├── server/                 # backend FastAPI (async) + 249 tests
+│   ├── app/                # auth, listes, partage, sync, admin, clés API, MCP, import/export
+│   ├── tests/              # pytest (SQLite) : auth, sync, partage, admin, webhooks, MCP, import/export, db
 │   └── Dockerfile
 ├── app/                    # client Flutter (Windows / Android / Web)
 │   ├── lib/                # UI, base locale Drift/SQLite, synchro, tray, widgets
@@ -138,7 +140,7 @@ Détails et intégration reverse proxy : [DEPLOIEMENT-UBUNTU.md](DEPLOIEMENT-UBU
 │   └── windows/            # runner + flyout Win32 natif (C++)
 ├── specs/                  # specs de développement (contrats d'implémentation)
 ├── .github/workflows/      # CI harness (gates) + release-artifacts (binaires)
-└── scripts/                # setup assisté (Windows .ps1, Linux .sh), init_flutter
+└── scripts/                # compose-up.sh (wrapper de lancement), setup assisté (.ps1/.sh), init_flutter
 ```
 
 ## Modèle de synchronisation
@@ -182,9 +184,10 @@ tard). `mcp_server.py` relit le fichier à chaque requête : pas de redémarrage
 
 ## Environnement de développement — serveur
 
-Le serveur est un projet **FastAPI / Python 3.12**. Toutes les dépendances (runtime
-**et** tests, dont `aiohttp` pour le test de livraison HMAC des webhooks) sont
-déclarées dans `server/requirements.txt`.
+Le serveur est un projet **FastAPI / Python 3.12+** (image Docker :
+`python:3.15-slim`). Toutes les dépendances (runtime **et** tests, dont
+`aiohttp` pour le test de livraison HMAC des webhooks) sont déclarées dans
+`server/requirements.txt`.
 
 ```bash
 cd server
@@ -194,7 +197,7 @@ python3 -m venv .venv                 # Python 3.12+ ; `.venv` est dans .gitigno
 .venv/bin/pip check                   # aucune dépréciation / dépendance cassée
 ```
 
-Lancer l'API (SQLite en dev, ou Postgres via `.env`) :
+Lancer l'API (Postgres par défaut ; SQLite en dev via `DATABASE_URL=sqlite+aiosqlite:///./tapitask.db`) :
 
 ```bash
 cd server
@@ -208,12 +211,13 @@ le keystore Android aussi.
 ## Tests
 
 ```bash
-# Serveur — 63 tests (auth, sync, partage, admin, webhooks HMAC, MCP, rate limiting)
+# Serveur — 249 tests (3 skipped sans DSN Postgres) :
+# auth, sync, partage, admin, webhooks HMAC, MCP, import/export, rate limiting
 cd server
 .venv/bin/python -m pytest -q
 ```
 
-Client (Flutter) — 31 tests :
+Client (Flutter) — 139 tests :
 
 ```bash
 # Prérequis système (Linux) : les plugins tray desktop déclenchent un build
@@ -240,7 +244,7 @@ attache au release :
 | Artefact | Runner | Commande |
 |---|---|---|
 | `tapitask-<tag>-windows-x64.zip` (exe + data) | `windows-latest` | `flutter build windows --release` |
-| `tapitask-<tag>-android.apk` (APK signé) | `ubuntu-latest` | `flutter build apk --release` |
+| `tapitask-<tag>-android.apk` (APK signé) | `ubuntu-26.04` | `flutter build apk --release` |
 
 ### Configuration du signing Android
 
@@ -277,7 +281,8 @@ Puis publie un release (tag `vX.Y.Z`) : les artefacts apparaissent sur
 ## Sécurité — voir [SECURITY.md](SECURITY.md)
 
 Argon2id · JWT à courte durée + refresh rotatifs révocables · 2FA TOTP · clés API hachées ·
-rate limiting + lockout · CORS strict · Postgres non exposé · en-têtes de sécurité (Caddy).
+rate limiting + lockout · CORS strict · base non exposée (Postgres interne en mode PG,
+fichier local en mode SQLite) · en-têtes de sécurité (Caddy).
 
 ## Licence
 

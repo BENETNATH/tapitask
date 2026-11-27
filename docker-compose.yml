@@ -1,6 +1,11 @@
 services:
+  # db est sous profile « pg » (spec 2026-11-25, D-1) : le mode SQLite
+  # (docker-compose.sqlite.yml) n'a pas de service de base de données.
+  # PG reste le défaut — le wrapper scripts/compose-up.sh et
+  # scripts/deploy_server.sh lancent avec --profile pg.
   db:
     image: postgres:19-alpine
+    profiles: ["pg"]
     restart: unless-stopped
     environment:
       POSTGRES_USER: checklists
@@ -35,6 +40,15 @@ services:
       SMTP_FROM: ${SMTP_FROM:-tapitask@localhost}
       # --- Rate limiting multi-workers (optionnel) ---
       REDIS_URL: ${REDIS_URL:-}
+      # Variables de config.py absentes de l'environment (audit C1.4) :
+      # sans ce pass-through, les valeurs par défaut du code ne peuvent pas
+      # être réglées en production.
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-20}
+      PRINCIPAL_RATE_LIMIT_PER_MINUTE: ${PRINCIPAL_RATE_LIMIT_PER_MINUTE:-300}
+      WS_PING_INTERVAL: ${WS_PING_INTERVAL:-30.0}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      WEBHOOK_ALLOWED_HOSTS: ${WEBHOOK_ALLOWED_HOSTS:-}
+      WEBHOOKS_MAX_PER_LIST: ${WEBHOOKS_MAX_PER_LIST:-10}
     depends_on:
       db:
         condition: service_healthy
@@ -52,7 +66,8 @@ services:
       - ./app/build/web:/usr/share/nginx/html:ro
     networks: [internal]
     ports:
-      - "${WEB_PORT:-8080}:80"
+      # Web en clair : écoute loopback par défaut, comme l'API (audit lot T).
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80"
     profiles: ["web"]
 
   # TLS intégré (optionnel) : --profile caddy

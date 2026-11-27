@@ -21,6 +21,19 @@ class S {
     "delete": "Supprimer",
     "rename": "Renommer",
     "share": "Partager",
+    // --- import/export (spec 2026-11-25, D-7) ---
+    "importExport": "Exporter / Importer",
+    "exportJson": "Exporter en JSON",
+    "exportMarkdown": "Exporter en Markdown",
+    "exportCsv": "Exporter en CSV",
+    "importFile": "Importer un fichier…",
+    "importFileHint": "JSON (export Tapitask) ou Markdown (Obsidian)",
+    "exportAllJson": "Tout exporter (JSON)",
+    "exportAllCsv": "Tout exporter (CSV)",
+    "exportedOk": "Export réussi",
+    "importedOk": "Import réussi",
+    "exportFailed": "Échec de l'export",
+    "importFailed": "Échec de l'import",
     "later": "Plus tard",
     "none": "Aucun",
     "remove": "Retirer",
@@ -67,8 +80,14 @@ class S {
     "codeFromEmail": "Code reçu par email",
     "verifyEmail": "Vérifier mon email",
     "emailVerified": "Email vérifié — tu peux te connecter ✔",
+    "emailVerificationSent":
+        "Un email de vérification a été envoyé — utilise « Vérifier mon email ».",
     "emailOptional": "facultatif",
     "notConfigured": "Non configuré",
+    "insecureServer": "Connexion non chiffrée — le serveur est en http://",
+    "insecureServerTitle": "Connexion non chiffrée",
+    "insecureServerBody":
+        "Le serveur utilise http:// : le mot de passe et les données voyagent en clair. Continuer quand même ?",
     // --- listes / items ---
     "nothingToDo": "Rien à faire",
     "nothingToDoAdd": "Rien à faire — ajoutez un item !",
@@ -243,6 +262,18 @@ class S {
     "delete": "Delete",
     "rename": "Rename",
     "share": "Share",
+    "importExport": "Export / Import",
+    "exportJson": "Export as JSON",
+    "exportMarkdown": "Export as Markdown",
+    "exportCsv": "Export as CSV",
+    "importFile": "Import a file…",
+    "importFileHint": "JSON (Tapitask export) or Markdown (Obsidian)",
+    "exportAllJson": "Export all (JSON)",
+    "exportAllCsv": "Export all (CSV)",
+    "exportedOk": "Export saved",
+    "importedOk": "Import OK",
+    "exportFailed": "Export failed",
+    "importFailed": "Import failed",
     "later": "Later",
     "none": "None",
     "remove": "Remove",
@@ -287,8 +318,14 @@ class S {
     "codeFromEmail": "Code received by email",
     "verifyEmail": "Verify my email",
     "emailVerified": "Email verified — you can sign in ✔",
+    "emailVerificationSent":
+        "A verification email was sent — use \"Verify my email\".",
     "emailOptional": "optional",
     "notConfigured": "Not configured",
+    "insecureServer": "Unencrypted connection — server is over http://",
+    "insecureServerTitle": "Unencrypted connection",
+    "insecureServerBody":
+        "The server uses http://: your password and data travel in cleartext. Continue anyway?",
     "nothingToDo": "Nothing to do",
     "nothingToDoAdd": "Nothing to do — add an item!",
     "nothingToday": "Nothing due today",
@@ -519,8 +556,12 @@ class S {
   static String get codeFromEmail => t("codeFromEmail");
   static String get verifyEmail => t("verifyEmail");
   static String get emailVerified => t("emailVerified");
+  static String get emailVerificationSent => t("emailVerificationSent");
   static String get emailOptional => t("emailOptional");
   static String get notConfigured => t("notConfigured");
+  static String get insecureServer => t("insecureServer");
+  static String get insecureServerTitle => t("insecureServerTitle");
+  static String get insecureServerBody => t("insecureServerBody");
   static String get nothingToDo => t("nothingToDo");
   static String get nothingToDoAdd => t("nothingToDoAdd");
   static String get nothingToday => t("nothingToday");
@@ -660,6 +701,20 @@ class S {
   static String get passwordOrTotpInvalid => t("passwordOrTotpInvalid");
   static String get emailAlreadyUsed => t("emailAlreadyUsed");
   static String get emailVerifyUnavailable => t("emailVerifyUnavailable");
+
+  // --- import/export (spec 2026-11-25, D-7) ---
+  static String get importExport => t("importExport");
+  static String get exportJson => t("exportJson");
+  static String get exportMarkdown => t("exportMarkdown");
+  static String get exportCsv => t("exportCsv");
+  static String get importFile => t("importFile");
+  static String get importFileHint => t("importFileHint");
+  static String get exportAllJson => t("exportAllJson");
+  static String get exportAllCsv => t("exportAllCsv");
+  static String get exportedOk => t("exportedOk");
+  static String get importedOk => t("importedOk");
+  static String get exportFailed => t("exportFailed");
+  static String get importFailed => t("importFailed");
 
   // --- messages paramétrés ---
   static String calendarDays(int days) => locale == "en" ? "$days days" : "$days jours";

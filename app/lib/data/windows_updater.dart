@@ -28,11 +28,22 @@ rem Copie du contenu de update-tmp vers le repertoire de l'app
 rem (sans backslash final avant la guillemet fermante : piège de quoting cmd).
 xcopy /E /Y /I "$tmpDir\\*" "$appDir"
 del "$appDir\\run_update.bat"
-del "%~f0"
-rmdir /S /Q "$tmpDir"
-rem Relance de l'app mise a jour, puis effacement du bat.
+rem `del %~f0` est STRICTEMENT la derniere ligne non vide : une ligne apres
+rem l'effacement du bat n'est jamais executee (cmd perd le fichier de
+rem commandes). Le dossier update-tmp subsiste : un rmdir apres del %~f0
+rem reproduirait le meme bug.
 start "" "$appDir\\tapitask.exe"
+del "%~f0"
 ''';
+}
+
+/// 2.5 (prod3) : garde Zip Slip — true si [name] (tel que normalisé par
+/// [extractUpdateZip]) reste dans [baseDir] après canonicalisation.
+/// `Release/../evil` → `../evil` → refus.
+bool isSafeZipEntry(String name, {required String baseDir}) {
+  final base = p.canonicalize(baseDir);
+  final target = p.canonicalize(p.join(baseDir, name));
+  return target == base || target.startsWith(base + p.separator);
 }
 
 /// Décompression du zip de release : le contenu du dossier `Release\`
@@ -58,17 +69,42 @@ Future<void> runSelfUpdate(UpdateInfo info) async {
   if (windowsUrl == null) {
     throw StateError("pas d'asset Windows pour la MAJ");
   }
+  // 2.5 (prod3) : https uniquement — un http:// laisserait l'archive signer
+  // sur le fil.
+  if (!windowsUrl.startsWith("https://")) {
+    throw StateError("URL de téléchargement non https : $windowsUrl");
+  }
   final appDir = p.dirname(Platform.resolvedExecutable);
   final tmpDir = p.join(appDir, "update-tmp");
   final dir = Directory(tmpDir);
   if (dir.existsSync()) dir.deleteSync(recursive: true);
   dir.createSync(recursive: true);
-  final zipBytes = await http.readBytes(Uri.parse(windowsUrl));
+  // 2.5 : téléchargement en STREAM vers le fichier (plus de readBytes
+  // plein-charge en RAM) + timeout sur la phase de connexion. Le zip est
+  // ensuite lu depuis le fichier (nécessaire pour l'extraire).
+  final zipFile = File(p.join(appDir, "update-tmp.zip"));
+  final client = http.Client();
+  try {
+    final streamed = await client
+        .send(http.Request("GET", Uri.parse(windowsUrl)))
+        .timeout(const Duration(seconds: 30));
+    if (streamed.statusCode != 200) {
+      throw StateError("téléchargement échoué : HTTP ${streamed.statusCode}");
+    }
+    await streamed.stream.pipe(zipFile.openWrite());
+  } finally {
+    client.close();
+  }
+  final zipBytes = await zipFile.readAsBytes();
   for (final entry in extractUpdateZip(zipBytes).entries) {
+    // 2.5 : une entrée dont le chemin canonique sort de tmpDir est
+    // ignorée (Zip Slip) — elle ne doit jamais être écrite.
+    if (!isSafeZipEntry(entry.key, baseDir: tmpDir)) continue;
     final file = File(p.join(tmpDir, entry.key));
     file.parent.createSync(recursive: true);
     await file.writeAsBytes(entry.value);
   }
+  zipFile.deleteSync();
   final bat = File(p.join(tmpDir, "run_update.bat"));
   bat.writeAsStringSync(buildUpdateBat(appDir: appDir, tmpDir: tmpDir));
   // Le bat est détaché : il tourne après notre exit(0), quand tapitask.exe

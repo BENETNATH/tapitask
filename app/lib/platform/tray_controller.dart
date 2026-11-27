@@ -1,6 +1,6 @@
 import "dart:io";
 
-import "package:material_ui/material_ui.dart";
+import "package:flutter/services.dart";
 import "package:tray_manager/tray_manager.dart";
 import "package:window_manager/window_manager.dart";
 
@@ -43,6 +43,14 @@ class TrayController {
     if (state.settings["start_hidden"] != true) {
       window.show();
       window.focus();
+    }
+    // C2.4 : le Show() de la 1re frame du runner natif suit le MÊME flag —
+    // sans cet appel, la fenêtre réapparaît à la 1re frame malgré
+    // "Démarrer dans la barre des tâches" (le réglage Dart est la source
+    // de vérité ; le canal n'existe que sur Windows).
+    if (Platform.isWindows) {
+      await MethodChannel("tapitask/win32").invokeMethod(
+          "setStartHidden", {"hidden": state.settings["start_hidden"] == true});
     }
 
     // ---- Tray icon. ----

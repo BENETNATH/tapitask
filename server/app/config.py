@@ -3,6 +3,12 @@ from __future__ import annotations
 import os
 
 
+def _parse_csv(value: str | None) -> list[str]:
+    """MD-6 (prod3) : parsing CSV honnête — espaces stripés, vides écartés
+    ("" → [], pas [""])."""
+    return [h.strip() for h in (value or "").split(",") if h.strip()]
+
+
 class Settings:
     DATABASE_URL: str = os.environ.get(
         "DATABASE_URL",
@@ -10,9 +16,20 @@ class Settings:
     )
     JWT_SECRET: str = os.environ.get("JWT_SECRET", "")
     ACCESS_TOKEN_TTL: int = int(os.environ.get("ACCESS_TOKEN_TTL", "900"))
-    REFRESH_TOKEN_TTL: int = int(os.environ.get("REFRESH_TOKEN_TTL", str(60 * 60 * 24 * 30)))
-    CORS_ORIGINS: list[str] = os.environ.get("CORS_ORIGINS", "http://localhost:8080").split(",")
+    REFRESH_TOKEN_TTL: int = int(
+        os.environ.get("REFRESH_TOKEN_TTL", str(60 * 60 * 24 * 30))
+    )
+    # M4 (prod4) : mêmes règles que TRUSTED_PROXIES — "a, b" → ["a", "b"]
+    # (espaces stripés, vides écartés), pas ["a", " b"].
+    CORS_ORIGINS: list[str] = _parse_csv(
+        os.environ.get("CORS_ORIGINS", "http://localhost:8080")
+    )
     RATE_LIMIT_PER_MINUTE: int = int(os.environ.get("RATE_LIMIT_PER_MINUTE", "20"))
+    # Rate limit par principal sur les canaux écriture lourds (/sync, bulk
+    # items, MCP messages) (audit lot T).
+    PRINCIPAL_RATE_LIMIT_PER_MINUTE: int = int(
+        os.environ.get("PRINCIPAL_RATE_LIMIT_PER_MINUTE", "300")
+    )
     ADMIN_EMAIL: str = os.environ.get("ADMIN_EMAIL", "")
     ADMIN_PASSWORD: str = os.environ.get("ADMIN_PASSWORD", "")
 
@@ -33,7 +50,9 @@ class Settings:
     # peer is one of these is X-Forwarded-For trusted for rate-limit keys;
     # otherwise the rate-limit/lockout key falls back to the direct peer IP so
     # a client cannot rotate a forged XFF header to defeat brute-force limits.
-    TRUSTED_PROXIES: list[str] = os.environ.get("TRUSTED_PROXIES", "").split(",")
+    # MD-6 (prod3) : strip + vides écartés (avant le fix : "a, b" → ["a", " b"]
+    # jamais égal au peer ; "" → [""]).
+    TRUSTED_PROXIES: list[str] = _parse_csv(os.environ.get("TRUSTED_PROXIES", ""))
 
     # --- Webhooks ---
     WEBHOOK_TIMEOUT: int = int(os.environ.get("WEBHOOK_TIMEOUT", "5"))
@@ -41,7 +60,12 @@ class Settings:
     # a leading dot for subdomains, e.g. "hooks.example.com" or ".example.com").
     # Hosts in this list bypass the SSRF block (loopback/private/metadata) so
     # self-hosted webhooks can point at private addresses when intended.
-    WEBHOOK_ALLOWED_HOSTS: list[str] = os.environ.get("WEBHOOK_ALLOWED_HOSTS", "").split(",")
+    WEBHOOK_ALLOWED_HOSTS: list[str] = os.environ.get(
+        "WEBHOOK_ALLOWED_HOSTS", ""
+    ).split(",")
+    # Plafond de webhooks par liste (audit lot T) : borne le gather de
+    # fire_webhooks contre l'amplification DoS.
+    WEBHOOKS_MAX_PER_LIST: int = int(os.environ.get("WEBHOOKS_MAX_PER_LIST", "10"))
 
 
 settings = Settings()

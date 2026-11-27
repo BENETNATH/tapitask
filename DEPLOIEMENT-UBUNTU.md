@@ -14,7 +14,7 @@ Il couvre : transfert du projet sur le serveur, mise en ligne de l'API (Docker +
 
 ## Ports & reverse proxy externe (par défaut)
 
-Par défaut, **l'API est exposée sur `API_PORT` (8000)** pour ton propre reverse proxy (TLS chez toi) :
+Par défaut, **l'API est exposée sur `API_PORT` (8000), en écoute loopback** (`API_BIND=127.0.0.1`) pour ton propre reverse proxy (TLS chez toi) :
 
 ```nginx
 # Exemple nginx : TLS géré par ton proxy
@@ -26,8 +26,8 @@ server {
 ```
 
 - `API_PORT` / `WEB_PORT` dans `.env` — tout est configurable
-- TLS intégré si tu préfères : `docker compose --profile caddy up -d` (Caddy + Let's Encrypt)
-- Webapp : `docker compose --profile web up -d` (nginx sert `app/build/web`)
+- TLS intégré si tu préfères : `bash scripts/compose-up.sh --profile caddy` (Caddy + Let's Encrypt)
+- Webapp : `bash scripts/compose-up.sh --profile web` (nginx sert `app/build/web`)
 - `CORS_ORIGINS` doit contenir l'origine HTTPS de ton proxy
 
 ## Options avancées (.env)
@@ -51,10 +51,6 @@ Dans `.env` : `ADMIN_EMAIL` + `ADMIN_PASSWORD` → le compte est **créé automa
 Depuis ta machine :
 
 ```bash
-# Extraire le projet (si pas déjà fait)
-python3 checklists_extract.py tapitask
-
-# Transférer
 rsync -av --exclude '.venv' --exclude '__pycache__' --exclude 'build' \
   tapitask/ utilisateur@ton-serveur:/opt/tapitask/
 ```
@@ -74,20 +70,43 @@ openssl rand -hex 32   # → DB_PASSWORD
 openssl rand -hex 32   # → JWT_SECRET
 nano .env              # DOMAIN=tapitask.mondomaine.fr, les 2 secrets, CORS_ORIGINS=https://tapitask.mondomaine.fr
 
-docker compose up -d --build
+bash scripts/compose-up.sh --build --profile caddy   # lit DB_BACKEND (.env, défaut postgres)
 curl https://tapitask.mondomaine.fr/health   # → {"status":"ok"}
 ```
 
-Caddy obtient et renouvelle le certificat Let's Encrypt automatiquement. L'API est documentée sur `https://taputask.mondomaine.fr/docs`.
+Caddy obtient et renouvelle le certificat Let's Encrypt automatiquement. L'API est documentée sur `https://tapitask.mondomaine.fr/docs`.
 
-**Mises à jour** : `git pull` (ou rsync) puis `docker compose up -d --build`.
+**Mises à jour** : `git pull` (ou rsync) puis `bash scripts/compose-up.sh --build --profile caddy`.
+
+### Backend SQLite (optionnel)
+
+`DB_BACKEND=sqlite` dans `.env` (aucun `DB_PASSWORD` requis) : la base vit dans
+un fichier `checklists.db` sur le volume nommé `data` (survit au rebuild).
+Le serveur active WAL + `busy_timeout` (10 s) sur le SQLite fichier au connect.
+
+```bash
+nano .env              # DB_BACKEND=sqlite
+bash scripts/compose-up.sh --build
+docker compose -f docker-compose.sqlite.yml ps   # → api uniquement
+```
+
+**Migration PG → SQLite** (sur le serveur) :
+
+1. Export JSON global depuis le compte concerné (app : Réglages → Exporter,
+   ou `GET /export.json?scope=all` avec le token du compte) → fichier `export.json`.
+2. Sur le serveur : `DB_BACKEND=sqlite` dans `.env`, puis
+   `bash scripts/compose-up.sh --build`.
+3. Import : app → Importer (fichier `export.json`), ou
+   `curl -X POST -H "Authorization: Bearer <token>" --data-binary @export.json http://localhost:$API_PORT/import`.
+   L'import crée toujours de **nouvelles** listes (jamais de merge) :
+   vérifie puis supprime l'ancienne instance PG si besoin.
 
 ## 3. Tests du serveur (optionnel, sur le serveur ou en local)
 
 ```bash
 cd /opt/tapitask/server
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-JWT_SECRET=test .venv/bin/python -m pytest -q   # 9 tests
+JWT_SECRET=test .venv/bin/python -m pytest -q   # 249 tests (3 skipped sans DSN Postgres)
 ```
 
 ## 4. Build des clients (sur ta machine de dev, pas le serveur)
@@ -96,7 +115,7 @@ Prérequis : Flutter SDK ≥ 3.4 (`snap install flutter --classic` ou [flutter.d
 
 ```bash
 cd tapitask
-bash scripts/init_flutter.sh    # génère les plateformes, applique le nom Tapitask, le widget et l'icône
+bash scripts/init_flutter.sh    # génère les plateformes, applique le nom Tapitask, le widget et les permissions
 ```
 
 ### Windows (tray + app)
@@ -115,7 +134,7 @@ Pour le démarrage automatique : `shell:startup` (Win+R) → raccourci vers `tap
 ```bash
 cd app
 flutter build apk --release
-# APK : app/build/app/outputs/flutter-release/app-release.apk
+# APK : app/build/app/outputs/flutter-apk/app-release.apk
 # (pour le Play Store : flutter build appbundle)
 ```
 
@@ -139,18 +158,18 @@ flutter build web --release
 **2. Lancer le conteneur frontend** (sur le serveur) :
 
 ```bash
-docker compose --profile web up -d web
+bash scripts/compose-up.sh --profile web
 # La webapp est servie sur http://serveur:8080 (WEB_PORT dans .env)
 ```
 
 **3. (Re)builder après chaque nouvelle version** : relancez `flutter build web --release`
-et `docker compose --profile web restart web` (le volume nginx pointe directement
+et `bash scripts/compose-up.sh --profile web` (le volume nginx pointe directement
 sur `app/build/web`, aucun rebuild d'image nécessaire).
 
 **4. Option recommandée — même domaine que l'API** derrière votre reverse proxy :
 pointez `/` sur `WEB_PORT` (ex. nginx : `location / { proxy_pass http://127.0.0.1:8080; }`)
 et gardez `/api`, `/docs`, `/ws` sur `API_PORT`. Dans ce cas mettez
-`CORS_ORIGINS=https://tapitask.mondomaine.fr` dans le `.env` et `docker compose up -d`.
+`CORS_ORIGINS=https://tapitask.mondomaine.fr` dans le `.env` et `bash scripts/compose-up.sh`.
 
 (l'URL de l'API est configurable dans l'écran de login de l'app, et `CORS_ORIGINS` du `.env` doit inclure le domaine)
 
@@ -158,7 +177,7 @@ et gardez `/api`, `/docs`, `/ws` sur `API_PORT`. Dans ce cas mettez
 
 1. Lancer l'app → écran « Compte & serveur » → URL `https://tapitask.mondomaine.fr` → créer un compte
 2. Créer une liste, l'épingler (icône punaise) pour la voir dans le tray Windows
-3. Partager : depuis l'API (`POST /lists/{id}/members` avec email + rôle) — l'UI de partage dans l'app est la prochaine étape de dev
+3. Partager : depuis l'app (bouton « Partager » sur une liste → code, email, rôles) ou l'API (`POST /lists/{id}/members`)
 
 ## 6. Serveur MCP (agents)
 
@@ -183,10 +202,16 @@ python3 mcp_server.py
 0 3 * * * docker exec tapitask-db-1 pg_dump -U checklists checklists | gzip > /var/backups/tapitask-$(date +\%F).sql.gz
 ```
 
+Mode SQLite : le volume `data` contient `checklists.db` (+ WAL/SHM) — tar du volume :
+
+```bash
+0 3 * * * docker run --rm -v tapitask_data:/data:ro -v /var/backups:/backup alpine tar czf /backup/tapitask-$(date +\%F).db.tar.gz -C /data .
+```
+
 ## 8. Checklist finale
 
 - [ ] `.env` renseigné (DOMAIN, DB_PASSWORD, JWT_SECRET, CORS_ORIGINS)
-- [ ] `docker compose ps` : db + api + caddy « running/healthy »
+- [ ] `docker compose --profile pg ps` : db + api « running/healthy » (et caddy si profil actif ; mode sqlite : api seul)
 - [ ] `https://…/health` répond, `https://…/docs` s'affiche
 - [ ] App Windows : login OK, liste créée, coche instantanée, tray « T » visible
 - [ ] Android : APK installé, widget affiche la liste épinglée

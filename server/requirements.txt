@@ -14,3 +14,6 @@ pyotp==2.10.0
 redis==8.1.0
 websockets==17.4
 aiohttp==3.14.5
+# 3.6 (prod3) : test_compose_env.py importe yaml (dépendance de test
+# implicite — version vérifiée dans le venv).
+PyYAML==6.0.3

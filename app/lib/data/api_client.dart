@@ -1,4 +1,7 @@
 import "dart:convert";
+
+import "package:flutter/foundation.dart";
+import "package:flutter_secure_storage/flutter_secure_storage.dart";
 import "package:http/http.dart" as http;
 import "package:shared_preferences/shared_preferences.dart";
 
@@ -10,30 +13,108 @@ class ApiException implements Exception {
   String toString() => "ApiException($status): $message";
 }
 
+/// C1.7 : register 202 « email à vérifier » — pas un faux succès : pas de
+/// token, l'utilisateur doit vérifier son email avant de se connecter.
+class EmailVerificationRequired implements Exception {
+  const EmailVerificationRequired();
+  @override
+  String toString() => "Email verification required";
+}
+
 class ApiClient {
   String baseUrl;
   String? accessToken;
   String? refreshTokenValue;
+  /// C2.1 (A3) : secure storage indisponible (web http:// hors secure
+  /// context, restauration Android sans Keystore) → tokens en mémoire seule.
+  bool secureStorageUnavailable = false;
+  /// C2.7 : notifié quand la session est définitivement expirée (refresh
+  /// 401) : l'app bascule en état déconnecté.
+  VoidCallback? onSessionExpired;
 
-  ApiClient(this.baseUrl);
+  /// C1.6 : timeout global — un serveur muet ne doit jamais bloquer l'app.
+  final Duration timeout;
+  final http.Client _http;
+
+  ApiClient(this.baseUrl,
+      {http.Client? client, this.timeout = const Duration(seconds: 15)})
+      : _http = client ?? http.Client();
+
+  // Injecté dans les tests (le const original ne peut pas être mocké).
+  static FlutterSecureStorage secureStorage = const FlutterSecureStorage();
+
+  static Future<String?> _loadToken(SharedPreferences prefs,
+      {required String key}) async {
+    final plain = prefs.getString(key);
+    if (plain != null) {
+      // M5 (prod4) : une valeur claire VIDE n'est pas migrée (sinon ""
+      // serait écrit en secure storage et `accessToken != null` avec un
+      // token vide) — elle est juste supprimée.
+      if (plain.isEmpty) {
+        await prefs.remove(key);
+        return null;
+      }
+      // Migration : valeur claire trouvée → secure storage, puis suppression.
+      await secureStorage.write(key: key, value: plain);
+      await prefs.remove(key);
+      return plain;
+    }
+    final value = await secureStorage.read(key: key);
+    // C1.7 : "" persisté avant le fix ≡ absent.
+    return (value == null || value.isEmpty) ? null : value;
+  }
 
   static Future<ApiClient> load() async {
     final prefs = await SharedPreferences.getInstance();
     final url = prefs.getString("server_url") ?? "";
     final client = ApiClient(url);
-    client.accessToken = prefs.getString("access_token");
-    client.refreshTokenValue = prefs.getString("refresh_token");
+    try {
+      client.accessToken = await _loadToken(prefs, key: "access_token");
+      client.refreshTokenValue = await _loadToken(prefs, key: "refresh_token");
+    } catch (e) {
+      // C2.1 (A3) : les tokens restent en mémoire (null ici) ; l'app
+      // démarre normalement — le stockage est réessayé à la prochaine persist.
+      client.secureStorageUnavailable = true;
+      debugPrint("tapitask: secure storage unavailable, tokens in-memory: $e");
+    }
     return client;
   }
 
   Future<void> persist() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString("server_url", baseUrl);
-    await prefs.setString("access_token", accessToken ?? "");
-    await prefs.setString("refresh_token", refreshTokenValue ?? "");
+    try {
+      // C1.7 : null → retrait de la clé (et non écriture de "").
+      if (accessToken == null) {
+        await secureStorage.delete(key: "access_token");
+      } else {
+        await secureStorage.write(key: "access_token", value: accessToken!);
+      }
+      if (refreshTokenValue == null) {
+        await secureStorage.delete(key: "refresh_token");
+      } else {
+        await secureStorage.write(key: "refresh_token", value: refreshTokenValue!);
+      }
+    } catch (e) {
+      secureStorageUnavailable = true;
+      debugPrint("tapitask: secure storage unavailable, tokens in-memory: $e");
+    }
   }
 
   bool get isConfigured => baseUrl.isNotEmpty;
+
+  /// S2 (prod4) : logout volontaire — le serveur révoque le refresh token
+  /// (best effort : hors-ligne, la purge locale fait quand même son
+  /// travail, l'endpoint révoquera… rien, le token est déjà local purgé).
+  Future<void> logout() async {
+    final token = refreshTokenValue;
+    if (token == null || token.isEmpty) return;
+    try {
+      await _http.post(Uri.parse("$baseUrl/auth/logout"),
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode({"refresh_token": token})).timeout(timeout);
+    } catch (_) {}
+  }
 
   Future<void> register(String email, String password) async {
     await _auth("/auth/register", {"email": email, "password": password});
@@ -50,8 +131,14 @@ class ApiClient {
 
   Future<void> _auth(String path, Map<String, dynamic> body) async {
     final r = await _post(path, body, auth: false);
-    accessToken = r["access_token"];
-    refreshTokenValue = r["refresh_token"];
+    final token = r["access_token"];
+    if (token == null || token.toString().isEmpty) {
+      // C1.7 : 202 « email à vérifier » → état typé, pas accessToken = null.
+      throw const EmailVerificationRequired();
+    }
+    accessToken = token.toString();
+    final refresh = r["refresh_token"];
+    refreshTokenValue = refresh?.toString();
     await persist();
   }
 
@@ -59,15 +146,18 @@ class ApiClient {
       _post(path, body, auth: true);
 
   Future<Map<String, dynamic>> patch(
-      String path, Map<String, dynamic> body) async {
-    final r = await http.patch(Uri.parse("$baseUrl$path"),
+      String path, Map<String, dynamic> body,
+      {bool retried = false}) async {
+    final r = await _http.patch(Uri.parse("$baseUrl$path"),
         headers: {
           "Authorization": "Bearer $accessToken",
           "Content-Type": "application/json"
         },
-        body: jsonEncode(body));
-    if (r.statusCode == 401 && await _tryRefresh()) {
-      return patch(path, body);
+        body: jsonEncode(body)).timeout(timeout);
+    // 3.7 (prod3) : un 401 persistant après un refresh « réussi » ne doit
+    // pas boucler à l'infini — 2e 401 → l'erreur se propage.
+    if (r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return patch(path, body, retried: true);
     }
     _check(r);
     return jsonDecode(r.body) as Map<String, dynamic>;
@@ -88,43 +178,76 @@ class ApiClient {
     await post("/auth/verify-email", {"token": token});
   }
 
-  Future<void> delete(String path) async {
-    final r = await http.delete(Uri.parse("$baseUrl$path"),
-        headers: {"Authorization": "Bearer $accessToken"});
-    if (r.statusCode == 401 && await _tryRefresh()) {
-      return delete(path);
+  Future<void> delete(String path, {bool retried = false}) async {
+    final r = await _http.delete(Uri.parse("$baseUrl$path"),
+        headers: {"Authorization": "Bearer $accessToken"}).timeout(timeout);
+    if (r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return delete(path, retried: true);
     }
     _check(r);
   }
 
-  Future<Map<String, dynamic>> get(String path) async {
-    final r = await http.get(Uri.parse("$baseUrl$path"),
-        headers: {"Authorization": "Bearer $accessToken"});
-    if (r.statusCode == 401 && await _tryRefresh()) {
-      return get(path);
+  Future<Map<String, dynamic>> get(String path, {bool retried = false}) async {
+    final r = await _http.get(Uri.parse("$baseUrl$path"),
+        headers: {"Authorization": "Bearer $accessToken"}).timeout(timeout);
+    if (r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return get(path, retried: true);
     }
     _check(r);
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
-  Future<List<dynamic>> getList(String path) async {
-    final r = await http.get(Uri.parse("$baseUrl$path"),
-        headers: {"Authorization": "Bearer $accessToken"});
+  /// D-7 (spec 2026-11-25) : corps BRUT d'un export (JSON/markdown/CSV) —
+  /// pas de décodage JSON, le texte est sauvé tel quel.
+  Future<String> getRaw(String path, {bool retried = false}) async {
+    final r = await _http.get(Uri.parse("$baseUrl$path"),
+        headers: {"Authorization": "Bearer $accessToken"}).timeout(timeout);
+    if (r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return getRaw(path, retried: true);
+    }
+    _check(r);
+    return r.body;
+  }
+
+  /// D-7 : POST /import — corps brut (export JSON tapitask OU markdown
+  /// Obsidian ; le serveur détecte). [name] = nom du fichier (titre d'une
+  /// liste markdown sans H1). Renvoie le corps de la réponse (listes créées).
+  Future<Map<String, dynamic>> importFile(String body, {String? name}) async {
+    var uri = Uri.parse("$baseUrl/import");
+    if (name != null) {
+      uri = uri.replace(queryParameters: {"name": name});
+    }
+    final r = await _http.post(uri,
+        headers: {
+          "Authorization": "Bearer $accessToken",
+          "Content-Type": "application/octet-stream"
+        },
+        body: body).timeout(timeout);
     if (r.statusCode == 401 && await _tryRefresh()) {
-      return getList(path);
+      return importFile(body, name: name);
+    }
+    _check(r);
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
+  Future<List<dynamic>> getList(String path, {bool retried = false}) async {
+    final r = await _http.get(Uri.parse("$baseUrl$path"),
+        headers: {"Authorization": "Bearer $accessToken"}).timeout(timeout);
+    if (r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return getList(path, retried: true);
     }
     _check(r);
     return jsonDecode(r.body) as List<dynamic>;
   }
 
   Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body,
-      {required bool auth}) async {
+      {required bool auth, bool retried = false}) async {
     final headers = {"Content-Type": "application/json"};
     if (auth) headers["Authorization"] = "Bearer $accessToken";
-    final r = await http.post(Uri.parse("$baseUrl$path"),
-        headers: headers, body: jsonEncode(body));
-    if (auth && r.statusCode == 401 && await _tryRefresh()) {
-      return _post(path, body, auth: auth);
+    final r = await _http.post(Uri.parse("$baseUrl$path"),
+        headers: headers, body: jsonEncode(body)).timeout(timeout);
+    if (auth && r.statusCode == 401 && !retried && await _tryRefresh()) {
+      return _post(path, body, auth: auth, retried: true);
     }
     _check(r);
     // 204 sans corps (ex. verify-email) : pas de JSON à décoder.
@@ -133,13 +256,39 @@ class ApiClient {
         : jsonDecode(r.body) as Map<String, dynamic>;
   }
 
+  /// C2.7 : single-flight — un 401 qui arrive pendant un refresh attend le
+  /// MÊME Future (relancer /auth/refresh utiliserait le token déjà roté).
   Future<bool> _tryRefresh() async {
     if (refreshTokenValue == null || refreshTokenValue!.isEmpty) return false;
+    final inFlight = _refreshInFlight;
+    if (inFlight != null) return inFlight;
+    final future = _doRefresh();
+    _refreshInFlight = future;
     try {
-      final r = await http.post(Uri.parse("$baseUrl/auth/refresh"),
+      return await future;
+    } finally {
+      _refreshInFlight = null;
+    }
+  }
+
+  Future<bool> _doRefresh() async {
+    try {
+      final r = await _http.post(Uri.parse("$baseUrl/auth/refresh"),
           headers: {"Content-Type": "application/json"},
-          body: jsonEncode({"refresh_token": refreshTokenValue}));
+          body: jsonEncode({"refresh_token": refreshTokenValue})).timeout(timeout);
+      if (r.statusCode == 401) {
+        // C2.7 : expiration définitive — les deux tokens sont nuls, le
+        // retrait est persisté et l'app est notifiée (état déconnecté ;
+        // le WebSocket s'arrête car accessToken == null).
+        accessToken = null;
+        refreshTokenValue = null;
+        await persist();
+        onSessionExpired?.call();
+        return false;
+      }
       if (r.statusCode != 200) return false;
+      // Rotation atomique (lot T) : les deux tokens sont mis à jour
+      // AVANT la persist.
       final data = jsonDecode(r.body) as Map<String, dynamic>;
       accessToken = data["access_token"];
       refreshTokenValue = data["refresh_token"];
@@ -149,6 +298,11 @@ class ApiClient {
       return false;
     }
   }
+
+  Future<bool>? _refreshInFlight;
+
+  /// Ferme le client HTTP (tests : pas de fuite d'HttpClient au teardown).
+  void close() => _http.close();
 
   void _check(http.Response r) {
     if (r.statusCode >= 400) {

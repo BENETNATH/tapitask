@@ -2,6 +2,7 @@ import "package:drift/drift.dart" hide isNull;
 import "package:drift/native.dart";
 import "package:flutter_test/flutter_test.dart";
 import "package:material_ui/material_ui.dart";
+import "package:flutter_secure_storage/flutter_secure_storage.dart";
 import "package:shared_preferences/shared_preferences.dart";
 import "package:tapitask/data/api_client.dart";
 import "package:tapitask/data/database.dart";
@@ -16,6 +17,7 @@ void main() {
   /// [withToken] = false → sans session (accessToken resté null).
   Future<(AppDb, AppState)> makeState({bool withToken = true}) async {
     SharedPreferences.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({});
     final db = AppDb.forTesting(NativeDatabase.memory());
     final state = AppState(db: db);
     state.api = await ApiClient.load();

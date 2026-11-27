@@ -23,14 +23,16 @@ def _sync_send(to: str, subject: str, body: str) -> None:
         if settings.SMTP_PORT == 465:
             # Implicit TLS (SMTPS): the session is SSL from the very first
             # byte — STARTTLS is wrong here and fails on most servers.
-            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT,
-                                  timeout=10) as server:
+            with smtplib.SMTP_SSL(
+                settings.SMTP_HOST, settings.SMTP_PORT, timeout=10
+            ) as server:
                 if settings.SMTP_USER:
                     server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
                 server.send_message(msg)
         else:
-            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT,
-                              timeout=10) as server:
+            with smtplib.SMTP(
+                settings.SMTP_HOST, settings.SMTP_PORT, timeout=10
+            ) as server:
                 if settings.SMTP_PORT == 587:
                     server.starttls()
                 if settings.SMTP_USER:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -17,13 +16,24 @@ _CGNAT = ipaddress.ip_network("100.64.0.0/10")
 def _ip_is_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """False for every non-public destination: RFC1918/CGNAT, loopback,
     link-local (cloud metadata 169.254.169.254 incl.), 0.0.0.0/8, reserved,
-    multicast, IPv6 ULA/link-local."""
-    return not (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified
-                or ip in _CGNAT)
+    multicast, IPv6 ULA/link-local.
+    M3 (prod4) : un v4-mappé (::ffff:a.b.c.d) est déplié en IPv4 AVANT les
+    checks — sinon un CGNAT/privé écrit en ::ffff: passait is_global (IPv6)
+    et était accepté. IPv4 n'a pas d'attribut ipv4_mapped → guard."""
+    if isinstance(ip, ipaddress.IPv6Address):
+        ip = ip.ipv4_mapped or ip
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+        or ip in _CGNAT
+    )
 
 
-def validate_webhook_url(url: str, resolver=None) -> tuple[bool, str | None]:
+async def validate_webhook_url(url: str, resolver=None) -> tuple[bool, str | None]:
     """Pure SSRF gate for webhook URLs, applied at creation/update time
     (Strix vuln-0004); the delivery check re-applies it as defense in depth.
 
@@ -48,19 +58,24 @@ def validate_webhook_url(url: str, resolver=None) -> tuple[bool, str | None]:
     host = (parsed.hostname or "").lower()
     if not host:
         return False, None
+    # 2.4 (prod3) : le schéma http(s) d'ABORD — l'opt-in
+    # WEBHOOK_ALLOWED_HOSTS ne doit pas autoriser un schéma étranger
+    # (file://, gopher://…).
+    if parsed.scheme not in ("http", "https"):
+        return False, None
     allow = {h.strip().lower() for h in settings.WEBHOOK_ALLOWED_HOSTS if h.strip()}
     if host in allow or any(host.endswith("." + a) for a in allow):
         return True, None
-    if parsed.scheme not in ("http", "https"):
-        return False, None
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
         if resolver is None:
             import socket
 
+            # M3 (prod4) : DNS non bloquant — to_thread libère le worker
+            # uvicorn unique d'un getaddrinfo lent (DNS muet/timeout).
             try:
-                infos = socket.getaddrinfo(host, None)
+                infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
             except Exception:
                 infos = []
             ips = [info[4][0] for info in infos]
@@ -139,7 +154,7 @@ class Hub:
 hub = Hub()
 
 
-def _webhook_host_allowed(url: str) -> tuple[bool, str | None]:
+async def _webhook_host_allowed(url: str) -> tuple[bool, str | None]:
     """Return (allowed, pinned_ip) for a webhook URL.
 
     Blocks SSRF to non-public destinations (loopback, RFC1918/CGNAT,
@@ -163,8 +178,10 @@ def _webhook_host_allowed(url: str) -> tuple[bool, str | None]:
     allow = {h.strip().lower() for h in settings.WEBHOOK_ALLOWED_HOSTS if h.strip()}
     if host.lower() in allow or any(host.lower().endswith("." + a) for a in allow):
         return True, None
+    # M3 (prod4) : DNS non bloquant (to_thread) + host non résolvable →
+    # rejet explicite (aucune notification n'est envoyée).
     try:
-        infos = socket.getaddrinfo(host, None)
+        infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
     except Exception:
         return False, None
     pinned: str | None = None
@@ -173,41 +190,53 @@ def _webhook_host_allowed(url: str) -> tuple[bool, str | None]:
             ip = ipaddress.ip_address(sockaddr[0])
         except Exception:
             continue
+        # M3 (prod4) : déplier un v4-mappé → le pin est l'IPv4 (delivery
+        # propre, netloc sans double-mapping).
+        if isinstance(ip, ipaddress.IPv6Address):
+            ip = ip.ipv4_mapped or ip
         if not _ip_is_public(ip):
             return False, None
         if pinned is None:
             pinned = str(ip)
+    # Aucune adresse valide (vide ou toutes non publiques) → rejet.
     return pinned is not None, pinned
 
 
-async def fire_webhooks(session, list_id, payload: dict[str, Any]) -> None:
+async def fire_webhooks(list_id, payload: dict[str, Any]) -> None:
     """POST the payload to every webhook of the list, signed with HMAC-SHA256.
     Fire-and-forget: failures are logged, never propagated. Disallowed
-    (SSRF-risk) hosts are skipped, not followed."""
+    (SSRF-risk) hosts are skipped, not followed.
+    Session propre (pas la session de la requête) : appelé depuis un
+    create_task qui tourne APRÈS la clôture de la session du request (C1.3)."""
     import asyncio
     import hashlib
     import hmac
     import json
     import logging
 
-    from .config import settings
-    from .models import Webhook
     from sqlalchemy import select
 
-    result = await session.execute(select(Webhook).where(Webhook.list_id == list_id))
-    hooks = list(result.scalars())
+    from .config import settings
+    from .db import SessionLocal
+    from .models import Webhook
+
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Webhook).where(Webhook.list_id == list_id)
+        )
+        hooks = [(h.url, h.secret) for h in result.scalars()]
     if not hooks:
         return
 
-    async def _fire(hook: Webhook) -> None:
-        allowed, pinned_ip = _webhook_host_allowed(hook.url)
+    async def _fire(url: str, secret: str) -> None:
+        allowed, pinned_ip = await _webhook_host_allowed(url)
         if not allowed:
             logging.getLogger("tapitask.webhooks").warning(
-                "skipping disallowed webhook host: %s", hook.url)
+                "skipping disallowed webhook host: %s", url
+            )
             return
         body = json.dumps(payload).encode()
-        signature = hmac.new(hook.secret.encode(), body, hashlib.sha256).hexdigest()
-        url = hook.url
+        signature = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
         headers = {
             "Content-Type": "application/json",
             "X-Tapitask-Signature": f"sha256={signature}",
@@ -215,15 +244,15 @@ async def fire_webhooks(session, list_id, payload: dict[str, Any]) -> None:
         # Pin the IP resolved by the SSRF check: an IP-literal host needs no
         # rewrite, a hostname fetch must not re-resolve (DNS rebinding).
         if pinned_ip is not None:
-            from urllib.parse import urlunparse, urlparse
+            from urllib.parse import urlparse, urlunparse
 
             parsed = urlparse(url)
             try:
                 ipaddress.ip_address(parsed.hostname or "")
             except ValueError:
-                netloc = (
-                    f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
-                ) + (f":{parsed.port}" if parsed.port else "")
+                netloc = (f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip) + (
+                    f":{parsed.port}" if parsed.port else ""
+                )
                 url = urlunparse(parsed._replace(netloc=netloc))
                 headers["Host"] = parsed.hostname or ""
         try:
@@ -231,19 +260,34 @@ async def fire_webhooks(session, list_id, payload: dict[str, Any]) -> None:
 
             # follow_redirects stays at its default (False): re-resolving each
             # hop against the SSRF policy would be required to follow safely.
-            async with httpx.AsyncClient(timeout=settings.WEBHOOK_TIMEOUT) as client:
-                await client.post(url, content=body, headers=headers)
+            # Le netloc peut être l'IP épinglée (Host = hostname d'origine) :
+            # sans SNI explicite, le handshake présenterait l'IP et la
+            # vérification du certificat échouerait (audit C1.3).
+            sni = headers.get("Host")
+            # 2.4 (prod3) : trust_env=False — sinon HTTP_PROXY/HTTPS_PROXY de
+            # l'hôte détourne le POST (contournement de l'IP épinglée + du
+            # check SSRF).
+            async with httpx.AsyncClient(
+                timeout=settings.WEBHOOK_TIMEOUT, trust_env=False
+            ) as client:
+                await client.post(
+                    url,
+                    content=body,
+                    headers=headers,
+                    extensions={"sni_hostname": sni} if sni else None,
+                )
         except Exception:
-            logging.getLogger("tapitask.webhooks").exception("webhook failed: %s", hook.url)
+            logging.getLogger("tapitask.webhooks").exception("webhook failed: %s", url)
 
-    await asyncio.gather(*(_fire(h) for h in hooks))
+    await asyncio.gather(*(_fire(*hook) for hook in hooks))
 
 
 async def notify_list(list_id: UUID, message: dict[str, Any]) -> None:
     """Push a change to all members of a list (called from sync router context)."""
+    from sqlalchemy import select
+
     from .db import SessionLocal
     from .models import Checklist, ListMember
-    from sqlalchemy import select
 
     async with SessionLocal() as session:
         result = await session.execute(

@@ -20,14 +20,14 @@
 - Aucune donnée n'est renvoyée sans token valide (401 systématique sinon)
 
 ## Infrastructure
-- Postgres **non exposé** : réseau Docker interne uniquement
+- Postgres (mode PG) **non exposé** : réseau Docker interne uniquement ; mode SQLite : fichier de base local sur volume (WAL + `busy_timeout` au connect)
 - Secrets via `.env` (jamais commité — voir `.gitignore`), `JWT_SECRET` obligatoire (refus au démarrage sinon)
-- `docker-compose.yml` refuse de démarrer sans `JWT_SECRET`/`DB_PASSWORD` renseignés
+- Les fichiers compose refusent de démarrer sans `JWT_SECRET` (et sans `DB_PASSWORD` en mode postgres)
 
 ## Recommandations de déploiement
 - Générer les secrets avec `openssl rand -hex 32`
-- Sauvegardes chiffrées du volume `pgdata`
-- Tenir les images à jour (`docker compose pull`)
+- Sauvegardes chiffrées du volume de données (`pgdata` en mode PG, `data` en mode SQLite)
+- Tenir les images à jour (`docker compose --profile pg pull`)
 - Exposer le serveur uniquement derrière Caddy ; ne jamais publier le port 8000 directement
 
 ## 2FA & email
@@ -41,5 +41,4 @@
 
 ## Limites connues (à traiter avant production)
 - Rate limiter en mémoire (par process) — passer à Redis si plusieurs workers
-- Pas encore de vérification d'email (optionnel pour un usage privé)
-- Journal d'audit minimal (`change_log`) — pas encore d'export/retention
+- Journal d'audit (`change_log`) : export admin via `GET /admin/audit` (≤1000 entrées) — pas de retention

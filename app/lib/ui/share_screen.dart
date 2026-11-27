@@ -34,28 +34,42 @@ class _ShareScreenState extends State<ShareScreen> {
     try {
       final members =
           await widget.state.api.getList("/lists/${widget.listId}/members");
+      if (!mounted) return; // S3 (prod4)
       setState(() => _members = members);
     } on ApiException catch (e) {
+      if (!mounted) return;
       setState(() => _error = e.message);
+    } catch (e) {
+      // 3.2 (prod3) : hors-ligne / timeout / JSON corrompu — un message
+      // visible au lieu d'une exception non gérée.
+      if (!mounted) return;
+      setState(() => _error = '$e');
     }
   }
 
   Future<void> _createInvite() async {
+    if (_busy) return; // S3 (prod4) : pas de double submit
     setState(() => _busy = true);
     try {
       final result =
           await widget.state.api.post("/lists/${widget.listId}/invites", {
         "hours": 48,
       });
+      if (!mounted) return;
       setState(() => _inviteCode = result["invite_id"]);
     } on ApiException catch (e) {
+      if (!mounted) return;
       setState(() => _error = e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '$e');
     } finally {
-      setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _addMember() async {
+    if (_busy) return; // S3 (prod4) : pas de double submit
     if (_email.text.trim().isEmpty) return;
     setState(() => _busy = true);
     try {
@@ -66,9 +80,13 @@ class _ShareScreenState extends State<ShareScreen> {
       _email.clear();
       await _loadMembers();
     } on ApiException catch (e) {
+      if (!mounted) return;
       setState(() => _error = e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '$e');
     } finally {
-      setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -78,7 +96,11 @@ class _ShareScreenState extends State<ShareScreen> {
           .patch("/lists/${widget.listId}/members/$userId", {"role": role});
       await _loadMembers();
     } on ApiException catch (e) {
+      if (!mounted) return;
       setState(() => _error = e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '$e');
     }
   }
 
@@ -88,8 +110,19 @@ class _ShareScreenState extends State<ShareScreen> {
           .delete("/lists/${widget.listId}/members/$userId");
       await _loadMembers();
     } on ApiException catch (e) {
+      if (!mounted) return;
       setState(() => _error = e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '$e');
     }
+  }
+
+  @override
+  // 3.2 (prod3) : contrôleur jamais disposé.
+  void dispose() {
+    _email.dispose();
+    super.dispose();
   }
 
   @override

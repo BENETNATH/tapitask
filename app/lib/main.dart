@@ -1,14 +1,20 @@
 import "dart:async";
 
+import "package:flutter/foundation.dart"
+    show defaultTargetPlatform, kIsWeb, TargetPlatform, visibleForTesting;
 import "package:http/http.dart" as http;
 import "package:material_ui/material_ui.dart";
 import "package:cupertino_ui/cupertino_ui.dart";
 import "package:flutter_localizations/flutter_localizations.dart"
     hide GlobalMaterialLocalizations, GlobalCupertinoLocalizations;
 
+import "data/android_updater.dart";
 import "data/update_service.dart";
+import "data/windows_updater.dart";
 import "platform/tray_controller_web.dart"
     if (dart.library.io) "platform/tray_controller.dart";
+import "ui/update_dialog.dart";
+import "l10n/s.dart";
 import "state/app_state.dart";
 import "ui/calendar_screen.dart";
 import "ui/home_screen.dart";
@@ -35,19 +41,48 @@ final appRoutes = <String, WidgetBuilder>{
   "/todo": (_) => TodoAllScreen(state: appState),
 };
 
+/// Bannière persistante (audit lot T) : visible sur tous les écrans tant que
+/// l'URL serveur est en http:// (connexion non chiffrée).
+Widget appShell({required String serverUrl, required Widget child}) {
+  if (!serverUrl.startsWith("http://")) return child;
+  return Column(children: [
+    // C2.2 : Material + SafeArea(top) — la bannière ne passe plus sous la
+    // barre de statut Android.
+    const Material(
+        color: Colors.transparent,
+        child: SafeArea(top: true, child: _InsecureServerBanner())),
+    Expanded(child: child),
+  ]);
+}
+
+class _InsecureServerBanner extends StatelessWidget {
+  const _InsecureServerBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.orange.shade800,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(children: [
+        const Icon(Icons.warning_amber_rounded, size: 18, color: Colors.white),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(S.insecureServer,
+              style: const TextStyle(color: Colors.white),
+              overflow: TextOverflow.ellipsis),
+        ),
+      ]),
+    );
+  }
+}
+
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   await appState.init();
-  // Spec §B : vérification des MAJ au démarrage — fond, sans UI bloquante
-  // (résultat consulté depuis la ligne « Mises à jour » des réglages).
-  unawaited(() async {
-    final client = http.Client();
-    try {
-      await checkForUpdates(client: client, api: appState.api);
-    } finally {
-      client.close();
-    }
-  }());
+  // Spec §B + A2 : vérification des MAJ au démarrage — fond ; si une MAJ
+  // est trouvée, le dialog est présenté par ChecklistsApp post-frame
+  // (Windows + Android, comme le reste du flux update).
+  unawaited(_checkUpdatesAtBoot());
   trayController = TrayController(appState);
   await trayController!.init();
   // Window hooks used by the flyout bridge (guarantee: opening the flyout
@@ -55,6 +90,37 @@ Future<void> main(List<String> args) async {
   appState.isMainWindowVisible = trayController!.isMainWindowVisible;
   appState.restoreMainWindow = trayController!.restoreMainWindow;
   runApp(const ChecklistsApp());
+}
+
+/// M6 (D-4, prod4) : condition du dialog de MAJ au boot — desktop
+/// uniquement (l'app web n'offre pas d'installateur). Extraite en
+/// fonction testable : kIsWeb est un const, insimulable en test.
+@visibleForTesting
+bool shouldShowBootUpdateDialog({
+  required bool clientAvailable,
+  required bool isWeb,
+  required TargetPlatform platform,
+}) =>
+    clientAvailable &&
+    !isWeb &&
+    (platform == TargetPlatform.windows || platform == TargetPlatform.android);
+
+/// A2 : check de boot — le résultat est stocké dans [appState] ; le dialog
+/// est présenté APRÈS la 1re frame (par ChecklistsApp), Windows + Android,
+/// jamais sur web (M6 / D-4, prod4).
+Future<void> _checkUpdatesAtBoot() async {
+  final client = http.Client();
+  try {
+    final info = await checkForUpdates(client: client, api: appState.api);
+    if (shouldShowBootUpdateDialog(
+        clientAvailable: info.clientAvailable,
+        isWeb: kIsWeb,
+        platform: defaultTargetPlatform)) {
+      appState.setPendingBootUpdate(info);
+    }
+  } catch (_) {} finally {
+    client.close();
+  }
 }
 
 class ChecklistsApp extends StatefulWidget {
@@ -66,7 +132,10 @@ class ChecklistsApp extends StatefulWidget {
 
 class _ChecklistsAppState extends State<ChecklistsApp>
     with WidgetsBindingObserver {
-  final _navigator = GlobalKey<NavigatorState>();
+  // 1.1 (prod3) : le context de ce state est AU-DESSUS du MaterialApp →
+  // showDialog(context: context) crashe (pas de Navigator). Le key du
+  // Navigator de MaterialApp est la source des dialogues boot.
+  final _navigatorKey = GlobalKey<NavigatorState>();
 
   @override
   void initState() {
@@ -74,22 +143,70 @@ class _ChecklistsAppState extends State<ChecklistsApp>
     appState.addListener(_onChanged);
     WidgetsBinding.instance.addObserver(this);
     _openRequestedTask();
+    _maybeShowBootUpdate();
   }
 
   void _onChanged() {
     setState(() {});
     _openRequestedTask();
+    _maybeShowBootUpdate();
   }
 
   void _openRequestedTask() {
     if (appState.requestedTask == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final task = appState.requestedTask;
-      final context = _navigator.currentContext;
+      final context = _navigatorKey.currentContext;
       if (!mounted || task == null || context == null) return;
       appState.requestedTask = null;
       unawaited(showTaskDetails(context, appState, task));
     });
+  }
+
+  /// A2 : MAJ trouvée au boot → dialog post-frameCallback (jamais au milieu
+  /// d'une frame). Gère les deux ordres : check terminé avant ou après la
+  /// 1re frame.
+  void _maybeShowBootUpdate() {
+    final info = appState.pendingBootUpdate;
+    if (info == null) return;
+    appState.pendingBootUpdate = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final navContext = _navigatorKey.currentContext;
+      if (navContext == null) {
+        // Navigator pas encore monté (frame 0) : on re-planifie.
+        WidgetsBinding.instance.addPostFrameCallback((_) =>
+            _maybeShowBootUpdateWith(info));
+        return;
+      }
+      _showBootDialog(navContext, info);
+    });
+  }
+
+  void _maybeShowBootUpdateWith(UpdateInfo info) {
+    appState.pendingBootUpdate = info;
+    _maybeShowBootUpdate();
+  }
+
+  void _showBootDialog(BuildContext navContext, UpdateInfo info) {
+    showDialog<void>(
+      context: navContext,
+        barrierDismissible: false,
+        builder: (context) => UpdateDialog(
+          info: info,
+          onUpdate: () async {
+            // Même flux que la ligne « Mises à jour » des réglages.
+            switch (defaultTargetPlatform) {
+              case TargetPlatform.windows:
+                await runSelfUpdate(info);
+              case TargetPlatform.android:
+                await installApk(info);
+              default:
+                break;
+            }
+          },
+        ),
+    );
   }
 
   @override
@@ -127,7 +244,7 @@ class _ChecklistsAppState extends State<ChecklistsApp>
   Widget build(BuildContext context) {
     final lang = appState.settings["lang"] as String? ?? "fr";
     return MaterialApp(
-      navigatorKey: _navigator,
+      navigatorKey: _navigatorKey,
       title: "Tapitask",
       debugShowCheckedModeBanner: false,
       // Material widgets (date/time pickers, dialogs) follow the synced
@@ -149,6 +266,10 @@ class _ChecklistsAppState extends State<ChecklistsApp>
         useMaterial3: true,
       ),
       themeMode: _themeMode,
+      // Bannière http:// persistante au-dessus de TOUS les écrans (lot T).
+      builder: (context, child) => appShell(
+          serverUrl: appState.api.baseUrl,
+          child: child ?? const SizedBox.shrink()),
       // home: au lieu de initialRoute — le fallback "/" du moteur résout
       // toujours, quelle que soit l'initial route envoyée (launcher "/",
       // widget "tapitask://home" / "tapitask://quickadd/<id>").

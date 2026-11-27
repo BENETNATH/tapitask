@@ -10,16 +10,17 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from .config import settings
 from .db import Base, SessionLocal, engine
-from .models import User
 from .mcp_http import router as mcp_router
-from .routers import admin, apikeys, auth, lists, sharing, sync
+from .models import RefreshToken, User, utcnow
+from .routers import admin, apikeys, auth, import_export, lists, sharing, sync
 from .security import hash_password
 from .ws import router as ws_router
+
 
 def read_server_version(path: Path | None = None) -> str:
     """Lecture de server/VERSION — "unknown" si absent/corrompu/vide
@@ -64,12 +65,16 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
     # 400 (not 422): clean rejection of malformed bodies — e.g. a U+0000 in
     # a user text field must never surface as a bare 500 (Strix hardening).
-    return JSONResponse(status_code=400, content={"detail": jsonable_encoder(exc.errors())})
+    return JSONResponse(
+        status_code=400, content={"detail": jsonable_encoder(exc.errors())}
+    )
+
 
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(admin.audit_router)
 app.include_router(lists.router)
+app.include_router(import_export.router)
 app.include_router(sharing.router)
 app.include_router(sync.router)
 app.include_router(apikeys.router)
@@ -117,29 +122,64 @@ async def ensure_admin_user() -> bool:
 
 MIGRATIONS = [
     # (table, column, sqlite DDL, postgres DDL)
-    ("users", "is_admin", "BOOLEAN NOT NULL DEFAULT 0", "BOOLEAN NOT NULL DEFAULT FALSE"),
-    ("users", "is_active", "BOOLEAN NOT NULL DEFAULT 1", "BOOLEAN NOT NULL DEFAULT TRUE"),
-    ("users", "is_email_verified", "BOOLEAN NOT NULL DEFAULT 1", "BOOLEAN NOT NULL DEFAULT TRUE"),
+    (
+        "users",
+        "is_admin",
+        "BOOLEAN NOT NULL DEFAULT 0",
+        "BOOLEAN NOT NULL DEFAULT FALSE",
+    ),
+    (
+        "users",
+        "is_active",
+        "BOOLEAN NOT NULL DEFAULT 1",
+        "BOOLEAN NOT NULL DEFAULT TRUE",
+    ),
+    (
+        "users",
+        "is_email_verified",
+        "BOOLEAN NOT NULL DEFAULT 1",
+        "BOOLEAN NOT NULL DEFAULT TRUE",
+    ),
     ("users", "email_token", "VARCHAR(64)", "VARCHAR(64)"),
     ("users", "pending_email", "VARCHAR(320)", "VARCHAR(320)"),
     ("users", "totp_secret", "VARCHAR(64)", "VARCHAR(64)"),
     ("api_keys", "list_scope", "VARCHAR(36)", "UUID"),
     ("items", "parent_id", "VARCHAR(36)", "UUID"),
-    ("items", "recurrence", "VARCHAR(10) NOT NULL DEFAULT 'none'", "VARCHAR(10) NOT NULL DEFAULT 'none'"),
-    ("items", "due_date", "TIMESTAMP", "TIMESTAMP"),
+    (
+        "items",
+        "recurrence",
+        "VARCHAR(10) NOT NULL DEFAULT 'none'",
+        "VARCHAR(10) NOT NULL DEFAULT 'none'",
+    ),
+    ("items", "due_date", "TIMESTAMP", "TIMESTAMPTZ"),
     ("items", "due_day", "DATE", "DATE"),
-    ("items", "completed_at", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE"),
+    ("items", "completed_at", "TIMESTAMP", "TIMESTAMPTZ"),
     ("lists", "color", "VARCHAR(16)", "VARCHAR(16)"),
     ("lists", "folder", "VARCHAR(100)", "VARCHAR(100)"),
     ("users", "settings", "TEXT", "TEXT"),
     ("items", "notes", "TEXT", "TEXT"),
     ("items", "assignee_id", "VARCHAR(36)", "UUID"),
     ("items", "recurrence_source_id", "VARCHAR(36)", "UUID"),
+    # MD-3 (prod3) : émission du code de vérification email (expiration 24 h).
+    ("users", "email_token_created_at", "TIMESTAMP", "TIMESTAMPTZ"),
 ]
 
 
 def _is_postgres() -> bool:
     return engine.dialect.name == "postgresql"
+
+
+def _due_date_timestamptz_sql(data_type: str | None) -> str | None:
+    """C2.10 (A4) : les bases réellement migrées depuis v1 ont
+    items.due_date en `timestamp without time zone` (le DDL v1 était
+    TIMESTAMP). Décision pure : type courant (information_schema) → ALTER
+    one-shot, ou None (déjà correct / colonne absente)."""
+    if data_type == "timestamp without time zone":
+        return (
+            "ALTER TABLE items ALTER COLUMN due_date TYPE TIMESTAMPTZ "
+            "USING due_date AT TIME ZONE 'UTC'"
+        )
+    return None
 
 
 async def _ensure_columns() -> None:
@@ -153,13 +193,35 @@ async def _ensure_columns() -> None:
         try:
             async with engine.begin() as conn:
                 if _is_postgres():
-                    await conn.execute(text(
-                        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}"))
+                    await conn.execute(
+                        text(
+                            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}"
+                        )
+                    )
                 else:
-                    await conn.execute(text(
-                        f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+                    await conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+                    )
         except Exception:
             pass  # column already exists (sqlite has no IF NOT EXISTS)
+
+    if _is_postgres():
+        # One-shot C2.10 (A4) : ADD COLUMN IF NOT EXISTS ne change pas le
+        # type d'une colonne existante — les bases migrées v1 gardent un
+        # TIMESTAMP sans TZ. Idempotent par nature : l'ALTER change le type
+        # lu ci-dessous, donc un 2e run est un no-op (pas de registre).
+        async with engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT data_type FROM information_schema.columns "
+                        "WHERE table_name = 'items' AND column_name = 'due_date'"
+                    )
+                )
+            ).first()
+            alter = _due_date_timestamptz_sql(row[0] if row else None)
+            if alter is not None:
+                await conn.execute(text(alter))
 
 
 async def _create_schema() -> None:
@@ -219,6 +281,21 @@ async def _ensure_indexes() -> None:
             pass
 
 
+async def _purge_stale_refresh_tokens() -> None:
+    """S5 (prod4) : purge au startup des lignes refresh_tokens expirées ou
+    révoquées — hygiène qui borne la table (les refresh déjà invalidés
+    n'ont plus leur place en base). Un seul DELETE : le fonctionnement
+    (prise de possession conditionnelle) est déjà garanti par /refresh, la
+    purge n'est qu'un nettoiement."""
+    async with SessionLocal() as session:
+        await session.execute(
+            delete(RefreshToken).where(
+                or_(RefreshToken.expires_at <= utcnow(), RefreshToken.revoked.is_(True))
+            )
+        )
+        await session.commit()
+
+
 async def _startup() -> None:
     # The WebSocket hub is in-process: more than one uvicorn worker breaks
     # realtime silently (clients connect to a worker that never publishes
@@ -236,3 +313,4 @@ async def _startup() -> None:
     if os.environ.get("AUTO_CREATE_TABLES", "1") == "1":
         await _init_schema()
     await ensure_admin_user()
+    await _purge_stale_refresh_tokens()

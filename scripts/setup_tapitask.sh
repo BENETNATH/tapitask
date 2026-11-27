@@ -37,9 +37,16 @@ BUILD_WIN=${BUILD_WIN:-O}; BUILD_APK=${BUILD_APK:-O}; BUILD_WEB=${BUILD_WEB:-O}
 
 cd app
 
+# --- Version (C2.12) : param APP_VERSION > tag git le plus proche > "dev" --
+# Le gradle lit android/app/key.properties ; --dart-define fixe la version
+# affichée (sinon "dev", figée au moment du build).
+APP_VERSION="${APP_VERSION:-$(git describe --tags 2>/dev/null || echo dev)}"
+DART_VERSION="--dart-define=APP_VERSION=$APP_VERSION"
+echo "Version : $APP_VERSION"
+
 # --- Android : keystore de signature (une seule fois) ----------------------
 if [ "${BUILD_APK,,}" = "o" ]; then
-  if [ ! -f android/key.properties ] && command -v keytool >/dev/null; then
+  if [ ! -f android/app/key.properties ] && command -v keytool >/dev/null; then
     KS=$(ask "Créer un keystore de signature pour l'APK ? (recommandé, sinon signature debug) [O/n] :")
     KS=${KS:-O}
     if [ "${KS,,}" = "o" ]; then
@@ -49,32 +56,39 @@ if [ "${BUILD_APK,,}" = "o" ]; then
         -keyalg RSA -keysize 2048 -validity 10000 \
         -storepass "$KS_PASS" -keypass "$KS_PASS" \
         -dname "CN=Tapitask, O=Tapitask" >/dev/null 2>&1
-      cat > android/key.properties <<EOF
+      cat > android/app/key.properties <<EOF
 storeFile=$(cd "$(dirname "$KS_PATH")" && pwd)/$(basename "$KS_PATH")
 storePassword=$KS_PASS
 keyPassword=$KS_PASS
 keyAlias=tapitask
 EOF
-      ok "Keystore créé : $KS_PATH (mot de passe dans android/key.properties — NE PAS COMMITER)"
+      ok "Keystore créé : $KS_PATH (mot de passe dans android/app/key.properties — NE PAS COMMITER)"
     fi
   fi
-  if [ -f android/key.properties ]; then
-    # Branche signingConfig release du build.gradle si pas déjà fait
-    grep -q key.properties android/app/build.gradle 2>/dev/null || warn "Ajoute la config de signature dans android/app/build.gradle (voir app/README.md)"
+  if [ -f android/app/key.properties ]; then
+    # C2.12 : le gradle est en .kts (source de vérité du chemin keystore)
+    grep -q key.properties android/app/build.gradle.kts 2>/dev/null || warn "Ajoute la config de signature dans android/app/build.gradle.kts"
   fi
 fi
 
 # --- Builds ----------------------------------------------------------------
 if [ "${BUILD_APK,,}" = "o" ]; then
   echo "==> flutter build apk --release..."
-  flutter build apk --release
-  cp build/app/outputs/flutter-release/app-release.apk "$DIST/Tapitask.apk"
+  flutter build apk --release $DART_VERSION
+  # C2.12 : le vrai layout de sortie gradle est flutter-apk/ (ou outputs/apk)
+  if [ -f build/app/outputs/flutter-apk/app-release.apk ]; then
+    cp build/app/outputs/flutter-apk/app-release.apk "$DIST/Tapitask.apk"
+  elif [ -f build/app/outputs/apk/release/app-release.apk ]; then
+    cp build/app/outputs/apk/release/app-release.apk "$DIST/Tapitask.apk"
+  else
+    fail "APK introuvable sous build/app/outputs/ (vérifie le layout gradle)"
+  fi
   ok "APK : dist/Tapitask.apk"
 fi
 
 if [ "${BUILD_WEB,,}" = "o" ]; then
   echo "==> flutter build web --release..."
-  flutter build web --release
+  flutter build web --release $DART_VERSION
   cp -r build/web "$DIST/tapitask-web"
   ok "Webapp : dist/tapitask-web/ (à servir derrière Caddy/nginx)"
 fi
@@ -84,7 +98,7 @@ if [ "${BUILD_WIN,,}" = "o" ]; then
     warn "Le build Windows doit être lancé SUR Windows. Utilise plutôt scripts\\setup_tapitask.ps1 (PowerShell)."
   else
     echo "==> flutter build windows --release..."
-    flutter build windows --release
+    flutter build windows --release $DART_VERSION
     (cd build/windows/x64/runner/Release && zip -qr "$DIST/Tapitask-windows.zip" .)
     ok "Windows : dist/Tapitask-windows.zip (contient tapitask.exe + DLLs)"
   fi

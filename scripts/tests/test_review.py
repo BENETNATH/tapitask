@@ -4,6 +4,7 @@ TDD : ces tests précèdent l'implémentation. Le gate mécanique refuse tout
 commit contenant un fichier que la review n'a jamais vu (marqueur dans le
 git dir). Waiver user-only via .git/hermes-review-waived.
 """
+
 import json
 import subprocess
 import sys
@@ -30,9 +31,7 @@ REVIEW = SCRIPTS / "review.py"
 
 
 def git(cwd, *args):
-    return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True
-    )
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
 
 
 def run_review(cwd, *args):
@@ -80,7 +79,10 @@ def test_marker_stale_after_commit_refuses(repo):
     git(repo, "add", "b.txt")
     res = run_review(repo, "check")
     assert res.returncode == 2
-    assert "stale" in (res.stderr + res.stdout).lower() or "plus ancien" in res.stderr + res.stdout
+    assert (
+        "stale" in (res.stderr + res.stdout).lower()
+        or "plus ancien" in res.stderr + res.stdout
+    )
 
 
 def test_unseen_staged_file_refuses_and_is_listed(repo):

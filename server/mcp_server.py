@@ -9,6 +9,7 @@ CHECKLISTS_API_KEY (the key itself in the environment) still works; when both
 are set the file wins. The file is re-read on every request, so a rotated key
 is picked up without restarting the server.
 """
+
 from __future__ import annotations
 
 import json
@@ -16,6 +17,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+import uuid
 
 URL = os.environ.get("CHECKLISTS_URL", "http://localhost:8000")
 KEY = os.environ.get("CHECKLISTS_API_KEY", "")
@@ -30,7 +32,9 @@ def _load_key() -> str:
                 key = f.read().strip()
         except OSError as e:
             # Never echo the file content; the path and the OS reason are enough.
-            raise RuntimeError(f"cannot read CHECKLISTS_API_KEY_FILE: {e.strerror}") from None
+            raise RuntimeError(
+                f"cannot read CHECKLISTS_API_KEY_FILE: {e.strerror}"
+            ) from None
         if not key:
             raise RuntimeError("CHECKLISTS_API_KEY_FILE is empty")
         return key
@@ -46,8 +50,10 @@ def _key_file_warning() -> str | None:
     except OSError:
         return None
     if mode & 0o077:
-        return (f"warning: {KEY_FILE} is accessible by other users "
-                f"(mode {mode:04o}); run chmod 600 on it")
+        return (
+            f"warning: {KEY_FILE} is accessible by other users "
+            f"(mode {mode:04o}); run chmod 600 on it"
+        )
     return None
 
 
@@ -55,10 +61,14 @@ def _api(method: str, path: str, body: dict | None = None) -> str:
     req = urllib.request.Request(
         f"{URL}{path}",
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Authorization": f"Bearer {_load_key()}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {_load_key()}",
+            "Content-Type": "application/json",
+        },
         method=method,
     )
-    with urllib.request.urlopen(req) as resp:
+    # timeout : un API muet ne doit pas bloquer l'agent indéfiniment (C2.11).
+    with urllib.request.urlopen(req, timeout=10) as resp:
         return resp.read().decode()
 
 
@@ -108,18 +118,35 @@ TOOLS = [
 ]
 
 
+def _uuid_arg(args: dict, field: str) -> str:
+    """C2.11 : list_id/item_id sont interpolés dans les URLs — un non-UUID
+    doit être refusé en défaut d'arguments, pas envoyé en réseau.
+    S5 (prod4) : renvoie la forme CANONIQUE str(uuid.UUID(v)) — les
+    accolades sont écartées et l'espacement normalisé au lieu d'être
+    interpolés tels quels dans l'URL (les espaces sont refusés)."""
+    value = args[field]
+    try:
+        return str(uuid.UUID(value))
+    except (ValueError, TypeError):
+        raise ValueError(f"invalid params: '{field}' is not a UUID") from None
+
+
 def _handle(name: str, args: dict) -> str:
     if name == "list_lists":
         return _api("GET", "/lists")
     if name == "get_list":
         flag = "true" if args.get("unchecked_only") else "false"
-        return _api("GET", f"/lists/{args['list_id']}/items?unchecked_only={flag}")
+        list_id = _uuid_arg(args, "list_id")
+        return _api("GET", f"/lists/{list_id}/items?unchecked_only={flag}")
     if name == "add_items":
-        return _api("POST", f"/lists/{args['list_id']}/items/bulk", {"text": args["text"]})
+        list_id = _uuid_arg(args, "list_id")
+        return _api("POST", f"/lists/{list_id}/items/bulk", {"text": args["text"]})
     if name == "check_item":
+        list_id = _uuid_arg(args, "list_id")
+        item_id = _uuid_arg(args, "item_id")
         return _api(
             "PATCH",
-            f"/lists/{args['list_id']}/items/{args['item_id']}",
+            f"/lists/{list_id}/items/{item_id}",
             {"done": args.get("done", True)},
         )
     raise ValueError(f"Unknown tool: {name}")
@@ -187,29 +214,50 @@ def handle_line(line: str) -> dict | None:
         elif method == "tools/call":
             params = request.get("params")
             if not isinstance(params, dict) or not isinstance(params.get("name"), str):
-                return None if is_notification else _error(
-                    req_id, -32602, "Invalid params: 'name' is required")
+                return (
+                    None
+                    if is_notification
+                    else _error(req_id, -32602, "Invalid params: 'name' is required")
+                )
             name, arguments = params["name"], params.get("arguments")
             if name not in TOOL_NAMES:
-                return None if is_notification else _error(
-                    req_id, -32602, f"Unknown tool: {name}")
+                return (
+                    None
+                    if is_notification
+                    else _error(req_id, -32602, f"Unknown tool: {name}")
+                )
             if arguments is not None and not isinstance(arguments, dict):
-                return None if is_notification else _error(
-                    req_id, -32602, "Invalid params: 'arguments' must be an object")
+                return (
+                    None
+                    if is_notification
+                    else _error(
+                        req_id, -32602, "Invalid params: 'arguments' must be an object"
+                    )
+                )
             try:
                 result = _tool_result(_handle(name, arguments or {}))
             except urllib.error.HTTPError as e:
-                result = _tool_result(f"HTTP {e.code}: {_http_detail(e)}", is_error=True)
+                result = _tool_result(
+                    f"HTTP {e.code}: {_http_detail(e)}", is_error=True
+                )
             except urllib.error.URLError as e:
                 result = _tool_result(
-                    f"Cannot reach the Tapitask API at {URL}: {e.reason}", is_error=True)
+                    f"Cannot reach the Tapitask API at {URL}: {e.reason}", is_error=True
+                )
         elif is_notification:
             return None  # notifications/initialized, cancelled, ...
         else:
             return _error(req_id, -32601, f"Unknown method {method}")
     except KeyError as e:
-        return None if is_notification else _error(
-            req_id, -32602, f"Invalid params: missing {e}")
+        return (
+            None
+            if is_notification
+            else _error(req_id, -32602, f"Invalid params: missing {e}")
+        )
+    except ValueError as e:
+        # C2.11 : argument invalide (ex. UUID) = défaut d'arguments, pas une
+        # panne serveur.
+        return None if is_notification else _error(req_id, -32602, str(e))
     except Exception as e:
         return None if is_notification else _error(req_id, -32603, str(e))
     if is_notification:
@@ -224,7 +272,10 @@ def main() -> None:
         print(str(e), file=sys.stderr)
         sys.exit(1)
     if not key:
-        print("CHECKLISTS_API_KEY_FILE (or CHECKLISTS_API_KEY) is not set", file=sys.stderr)
+        print(
+            "CHECKLISTS_API_KEY_FILE (or CHECKLISTS_API_KEY) is not set",
+            file=sys.stderr,
+        )
         sys.exit(1)
     warning = _key_file_warning()
     if warning:
