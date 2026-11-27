@@ -118,6 +118,9 @@ bool FlyoutWindow::Create(EventCallback on_event) {
   RefreshTheme();
 
   WNDCLASS wc = {};
+  // Force l'invalidate complet du client à chaque resize (évite les
+  // fantômes de pin/open/close/title repositionnés par Layout()).
+  wc.style = CS_HREDRAW | CS_VREDRAW;
   wc.lpfnWndProc = &FlyoutWindow::WndProc;
   wc.hInstance = GetModuleHandle(nullptr);
   wc.lpszClassName = kClassName;
@@ -388,7 +391,15 @@ void FlyoutWindow::RebuildChips(int width) {
       sig *= 1099511628211ull;
     }
   }
-  if (width == last_chip_width_ && sig == last_chip_sig_) return;
+  if (width == last_chip_width_ && sig == last_chip_sig_) {
+    // L'actif a changé à seul (sig/width identiques) : on invalide les
+    // chips existants, pas de destruction/recréation.
+    if (active_ != last_chip_active_) {
+      last_chip_active_ = active_;
+      for (HWND chip : chips_) InvalidateRect(chip, nullptr, TRUE);
+    }
+    return;
+  }
   last_chip_width_ = width;
   last_chip_sig_ = sig;
   for (HWND chip : chips_) {
@@ -399,6 +410,7 @@ void FlyoutWindow::RebuildChips(int width) {
   // A single pinned list needs no chip — the user knows what they see.
   if (lists_.size() <= 1) {
     chips_rows_ = 0;
+    last_chip_active_ = active_;
     return;
   }
   int x = 8;
@@ -428,6 +440,7 @@ void FlyoutWindow::RebuildChips(int width) {
       chips_rows_++;
     }
   }
+  last_chip_active_ = active_;
 }
 
 void FlyoutWindow::RebuildItems() {

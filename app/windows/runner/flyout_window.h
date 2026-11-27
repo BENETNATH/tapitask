@@ -100,6 +100,9 @@ class FlyoutWindow {
   // ont réellement changé — pas à chaque pixel de WM_SIZE.
   int last_chip_width_ = -1;
   size_t last_chip_sig_ = 0;
+  // B (2026-11-27c) : dernière liste active dessinée — invalide les chips
+  // sans les reconstruire quand seul l'actif change (tap sur un chip).
+  std::string last_chip_active_;
 
   std::vector<ListInfo> lists_;
   std::vector<ItemInfo> items_;
