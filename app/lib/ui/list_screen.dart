@@ -234,7 +234,6 @@ class _ListScreenState extends State<ListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final state = widget.state;
     final scheme = Theme.of(context).colorScheme;
     return CallbackShortcuts(
       bindings: {
@@ -246,230 +245,8 @@ class _ListScreenState extends State<ListScreen> {
           title: _title(context),
           actions: [
             PopupMenuButton<String>(
-              onSelected: (action) async {
-                if (action == "googleTasks") {
-                  await _sendOpenTasksToGoogle();
-                  return;
-                }
-                if (action == "googleImport") {
-                  final listId = _listId;
-                  await showGoogleTasksImportDialog(
-                      context,
-                      (source, tasks) =>
-                          state.importGoogleTasks(listId, source, tasks));
-                  return;
-                }
-                if (action == "completed") {
-                  setState(() => _showCompleted = _hideCompleted);
-                  return;
-                }
-                // clean / share : déplaçés des anciens IconButtons pour libérer
-                // la zone du titre (spec lot P, P2b) — logique déplacée, pas dupliquée.
-                if (action == "clean") {
-                  final confirmed = await showDialog<bool>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: Text(S.cleanDoneConfirm),
-                      content: Text(S.cleanDoneBody),
-                      actions: [
-                        TextButton(
-                            onPressed: () => Navigator.pop(context, false),
-                            child: Text(S.cancel)),
-                        FilledButton(
-                            onPressed: () => Navigator.pop(context, true),
-                            child: Text(S.clean)),
-                      ],
-                    ),
-                  );
-                  if (confirmed == true) await state.purgeDone(_listId);
-                }
-                if (action == "share") {
-                  if (!context.mounted) return;
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          ShareScreen(state: state, listId: _listId),
-                    ),
-                  );
-                }
-                final list = await _list();
-                if (!mounted) return; // S3 (prod4) : plus d'UI après l'await
-                if (list == null) return;
-                if (action == "rename") await _renameList(list);
-                if (action == "delete") await _deleteList(list);
-                if (action == "sync") {
-                  await widget.state.setListLocalOnly(list.id, !list.localOnly);
-                }
-                if (action == "color") await _pickColor(list);
-                if (action == "default") {
-                  await widget.state.setDefaultList(
-                      widget.state.defaultListId == list.id ? null : list.id);
-                }
-                // D-7 (spec 2026-11-25) : export par liste (JSON/Markdown/CSV)
-                if (action == "export_json" ||
-                    action == "export_md" ||
-                    action == "export_csv") {
-                  await _exportList(list, action);
-                }
-                if (action == "import") await _importFile();
-              },
-              itemBuilder: (context) => [
-                PopupMenuItem(
-                  value: "completed",
-                  child: Row(children: [
-                    Icon(_hideCompleted
-                        ? Icons.visibility
-                        : Icons.visibility_off),
-                    const SizedBox(width: 12),
-                    Flexible(
-                        child: Text(_hideCompleted
-                            ? S.showCompletedTasks
-                            : S.hideCompletedTasks)),
-                  ]),
-                ),
-                PopupMenuItem(
-                  value: "default",
-                  child: Row(children: [
-                    Icon(widget.state.defaultListId == _listId
-                        ? Icons.star
-                        : Icons.star_border),
-                    const SizedBox(width: 12),
-                    Flexible(
-                      child: Text(widget.state.defaultListId == _listId
-                          ? S.unsetDefaultList
-                          : S.setDefaultList),
-                    ),
-                  ]),
-                ),
-                PopupMenuItem(
-                  value: "clean",
-                  child: Row(children: [
-                    Icon(Icons.delete_sweep_outlined),
-                    const SizedBox(width: 12),
-                    Flexible(
-                        child:
-                            Text(S.cleanDone, overflow: TextOverflow.ellipsis)),
-                  ]),
-                ),
-                PopupMenuItem(
-                  value: "share",
-                  child: Row(children: [
-                    Icon(Icons.share),
-                    const SizedBox(width: 12),
-                    Flexible(
-                        child: Text(S.share, overflow: TextOverflow.ellipsis)),
-                  ]),
-                ),
-                if (canSendToGoogleTasks)
-                  PopupMenuItem(
-                    value: "googleTasks",
-                    child: Row(children: [
-                      const Icon(Icons.outbox_outlined),
-                      const SizedBox(width: 12),
-                      Flexible(child: Text(S.sendOpenToGoogleTasks)),
-                    ]),
-                  ),
-                if (canSendToGoogleTasks &&
-                    _lists.any(
-                        (list) => list.id == _listId && list.role != "viewer"))
-                  PopupMenuItem(
-                    value: "googleImport",
-                    child: Row(children: [
-                      const Icon(Icons.download_outlined),
-                      const SizedBox(width: 12),
-                      Flexible(child: Text(S.importGoogleTasks)),
-                    ]),
-                  ),
-                PopupMenuItem(
-                  value: "color",
-                  child: Row(children: [
-                    Icon(Icons.palette_outlined),
-                    SizedBox(width: 12),
-                    Flexible(
-                        child:
-                            Text(S.color, overflow: TextOverflow.ellipsis)),
-                  ]),
-                ),
-                PopupMenuItem(
-                  value: "export_json",
-                  child: Row(children: [
-                    Icon(Icons.file_download_outlined),
-                    const SizedBox(width: 12),
-                    Flexible(
-                        child:
-                            Text(S.exportJson, overflow: TextOverflow.ellipsis)),
-                  ]),
-                ),
-                PopupMenuItem(
-                  value: "export_md",
-                  child: Row(children: [
-                    Icon(Icons.description_outlined),
-                    const SizedBox(width: 12),
-                    Flexible(
-                        child:
-                            Text(S.exportMarkdown,
-                                overflow: TextOverflow.ellipsis)),
-                  ]),
-                ),
-                PopupMenuItem(
-                  value: "export_csv",
-                  child: Row(children: [
-                    Icon(Icons.table_chart_outlined),
-                    const SizedBox(width: 12),
-                    Flexible(
-                        child:
-                            Text(S.exportCsv, overflow: TextOverflow.ellipsis)),
-                  ]),
-                ),
-                PopupMenuItem(
-                  value: "import",
-                  child: Row(children: [
-                    Icon(Icons.upload_file_outlined),
-                    const SizedBox(width: 12),
-                    Flexible(
-                        child:
-                            Text(S.importFile, overflow: TextOverflow.ellipsis)),
-                  ]),
-                ),
-                PopupMenuItem(
-                  value: "sync",
-                  child: FutureBuilder<LocalList?>(
-                    future: _list(),
-                    builder: (context, snap) => Row(children: [
-                      Icon(snap.data?.localOnly == true
-                          ? Icons.cloud_off_outlined
-                          : Icons.cloud_done_outlined),
-                      const SizedBox(width: 12),
-                      Flexible(
-                          child: Text(snap.data?.localOnly == true
-                              ? "Activer la synchro"
-                              : "Local uniquement",
-                              overflow: TextOverflow.ellipsis)),
-                    ]),
-                  ),
-                ),
-                PopupMenuItem(
-                  value: "rename",
-                  child: Row(children: [
-                    Icon(Icons.drive_file_rename_outline),
-                    SizedBox(width: 12),
-                    Flexible(
-                        child:
-                            Text(S.rename, overflow: TextOverflow.ellipsis)),
-                  ]),
-                ),
-                PopupMenuItem(
-                  value: "delete",
-                  child: Row(children: [
-                    Icon(Icons.delete_outline),
-                    SizedBox(width: 12),
-                    Flexible(
-                        child:
-                            Text(S.delete, overflow: TextOverflow.ellipsis)),
-                  ]),
-                ),
-              ],
+              onSelected: _onListMenuAction,
+              itemBuilder: (context) => _buildListMenuItems(),
             ),
           ],
         ),
@@ -597,6 +374,235 @@ class _ListScreenState extends State<ListScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _onListMenuAction(String action) async {
+    final state = widget.state;
+    if (action == "googleTasks") {
+      await _sendOpenTasksToGoogle();
+      return;
+    }
+    if (action == "googleImport") {
+      final listId = _listId;
+      await showGoogleTasksImportDialog(
+          context,
+          (source, tasks) =>
+              state.importGoogleTasks(listId, source, tasks));
+      return;
+    }
+    if (action == "completed") {
+      setState(() => _showCompleted = _hideCompleted);
+      return;
+    }
+    // clean / share : déplaçés des anciens IconButtons pour libérer
+    // la zone du titre (spec lot P, P2b) — logique déplacée, pas dupliquée.
+    if (action == "clean") {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(S.cleanDoneConfirm),
+          content: Text(S.cleanDoneBody),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text(S.cancel)),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: Text(S.clean)),
+          ],
+        ),
+      );
+      if (confirmed == true) await state.purgeDone(_listId);
+    }
+    if (action == "share") {
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              ShareScreen(state: state, listId: _listId),
+        ),
+      );
+    }
+    final list = await _list();
+    if (!mounted) return; // S3 (prod4) : plus d'UI après l'await
+    if (list == null) return;
+    if (action == "rename") await _renameList(list);
+    if (action == "delete") await _deleteList(list);
+    if (action == "sync") {
+      await widget.state.setListLocalOnly(list.id, !list.localOnly);
+    }
+    if (action == "color") await _pickColor(list);
+    if (action == "default") {
+      await widget.state.setDefaultList(
+          widget.state.defaultListId == list.id ? null : list.id);
+    }
+    // D-7 (spec 2026-11-25) : export par liste (JSON/Markdown/CSV)
+    if (action == "export_json" ||
+        action == "export_md" ||
+        action == "export_csv") {
+      await _exportList(list, action);
+    }
+    if (action == "import") await _importFile();
+  }
+
+  List<PopupMenuEntry<String>> _buildListMenuItems() {
+    return [
+      PopupMenuItem(
+        value: "completed",
+        child: Row(children: [
+          Icon(_hideCompleted
+              ? Icons.visibility
+              : Icons.visibility_off),
+          const SizedBox(width: 12),
+          Flexible(
+              child: Text(_hideCompleted
+                  ? S.showCompletedTasks
+                  : S.hideCompletedTasks)),
+        ]),
+      ),
+      PopupMenuItem(
+        value: "default",
+        child: Row(children: [
+          Icon(widget.state.defaultListId == _listId
+              ? Icons.star
+              : Icons.star_border),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(widget.state.defaultListId == _listId
+                ? S.unsetDefaultList
+                : S.setDefaultList),
+          ),
+        ]),
+      ),
+      PopupMenuItem(
+        value: "clean",
+        child: Row(children: [
+          Icon(Icons.delete_sweep_outlined),
+          const SizedBox(width: 12),
+          Flexible(
+              child:
+                  Text(S.cleanDone, overflow: TextOverflow.ellipsis)),
+        ]),
+      ),
+      PopupMenuItem(
+        value: "share",
+        child: Row(children: [
+          Icon(Icons.share),
+          const SizedBox(width: 12),
+          Flexible(
+              child: Text(S.share, overflow: TextOverflow.ellipsis)),
+        ]),
+      ),
+      if (canSendToGoogleTasks)
+        PopupMenuItem(
+          value: "googleTasks",
+          child: Row(children: [
+            const Icon(Icons.outbox_outlined),
+            const SizedBox(width: 12),
+            Flexible(child: Text(S.sendOpenToGoogleTasks)),
+          ]),
+        ),
+      if (canSendToGoogleTasks &&
+          _lists.any(
+              (list) => list.id == _listId && list.role != "viewer"))
+        PopupMenuItem(
+          value: "googleImport",
+          child: Row(children: [
+            const Icon(Icons.download_outlined),
+            const SizedBox(width: 12),
+            Flexible(child: Text(S.importGoogleTasks)),
+          ]),
+        ),
+      PopupMenuItem(
+        value: "color",
+        child: Row(children: [
+          Icon(Icons.palette_outlined),
+          SizedBox(width: 12),
+          Flexible(
+              child:
+                  Text(S.color, overflow: TextOverflow.ellipsis)),
+        ]),
+      ),
+      PopupMenuItem(
+        value: "export_json",
+        child: Row(children: [
+          Icon(Icons.file_download_outlined),
+          const SizedBox(width: 12),
+          Flexible(
+              child:
+                  Text(S.exportJson, overflow: TextOverflow.ellipsis)),
+        ]),
+      ),
+      PopupMenuItem(
+        value: "export_md",
+        child: Row(children: [
+          Icon(Icons.description_outlined),
+          const SizedBox(width: 12),
+          Flexible(
+              child:
+                  Text(S.exportMarkdown,
+                      overflow: TextOverflow.ellipsis)),
+        ]),
+      ),
+      PopupMenuItem(
+        value: "export_csv",
+        child: Row(children: [
+          Icon(Icons.table_chart_outlined),
+          const SizedBox(width: 12),
+          Flexible(
+              child:
+                  Text(S.exportCsv, overflow: TextOverflow.ellipsis)),
+        ]),
+      ),
+      PopupMenuItem(
+        value: "import",
+        child: Row(children: [
+          Icon(Icons.upload_file_outlined),
+          const SizedBox(width: 12),
+          Flexible(
+              child:
+                  Text(S.importFile, overflow: TextOverflow.ellipsis)),
+        ]),
+      ),
+      PopupMenuItem(
+        value: "sync",
+        child: FutureBuilder<LocalList?>(
+          future: _list(),
+          builder: (context, snap) => Row(children: [
+            Icon(snap.data?.localOnly == true
+                ? Icons.cloud_off_outlined
+                : Icons.cloud_done_outlined),
+            const SizedBox(width: 12),
+            Flexible(
+                child: Text(snap.data?.localOnly == true
+                    ? "Activer la synchro"
+                    : "Local uniquement",
+                    overflow: TextOverflow.ellipsis)),
+          ]),
+        ),
+      ),
+      PopupMenuItem(
+        value: "rename",
+        child: Row(children: [
+          Icon(Icons.drive_file_rename_outline),
+          SizedBox(width: 12),
+          Flexible(
+              child:
+                  Text(S.rename, overflow: TextOverflow.ellipsis)),
+        ]),
+      ),
+      PopupMenuItem(
+        value: "delete",
+        child: Row(children: [
+          Icon(Icons.delete_outline),
+          SizedBox(width: 12),
+          Flexible(
+              child:
+                  Text(S.delete, overflow: TextOverflow.ellipsis)),
+        ]),
+      ),
+    ];
   }
 
   /// Corps de la liste, construit sur le cache `_items` : l'ancien
