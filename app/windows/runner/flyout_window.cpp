@@ -574,9 +574,7 @@ void FlyoutWindow::DrawListItem(const DRAWITEMSTRUCT* dis) {
   const COLORREF text = selected ? RGB(255, 255, 255) : c_text_;
   // Case (check state), à la position d'avant — dessinée par l'owner car
   // le contrôle ne dessine plus rien en mode OWNERDRAWFIXED.
-  const int box = 16;
-  const int box_top = rc.top + (rc.bottom - rc.top - box) / 2;
-  RECT brc = {rc.left + 2, box_top, rc.left + 2 + box, box_top + box};
+  RECT brc = CheckboxRectFor(rc);
   DrawFrameControl(dc, &brc, DFC_BUTTON,
                    DFCS_BUTTONCHECK |
                        (ListView_GetCheckState(items_list_, idx) ? DFCS_CHECKED
@@ -618,6 +616,17 @@ void FlyoutWindow::DrawListItem(const DRAWITEMSTRUCT* dis) {
     DrawTextW(dc, due_run.c_str(), -1, &drc, DT_SINGLELINE | DT_END_ELLIPSIS);
   }
   SelectObject(dc, old_font);
+}
+
+RECT FlyoutWindow::CheckboxRectFor(const RECT& item_rect) const {
+  // Rect exact de la case à cocher dessinée par DrawListItem, pour un item
+  // dont le rect ligne (coords client) est `item_rect`. Centrée
+  // verticalement, 16px, offset gauche +2 — IDENTIQUE à DrawListItem.
+  const int box = 16;
+  const int box_top =
+      item_rect.top + (item_rect.bottom - item_rect.top - box) / 2;
+  return {item_rect.left + 2, box_top, item_rect.left + 2 + box,
+          box_top + box};
 }
 
 void FlyoutWindow::DoQuickAdd() {
@@ -812,10 +821,24 @@ LRESULT FlyoutWindow::MessageHandler(HWND hwnd, UINT message, WPARAM wparam,
           LVHITTESTINFO hit = {};
           hit.pt = click->ptAction;
           const int index = ListView_HitTest(items_list_, &hit);
-          if (index >= 0 && index < static_cast<int>(items_.size()) &&
-              (hit.flags & LVHT_ONITEMSTATEICON) == 0) {
-            Hide();
-            SendEvent("openTask", items_[index].id);
+          if (index >= 0 && index < static_cast<int>(items_.size())) {
+            RECT item_rect = {};
+            ListView_GetItemRect(items_list_, index, &item_rect,
+                                 LVIR_BOUNDS);
+            RECT box = CheckboxRectFor(item_rect);
+            if (PtInRect(&box, click->ptAction)) {
+              // Clic précis sur la case : toggle manuel, le natif est
+              // peu fiable avec LVS_EX_FULLROWSELECT (cf. spec).
+              BOOL was_checked = ListView_GetCheckState(items_list_, index);
+              ListView_SetCheckState(items_list_, index, !was_checked);
+              // ListView_SetCheckState déclenche LVN_ITEMCHANGED → le
+              // handler existant (suppress_check_events_, comparaison à
+              // items_[index].done) envoie check/uncheck — rien à
+              // dupliquer ici.
+            } else {
+              Hide();
+              SendEvent("openTask", items_[index].id);
+            }
           }
         } else if (nm->code == NM_RCLICK) {
           // Right-click -> Supprimer.

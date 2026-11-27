@@ -69,6 +69,7 @@ class FlyoutWindow {
                       COLORREF glyph_color);
   void DrawChip(const DRAWITEMSTRUCT* dis, const ListInfo& list, bool active);
   void DrawListItem(const DRAWITEMSTRUCT* dis);
+  RECT CheckboxRectFor(const RECT& item_rect) const;
   void DoQuickAdd();
   void SendEvent(const std::string& action, const std::string& a = "",
                  const std::string& b = "");
