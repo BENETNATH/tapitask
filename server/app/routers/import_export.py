@@ -334,6 +334,7 @@ def _validate_json_lists(data: Any) -> list[dict[str, Any]]:
     entries = data["lists"]
     if len(entries) > MAX_IMPORTED_LISTS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_IMPORT)
+    total_items = 0
     for entry in entries:
         if not isinstance(entry, dict):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_IMPORT)
@@ -350,6 +351,12 @@ def _validate_json_lists(data: Any) -> list[dict[str, Any]]:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_IMPORT)
         items = entry.get("items", [])
         if not isinstance(items, list) or len(items) > MAX_IMPORTED_ITEMS:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_IMPORT)
+        total_items += len(items)
+        if total_items > MAX_IMPORTED_ITEMS:
+            # Plafond sur l'ENSEMBLE de la requête, pas seulement par
+            # liste (SEC-F2) : sans ça, MAX_IMPORTED_LISTS × MAX_IMPORTED_ITEMS
+            # items passent en une seule transaction.
             raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_IMPORT)
         seen_ids: set[str] = set()
         for it in items:
@@ -489,6 +496,10 @@ async def import_data(
     _rate_limited: Principal = Depends(rate_limit_principal),
     session: AsyncSession = Depends(get_session),
 ):
+    if principal.list_scope is not None:
+        # A scoped key is bound to its single list: no creation outside
+        # it (Strix vuln-0002 — même garde que create_list).
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "API key scoped to another list")
     # Corps brut : JSON (enveloppe tapitask) ou markdown Obsidian — le
     # content-type est indifférent, la détection porte sur le contenu :
     # corps VALIDE JSON → import JSON ; sinon → markdown (couvre le

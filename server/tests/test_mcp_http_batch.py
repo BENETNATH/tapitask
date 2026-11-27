@@ -110,6 +110,79 @@ async def test_add_items_one_commit_one_notify(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_internal_error_does_not_leak_raw_exception(client):
+    """SEC-F3 : une exception inattendue côté serveur (ni ValueError, ni
+    HTTPException, ni KeyError) répond -32603 « Internal error » — le
+    texte brut de l'exception Python ne fuite PAS au client."""
+    tokens = await register(client, "mcperr@example.com")
+    h = auth_headers(tokens)
+    q = asyncio.Queue()
+    await _bridge("mcperr@example.com", q)
+    try:
+        # list_id = objet JSON (pas une chaîne) → AttributeError dans _uuid()
+        reply = await _call(
+            client,
+            h,
+            q,
+            "get_list",
+            {"list_id": {"x": 1}},
+        )
+        assert reply.get("error", {}).get("code") == -32603, reply
+        message = reply["error"]["message"]
+        assert message == "Internal error", reply
+        assert "no attribute" not in message, "fuite du message d'exception"
+    finally:
+        from app import mcp_http
+
+        mcp_http._sessions.pop("batch", None)
+
+
+@pytest.mark.asyncio
+async def test_check_item_sets_completed_at(client):
+    """QUAL-SRV-1 : check_item pose completed_at sur la transition
+    not-done -> done et le remets à None sur done -> not-done — même
+    sémantique que REST patch_item."""
+    tokens = await register(client, "mcpdone@example.com")
+    h = auth_headers(tokens)
+    lid = (await client.post("/lists", json={"title": "D"}, headers=h)).json()["id"]
+    item = (
+        await client.post(f"/lists/{lid}/items", json={"label": "tâche"}, headers=h)
+    ).json()[0]
+    q = asyncio.Queue()
+    await _bridge("mcpdone@example.com", q)
+    try:
+        reply = await _call(
+            client,
+            h,
+            q,
+            "check_item",
+            {"list_id": lid, "item_id": item["id"], "done": True},
+        )
+        assert "error" not in reply, reply
+        items = (await client.get(f"/lists/{lid}/items", headers=h)).json()
+        assert items[0]["completed_at"] is not None, (
+            "completed_at posé sur la transition not-done -> done"
+        )
+
+        reply = await _call(
+            client,
+            h,
+            q,
+            "check_item",
+            {"list_id": lid, "item_id": item["id"], "done": False},
+        )
+        assert "error" not in reply, reply
+        items = (await client.get(f"/lists/{lid}/items", headers=h)).json()
+        assert items[0]["completed_at"] is None, (
+            "completed_at remis à None sur done -> not-done"
+        )
+    finally:
+        from app import mcp_http
+
+        mcp_http._sessions.pop("batch", None)
+
+
+@pytest.mark.asyncio
 async def test_add_items_null_byte_line_is_invalid_param(client, monkeypatch):
     """Ligne avec \x00 (et label > 2000) : rejetée en -32602, rien n'est écrit."""
     import app.events as ev

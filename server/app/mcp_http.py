@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -228,8 +229,11 @@ async def messages(
                 )
             except ValueError as e:
                 message["result"] = _tool_result(str(e), is_error=True)
-            except Exception as e:
-                message["error"] = {"code": -32603, "message": str(e)}
+            except Exception:
+                logging.getLogger("tapitask").exception(
+                    "MCP tools/call failed: %s", params.get("name")
+                )
+                message["error"] = {"code": -32603, "message": "Internal error"}
     elif is_notification:
         return {"status": "ok"}  # notifications/initialized, cancelled, ...
     else:
@@ -444,6 +448,10 @@ async def _call_tool(principal: Principal, name: str, args: dict[str, Any]) -> s
             # and _spawn_next is idempotent per source item.
             newly_done = done and not item.done
             item.done = done
+            if newly_done:
+                item.completed_at = utcnow()
+            elif not done:
+                item.completed_at = None
             item.updated_at = utcnow()
             await session.commit()
             spawned = None

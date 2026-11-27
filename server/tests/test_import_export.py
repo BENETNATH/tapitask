@@ -271,9 +271,67 @@ async def test_import_json_duplicate_item_ids_400(client):
 
 
 @pytest.mark.asyncio
+async def test_import_cumulative_item_cap_400(client):
+    """SEC-F2 : le plafond MAX_IMPORTED_ITEMS porte sur l'ENSEMBLE de la
+    requête, pas seulement par liste — sans ça MAX_IMPORTED_LISTS ×
+    MAX_IMPORTED_ITEMS items passeraient en une seule transaction."""
+    from app.routers.import_export import MAX_IMPORTED_ITEMS
+
+    h = auth_headers(await register(client, "impcum@example.com"))
+    per_list = MAX_IMPORTED_ITEMS // 2 + 10  # chaque liste < max en solo
+    body = {
+        "lists": [
+            {
+                "title": f"L{i}",
+                "items": [
+                    {"label": f"item-{j}", "done": False, "position": j}
+                    for j in range(per_list)
+                ],
+            }
+            for i in range(3)  # total = 3 × per_list > MAX_IMPORTED_ITEMS
+        ]
+    }
+    assert sum(len(e["items"]) for e in body["lists"]) > MAX_IMPORTED_ITEMS
+    r = await client.post("/import", json=body, headers=h)
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == INVALID_IMPORT
+    lists = (await client.get("/lists", headers=h)).json()
+    assert lists == [], "aucune liste créée"
+
+
+@pytest.mark.asyncio
 async def test_import_requires_auth(client):
     r = await client.post("/import", json={"lists": []})
     assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_import_scoped_key_refused_no_lists_created(client):
+    """SEC-F1 : une clé API scopée à une liste ne peut PAS créer de liste
+    via /import (Strix vuln-0002 — même garde que create_list)."""
+    h = auth_headers(await register(client, "impscoped@example.com"))
+    list_id = await make_list(client, h, "Scoped")
+    r = await client.post(
+        "/api-keys", json={"name": "scoped", "list_scope": list_id}, headers=h
+    )
+    assert r.status_code == 201, r.text
+    kh = {"Authorization": f"Bearer {r.json()['key']}"}
+
+    body = {
+        "lists": [
+            {
+                "title": "Importée",
+                "items": [{"label": "a", "done": False, "position": 0}],
+            }
+        ]
+    }
+    r = await client.post("/import", json=body, headers=kh)
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == "API key scoped to another list"
+
+    # AUCUNE liste créée (vérifiée avec un accès non scopé du même owner).
+    lists = (await client.get("/lists", headers=h)).json()
+    assert [e["title"] for e in lists] == ["Scoped"]
 
 
 # ---- F3 : Obsidian markdown ------------------------------------------------
